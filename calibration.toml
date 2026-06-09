@@ -1,0 +1,126 @@
+# RM Calibration Configuration
+# 相机内参和手眼标定配置文件
+
+[calibration]
+width = 1440
+height = 1080
+# 标定模式: Intrinsic (内参标定), Handeye (手眼标定), Full (完整标定)
+mode = "Intrinsic"
+[calibration.profile]
+trigger_mode = false
+invert_image = false
+exposure_time_us = 80000  # 3ms in microseconds
+gain = 2.0
+rotate_angle = "None"
+
+# =============================================================================
+# 标定板配置
+# =============================================================================
+[calibration.board]
+# 标定板类型: Chessboard (棋盘格), ChArUco, CirclesGrid (圆点阵列)
+type = "Chessboard"
+
+# 内角点数量 (棋盘格) 或方格数量 (ChArUco)
+width = 11
+height = 7
+
+# 方格边长 (米)
+square_size = 0.023
+
+# =============================================================================
+# ChArUco 专用配置 (仅当 type = "ChArUco" 时生效)
+# =============================================================================
+[calibration.charuco]
+# ArUco 标记边长 (米), 应小于 square_size
+marker_size = 0.021
+
+# ArUco 字典类型
+# 可选: DICT_4X4_50, DICT_4X4_100, DICT_4X4_250,
+#       DICT_5X5_50, DICT_5X5_100, DICT_5X5_250,
+#       DICT_6X6_50, DICT_6X6_100, DICT_6X6_250
+dictionary = "DICT_5X5_50"
+
+# =============================================================================
+# 采集配置
+# =============================================================================
+[calibration.capture]
+# 最小采集样本数 (推荐 30+)
+min_samples = 30
+
+# 最大采集样本数
+max_samples = 100
+
+# 样本多样性约束
+# 相邻样本间的最小角度差异 (度)
+min_angle_diff = 1.5
+
+# 相邻样本间的最小平移差异 (米)
+min_translation_diff = 0.005
+
+# 自动采集模式 (false = 手动触发)
+auto_capture = true
+
+# 自动采集间隔 (毫秒)
+capture_interval_ms = 3000
+
+# =============================================================================
+# 内参标定配置
+# =============================================================================
+[calibration.intrinsic]
+# 固定纵横比 (fx = fy)
+fix_aspect_ratio = false
+
+# 固定主点到图像中心
+fix_principal_point = false
+
+# 忽略切向畸变
+zero_tangent_dist = false
+
+# =============================================================================
+# 手眼标定配置
+# =============================================================================
+[calibration.handeye]
+# 标定方法
+# 可选: Tsai, Park, Horaud, Andreff, Daniilidis
+method = "Daniilidis"
+
+# =============================================================================
+# 可视化配置 (Foxglove)
+# =============================================================================
+[calibration.visualization]
+# 显示检测到的角点
+show_corners = true
+
+# 显示重投影误差
+show_reprojection = true
+
+# 显示标定板姿态
+show_pose = true
+
+# =============================================================================
+# 输出配置
+# =============================================================================
+[calibration.output]
+# 内参输出路径
+intrinsic_path = "camera_intrinsic.toml"
+
+# 外参输出路径
+extrinsic_path = "camera_extrinsic.toml"
+
+# =============================================================================
+# Foxglove 服务器配置
+# =============================================================================
+[calibration.foxglove]
+enabled = true
+transport = "WebSocket"
+host = "0.0.0.0"
+# 使用与主程序不同的端口
+port = 8765
+# mcap_path = "record/calibration_foxglove.mcap"
+
+# =============================================================================
+# 输入源配置
+# =============================================================================
+[calibration.input]
+# 使用 daedalus 模拟器 (false = 使用真实硬件)
+daedalus = false

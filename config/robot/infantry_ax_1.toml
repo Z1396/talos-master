@@ -1,0 +1,35 @@
+chiral = false
+
+[camera]
+camera_matrix = [2415.31272728, 0.000, 706.41074286, 0.000, 2413.72809694, 543.80686807, 0.000, 0.000, 1.000]
+distort_coefficient = [-0.03141595, 0.29488630, -0.00089325, -0.00152105, -0.52803905]
+width = 1440
+height = 1080
+
+# [calibration_info]
+# rms_error = 0.05988919
+# per_view_error = [0.006145, 0.005834, 0.005560, 0.005717, 0.006078, 0.004189, 0.004623, 0.005126, 0.006424, 0.005411, 0.006957, 0.006068, 0.006049, 0.004751, 0.005274, 0.005389, 0.006457, 0.004905, 0.006476, 0.005818, 0.005313, 0.004984, 0.006383, 0.005910, 0.004410, 0.005612, 0.006636, 0.005246, 0.006502, 0.006032, 0.004242, 0.005606, 0.006067, 0.004460, 0.006610, 0.006129, 0.005014, 0.005574, 0.005757, 0.006030, 0.004756, 0.006031, 0.006445, 0.004064, 0.004975, 0.004297, 0.006160, 0.006916, 0.005413]
+# calibrate_at = "2026-05-17T13:43:56.009649+00:00"
+
+[camera.profile]
+trigger_mode = false
+invert_image = true
+exposure_time_us = 3000  # 0.15ms in microseconds
+gain = 16.9
+
+[extrinsic.gimbal_yaw.gimbal_pitch]
+translation = [0, 0, 0.0791]
+
+camera_link.translation = [0.0273, 0, 0.0544]
+
+muzzle_link.translation = [0.06, 0.0, 0.0]
+muzzle_link.roll = 0.0
+muzzle_link.pitch = 0.15
+muzzle_link.yaw = -1.45
+
+[mcu]
+mcu_authoritative_self_color = true
+mcu_authoritative_bullet_speed = true
+bullet_speed_default = 21.0
+bullet_speed_min = 20
+bullet_speed_max = 25

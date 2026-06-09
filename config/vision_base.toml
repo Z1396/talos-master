@@ -1,0 +1,400 @@
+backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
+detect_color = "Blue"
+capabilities = ["Armor"]
+
+[quanta_filter]
+enable = true
+enable_saturation = true
+saturation = 1.0
+enable_denoise_luma = true
+enable_denoise_chroma = true
+enable_denoise_tl = true
+denoise_tl = 0.0
+enable_denoise_tc = true
+denoise_tc = 0.0
+enable_sharpen1_luma = true
+sharpen1_luma = 2.0
+enable_sharpen2_luma = true
+sharpen2_luma = 0.0
+enable_sharpen3_luma = true
+sharpen3_luma = 0
+enable_sharpen1_chroma = true
+sharpen1_chroma = 2.0
+enable_sharpen2_chroma = true
+sharpen2_chroma = 0.0
+enable_sharpen3_chroma = true
+sharpen3_chroma = 0.0
+enable_luma_quantization = false
+luma_levels = 16
+enable_chroma_quantization = false
+chroma_levels = 16
+enable_contour = false
+contour_strength = 1.0
+contour_low_thresh = 36
+contour_high_thresh = 96
+contour_width = 1
+qp_delta_map = false
+qp_edge_delta = 0
+qp_interior_delta = 16
+enable_psy_rd = true
+psy_rd = 0.0
+enable_psy_trellis = true
+psy_trellis = 0.0
+
+[quanta_filter.denoise_luma]
+kernel_size = 5
+sigma_x = 1.0
+sigma_y = 1.0
+
+[quanta_filter.denoise_chroma]
+kernel_size = 3
+sigma_x = 1.0
+sigma_y = 1.0
+
+[quanta]
+max_width = 200
+max_height = 200
+gop_size = 20
+framerate = 30
+preset = "fast"
+tune = "ssim"
+intra_refresh = false
+crf = 52
+lookahead = 0
+target_bitrate = 45000
+enVBR = false
+min_bit_rate = 0
+max_bit_rate = 50000
+vbv_bufsize = 10000
+refresh_num = 4
+bframe = 0
+enScenecut = true
+enAqMode = true
+aq_strength = 0.4
+
+# Required if backend_type = "traditional"
+[traditional]
+advanced_binary = false
+dark_percentage = 0.5
+binary_threshold = 85
+light_min_ratio = 0.0001
+light_max_ratio = 1.0
+light_max_angle = 40.0
+light_color_diff_thresh = 30
+armor_min_light_ratio = 0.8
+armor_min_small_center_distance = 0.8
+armor_max_small_center_distance = 3.5
+armor_min_large_center_distance = 3.5
+armor_max_large_center_distance = 8.0
+armor_max_angle = 40.0
+
+# Classifier configuration (ONNX-based number classification)
+classifier_model_path = "models/mlp_finetuned.onnx"
+classifier_confidence_threshold = 0.1
+classifier_enable_type_filtering = false
+classifier_use_softmax = true
+
+[onnx_runtime]
+model_path = "models/best_fp16.onnx"
+cache_dir = "/tmp/ort_cache"
+confidence_threshold = 0.25
+nms_threshold = 0.30
+top_k = 128
+
+# Required if backend_type = "TensorRT"
+[tensor_rt]
+model_path = "models/best_fp16.onnx"  # Path to ONNX model (will be compiled to TensorRT engine)
+engine_path = "models/best_fp16_sm87_fp16.engine"  # Optional: Path to pre-built TensorRT engine (.engine file)
+engine_cache_dir = "/tmp/tensorrt_cache"  # Directory for caching compiled engines
+device_id = 0  # CUDA device ID
+num_streams = 2  # Number of CUDA streams for concurrent inference
+compute_capability = "87"  # GPU compute capability (e.g., "87" for Jetson Orin, "86" for RTX 3090)
+enable_fp16 = true  # Enable FP16 precision (faster, slightly less accurate)
+enable_dla = true  # Enable DLA accelerator (if available)
+dla_core = 0  # DLA core to use (if enable_dla = true)
+confidence_threshold = 0.20
+nms_threshold = 0.30
+top_k = 128
+
+# Required if backend_type = "Axera" (AX650 NPU)
+[axera]
+model_path = "models/qat_u16_all.axmodel"  # Path to AX650 .axmodel file
+input_width = 768
+input_height = 576
+num_colors = 4
+num_kpts = 4
+num_pairs = 12
+strides = [8, 16, 32]
+confidence_threshold = 0.5
+nms_threshold = 0.10
+top_k = 128
+
+[readback_roi]
+enabled = false
+stale_timeout_s = 0.20
+margin_ratio_x = 0.20
+margin_ratio_y = 0.00
+box_size_m = [0.6, 0.6, 0.6]
+
+[ldm]
+min_blob_area_px = 4
+min_blob_fill_ratio = 0.35
+min_blob_aspect_ratio = 0.35
+max_blob_aspect_ratio = 4.0
+min_pair_center_dy_ratio = 1.0
+max_pair_center_dy_ratio = 12.0
+max_pair_size_delta_ratio = 0.75
+max_gap_cv = 0.65
+min_preliminary_candidate_score = 0.80
+min_preliminary_candidate_score_two_pair = 0.87
+min_two_pair_mean_center_dy_px = 12.0
+min_pairs_for_detection = 2
+rmse_stable_threshold_px = 8.0
+rmse_constrained_threshold_px = 8.0
+max_pose_angle_rad = 0.872664626
+
+[ldm.geometry]
+octagon_side_length_m = 0.020711
+octagon_circumradius_m = 0.02706
+pair_center_separation_m = 0.036514
+window_length_m = 0.012
+window_width_m = 0.009618
+volume_height_m = 0.067
+detectable_center_z_range_m = [-0.01, 0.01]
+
+[naive_ldm]
+tracking_threshold = 5
+lost_threshold = 1.0
+initial_sigma_rot = 0.05
+initial_sigma_velocity_body = 5.0
+initial_sigma_position = 0.20
+
+[naive_ldm.model]
+sigma_inert_omega = 100.0
+sigma_inert_accel = 150.0
+sigma_rot_x = 0.5
+sigma_rot_y = 1.5
+sigma_rot_z = 1.5
+sigma_r_bearing_yaw = 0.5
+sigma_r_bearing_pitch = 0.2
+sigma_distance_min = 0.01
+k_distance_depth = 4.0
+k_distance_planar = 0.5
+
+[tracker]
+[tracker.robot]
+matcher_gate = 10.0  # Aligned with at_vision rm_bringup config
+lost_threshold = 0.5  # Aligned with at_vision rm_bringup config
+tracking_threshold = 5  # Aligned with at_vision rm_bringup config
+
+[tracker.robot.model]
+sigma_a_xy = 10.0
+sigma_a_z = 1.0
+sigma_a_yaw = 20.0
+sigma_r0 = 1e-5
+sigma_r1 = 1e-5
+sigma_h = 0.2
+meas_yaw_var_floor = 4e-3
+meas_pitch_var_floor = 4e-3
+meas_dist_var_floor = 2.5e-3
+meas_dist_delta_angle_k = 1.0
+meas_armor_yaw_var_floor = 9e-2
+meas_armor_yaw_range_k = 0.005
+
+[tracker.robot_inekf]
+radius0 = 0.23
+radius1 = 0.23
+height = 0.05
+
+[tracker.outpost]
+matcher_gate = 9.0
+lost_threshold = 1.0
+tracking_threshold = 4
+
+[tracker.outpost.model]
+sigma_q_xy = 8.0
+sigma_q_z = 0.1
+sigma_a_yaw = 2.71327412
+meas_yaw_var_floor = 5e-3
+meas_pitch_var_floor = 5e-3
+meas_log_dist_var_floor = 2.5e-3
+meas_dist_k = 0.42
+meas_armor_yaw_var_floor = 9e-3
+yaw_log_k = 0.0005
+
+# ============================================================================
+# L4 Planning Configuration (Aimer + Planner Architecture)
+# ============================================================================
+# Aimer configuration (shared by all target types: Robot/Outpost/Rune)
+[aimer]
+# System delay compensation (seconds)
+# Includes: camera exposure, image processing, communication, gimbal response
+delay = 0.0
+
+# Authoritative four-state auto-aim FSM thresholds
+single_whole_up = 1.5
+single_whole_down = 1.0
+whole_pair_up = 8.5
+whole_pair_down = 9.5
+pair_center_up = 9.0
+pair_center_down = 6.0
+transfer_thresh = 20
+# Armor selection windows
+front_window_deg = 60.0
+
+[aimer.target_selection]
+decider = "Manned"
+temp_lost_state_score = 0.05
+optical_stale_timeout_s = 0.25
+switch_margin = 0.08
+
+[aimer.target_selection.weights]
+image_center = 1.0
+track_state = 3.0
+tof = 1.5
+gimbal_effort = 1.0
+armor_name = 6.5
+
+[aimer.target_selection.refs]
+image_center_ref_px = 300.0
+tof_ref_s = 0.35
+yaw_effort_ref_deg = 20.0
+pitch_effort_ref_deg = 10.0
+
+[aimer.target_selection.armor_name_score]
+sentry = 0.5
+one = 0.5
+two = 0.3
+three = 0.8
+four = 0.8
+five = 0.0
+outpost = 0.3
+base = 0.5
+base_large = 0.5
+invalid = 0.0
+
+[reference_trajectory]
+horizon_ahead = 50
+horizon_back = 50
+dt = 0.01
+
+[trajectory]
+type = "LinearDrag"
+
+iteration_times = 10
+
+gravity = 9.7997
+resistance = 0.0005
+
+diameter = 0.017
+mass = 0.00312
+
+rho = 1.225
+
+# ============================================================================
+# L5 Weapon MPC Controller Configuration
+# ============================================================================
+# Fire decision configuration
+[fire_decision]
+# Minimum shooting threshold (radians), used for long distances
+# Shared fire gate threshold for L5
+fire_thresh = 0.008444444
+# Physical window dimensions (meters)
+shooting_range_h = 0.12
+shooting_range_w_small = 0.12
+shooting_range_w_large = 0.24
+
+# L5-only MPC settings live under [mpc_weapon].
+[mpc_weapon]
+enabled = true
+enable_debug = true
+reference_age_threshold_s = 0.5
+
+# Pitch limits (radians)
+pitch_min = -0.69813169  # -40deg
+pitch_max = 0.69813169  # 40deg
+
+# MPC core parameters
+[mpc_weapon.mpc]
+max_iterations = 30
+abs_tol = 0.1
+rho = 1.0
+
+# MPC yaw axis configuration
+[mpc_weapon.mpc.yaw]
+q_pos = 9e6
+q_vel = 0.0
+r = 1.0
+max_acc = 50.0
+
+# MPC pitch axis configuration
+[mpc_weapon.mpc.pitch]
+q_pos = 9e6
+q_vel = 0.0
+r = 1.0
+max_acc = 100.0
+
+[rune_detector]
+draw = true
+debug_mode = false  # L2层调试模式，启用时输出详细错误信息
+arrow_threshold = 210
+target_threshold = 40
+rcenter_threshold = 120
+
+# 流水灯参数
+min_roundness = 0.6
+max_roundness = 1.0
+min_arrow_light_area = 250.0
+max_arrow_light_area = 2000.0
+min_arrow_light_aspect_ratio = 4.5
+max_arrow_light_aspect_ratio = 10.0
+
+# ROI参数
+global_roi_length_ratio = 1.5
+local_roi_distance_ratio = 6.0
+local_roi_width = 150
+
+# R中心参数
+max_center_aspect_ratio = 3.0
+
+# 靶参数
+min_target_light_area = 50
+max_target_light_area = 30000
+min_target_light_contour_area = 75
+max_target_light_contour_area = 10000
+min_target_light_aspect_ratio = 0.5
+max_target_light_aspect_ratio = 1.5
+min_target_roi_area = 100.0
+
+[energy_meter]
+lost_thres = 10
+tracking_thres = 3
+# Mahalanobis distance-squared gate for observation-to-track association
+matcher_gate = 25.0
+# Frames a locked blade must be lost before unlocking and re-selecting
+blade_unlock_frames = 10
+reset_vote_time = 1.0
+
+[energy_meter.big_model]
+sigma_xy = 0.3
+sigma_z = 0.225
+sigma_yaw = 1e-4
+sigma_theta = 0.02
+sigma_a = 0.05
+sigma_w = 0.01
+radius = 0.7
+
+[energy_meter.big_model.meas]
+R_scale = 0.02
+meas_dist_k = 0.43
+
+[energy_meter.small_model]
+sigma_xy = 0.001
+sigma_z = 0.001
+sigma_yaw = 1e-4
+sigma_theta = 0.01
+radius = 0.7
+
+[energy_meter.small_model.meas]
+R_scale = 0.02
+meas_dist_k = 0.43

@@ -1,0 +1,14 @@
+# Infantry Vision Configuration
+# extend from vision_base.toml
+
+# L4 trajectory compensation overrides
+trajectory.type = "Ideal"
+
+trajectory.diameter = 0.017
+trajectory.mass = 0.00312
+trajectory.gravity = 9.81
+
+[traditional]
+advanced_binary = false
+binary_threshold = 65
+light_max_angle = 10.0

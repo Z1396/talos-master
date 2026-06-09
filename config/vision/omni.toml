@@ -1,0 +1,17 @@
+backend_type = "Axera"
+capabilities = ["Armor"]
+
+tracker.robot.tracking_threshold = 2
+tracker.robot.lost_threshold = 1.0
+
+fire_decision.fire_thresh = 6.28
+fire_decision.shooting_range_h = 10.0
+fire_decision.shooting_range_w_small = 10.0
+fire_decision.shooting_range_w_large = 10.0
+
+aimer.delay = 0.0
+
+trajectory.type = "Ideal"
+trajectory.gravity = 0.0
+
+mpc_weapon.enabled = false
