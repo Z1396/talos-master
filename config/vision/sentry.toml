@@ -1,0 +1,7 @@
+# Sentry Vision Configuration
+# extend from vision_base.toml
+
+trajectory.diameter = 0.017
+trajectory.mass = 0.00312
+
+aimer.delay = 0.043

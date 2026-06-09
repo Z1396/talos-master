@@ -1,0 +1,17 @@
+# Hero Vision Configuration
+# extend from vision_base.toml
+backend_type = "Axera"
+
+trajectory.diameter = 0.041
+trajectory.mass = 0.052
+
+mpc_weapon.mpc.yaw = 59.0
+
+[aimer]
+single_whole_up = 0.5
+single_whole_down = 0.3
+whole_pair_up = 0.6
+whole_pair_down = 0.5
+pair_center_up = 0.7
+pair_center_down = 0.5
+transfer_thresh = 20

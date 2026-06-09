@@ -1,0 +1,5 @@
+backend_type = "Axera"
+capabilities = ["Armor"]
+
+[aimer]
+delay = 0.1

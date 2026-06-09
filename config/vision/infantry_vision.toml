@@ -1,0 +1,2 @@
+backend_type = "TensorRT"
+aimer.delay = -0.1

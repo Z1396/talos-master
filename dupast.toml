@@ -1,0 +1,35 @@
+threshold = 0.50
+
+paths = ["src", "crates"]
+
+min_block_lines = 3
+
+ignore = [
+    "pch.hpp"
+]
+
+check_intra_file = true
+
+extensions = ["cpp", "cc", "cxx", "hpp", "h", "hxx"]
+
+# Frequency penalty for token similarity (0.0 - 10.0)
+# Higher values penalize common tokens more heavily
+# 0.0 = no penalty (pure TF-IDF cosine similarity)
+# 1.0 = light penalty
+# 2.0 = moderate penalty (default) - good for general use
+# 5.0+ = strong penalty - only unique/rare tokens contribute to similarity
+# This helps distinguish structural similarity from common boilerplate code
+frequency_penalty = 5.0
+
+# Enable fuzzy identifier matching using semantic vectors
+# When true, detects similarity even when identifiers are renamed
+# Example: calculateSum(a, b) ≈ computeSum(x, y) via semantic similarity
+# Uses 4096-dim character n-gram embeddings for identifier names
+fuzzy_identifiers = true
+
+# Minimum similarity threshold for fuzzy identifier matching (0.0 - 1.0)
+# Only applies when fuzzy_identifiers = true
+# 0.5 = very permissive (many matches)
+# 0.6 = moderate (default) - balances recall and precision
+# 0.8 = strict (only very similar names)
+fuzzy_identifier_threshold = 0.1

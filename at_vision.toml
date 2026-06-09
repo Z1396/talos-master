@@ -1,0 +1,43 @@
+backend = "Daedalus"
+robot = "infantry_4"  # any of: 'infantry', 'hero', 'sentry'
+vision = "daedalus_vision"
+
+# Hostname-based preset auto-matching.
+# The system hostname is looked up in [preset]; the matched entry provides
+# robot, vision, and optionally daedalus. If no match is found, falls back
+# to the explicit robot/vision/daedalus fields above.
+[preset]
+"ax650" = { robot = "drone", vision = "drone" }
+"blackjack.local" = { backend = "Daedalus", robot = "infantry_4", vision = "daedalus_vision" }
+"hero.local" = { robot = "hero", vision = "hero_vision" }
+"nuc" = { backend = "CameraOnly", robot = "radar", vision = "radar" }
+"ax650-2.local" = { robot = "omni", vision = "omni" }
+"ax650-1.local" = { robot = "infantry_ax_1", vision = "std" }
+"sentry" = { robot = "sentry", vision = "sentry" }
+"ax650-hero" = { robot = "hero", vision = "hero" }
+"ax650-doggy" = { robot = "doggy", vision = "doggy" }
+"tegra-ubuntu" = { robot = "infantry_nx", vision = "nx" }
+"byq" = { backend = "Daedalus", robot = "infantry_4", vision = "daedalus_vision" }
+[foxglove]
+enabled = true
+transport = "WebSocket"
+host = "0.0.0.0"
+port = 8765
+mcap_path = "record/foxglove.mcap"
+
+[foxglove.quanta]
+target_bitrate = 67500
+max_width = 200
+max_height = 200
+gop_size = 50
+framerate = 30
+preset = "fast"
+tune = "ssim"
+
+[capturer]
+enabled = false
+output_dir = "record"
+reserved_free_bytes = 2097152
+
+[scheduler]
+print_stats = false

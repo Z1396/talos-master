@@ -1,0 +1,18 @@
+[Unit]
+Description=Talos Vision Framework
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/root/talos/build/bin/talos
+WorkingDirectory=/root/talos
+Restart=always
+RestartSec=5
+User=root
+Environment="HOME=/root"
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

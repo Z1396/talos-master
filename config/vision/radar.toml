@@ -1,0 +1,3 @@
+detect_color = "Red"
+capabilities = ["Ldm"]
+trajectory.gravity = 0.0

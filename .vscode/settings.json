@@ -1,0 +1,20 @@
+{
+    "clangd.path": "/usr/bin/clangd-21",
+    "clangd.arguments": [
+        "--header-insertion=never",
+        "--background-index",
+        "--clang-tidy",
+        "--query-driver=/usr/bin/clang-21",
+        "-j=8"
+    ],
+    "cmake.environment": {
+        "CC": "clang-21",
+        "CXX": "clang++-21"
+    },
+    "editor.formatOnSave": true,
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
+    "files.exclude": {
+        "**/3dparty/**": true,
+        "**/build/_deps/**": true
+    }
+}

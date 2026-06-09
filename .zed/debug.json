@@ -1,0 +1,17 @@
+[
+  {
+    "label": "talos-debug",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "program": "./build/bin/talos",
+    "cwd": "$ZED_WORKTREE_ROOT",
+    "build": "talos",
+  },
+  {
+    "label": "calibration-debug",
+    "adapter": "CodeLLDB",
+    "request": "launch",
+    "program": "./build/bin/rm_calibration",
+    "cwd": "$ZED_WORKTREE_ROOT"
+  },
+]
