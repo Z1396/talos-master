@@ -76,7 +76,8 @@ FoxgloveServer::FoxgloveServer(
     , channels_(std::move(channels))
     , publisher_(std::move(publisher))
     , websocket_server_(std::move(websocket_server))
-    , mcap_writer_(std::move(mcap_writer)) {
+    , mcap_writer_(std::move(mcap_writer))
+    , sink_alive_(std::make_shared<std::atomic<bool>>(true)) {
     ::foxglove::setLogLevel(::foxglove::LogLevel::Info);
     if (channels_.tf_ch) {
         tf_exporter_.emplace(std::move(*channels_.tf_ch));

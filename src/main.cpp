@@ -1,19 +1,19 @@
 // 框架启动核心头文件
-#include "fcs/runtime/boot.hpp"               // 系统核心启动引导函数 fcs::boot
-#include "fcs_visualization/foxglove_sink.hpp" // Foxglove 可视化数据接收器
-#include "fcs_visualization/foxglove_systems.hpp"// Foxglove 对应调度系统注册
-#include "runtime/build_info.hpp"             // 编译构建信息（Git分支、提交ID、编译时间等）
-#include "runtime/config_loader.hpp"          // 配置文件加载器（解析 TOML 配置）
-#include "scheduler/error_formatter.hpp"       // 调度器错误信息格式化工具
-#include "scheduler/scheduler.hpp"            // 核心任务调度器 talos::Scheduler
-#include "spdlog_hook.hpp"                    // 日志库 spdlog 初始化、标准流重定向钩子
+#include "fcs/runtime/boot.hpp"                   // 系统核心启动引导函数 fcs::boot
+#include "fcs_visualization/foxglove_sink.hpp"    // Foxglove 可视化数据接收器
+#include "fcs_visualization/foxglove_systems.hpp" // Foxglove 对应调度系统注册
+#include "runtime/build_info.hpp"                 // 编译构建信息（Git分支、提交ID、编译时间等）
+#include "runtime/config_loader.hpp"              // 配置文件加载器（解析 TOML 配置）
+#include "scheduler/error_formatter.hpp"          // 调度器错误信息格式化工具
+#include "scheduler/scheduler.hpp"                // 核心任务调度器 talos::Scheduler
+#include "spdlog_hook.hpp"                        // 日志库 spdlog 初始化、标准流重定向钩子
 
 // 标准库依赖
-#include <atomic>       // 原子变量：线程安全标记，无锁跨线程通信
-#include <chrono>       // 时间戳、时长计算，用于计时、休眠
-#include <csignal>      // 操作系统信号捕获（Ctrl+C、进程终止信号）
-#include <thread>       // 标准线程库，创建独立监听线程
-#include <variant>      // 变体类型，用于区分不同后端硬件配置
+#include <atomic>  // 原子变量：线程安全标记，无锁跨线程通信
+#include <chrono>  // 时间戳、时长计算，用于计时、休眠
+#include <csignal> // 操作系统信号捕获（Ctrl+C、进程终止信号）
+#include <thread>  // 标准线程库，创建独立监听线程
+#include <variant> // 变体类型，用于区分不同后端硬件配置
 
 /**
  * @namespace 匿名命名空间
@@ -37,7 +37,7 @@ void signal_handler(int /*sig*/) {
     g_shutdown_requested.store(true, std::memory_order_release);
 }
 
-} // 匿名命名空间结束
+} // namespace
 
 /**
  * @brief 条件编译：若未定义 TALOS_DISABLE_PROGRAM_MAIN，则编译主函数
@@ -58,8 +58,7 @@ void signal_handler(int /*sig*/) {
  * 8. 运行核心调度器
  * 9. 等待监听线程退出、收尾、打印运行结果
  */
-int main()
-{
+int main() {
     // ===================== 1. 注册系统信号处理器 =====================
     // 捕获 Ctrl+C 信号
     std::signal(SIGINT, signal_handler);
@@ -67,8 +66,8 @@ int main()
     std::signal(SIGTERM, signal_handler);
 
     // ===================== 2. 初始化日志与标准流重定向 =====================
-    init_logger();          // 初始化 spdlog 日志器，配置日志级别、输出路径、格式
-    hook_cstream();         // 劫持标准输出/标准错误流，统一重定向到日志系统
+    init_logger();  // 初始化 spdlog 日志器，配置日志级别、输出路径、格式
+    hook_cstream(); // 劫持标准输出/标准错误流，统一重定向到日志系统
 
     // 记录程序启动时间点，用于统计整体初始化耗时
     const auto start = std::chrono::system_clock::now();
@@ -77,18 +76,14 @@ int main()
     const auto build = fcs::build_info();
     // 输出：Git分支、编译日期、Git提交哈希、编译主机
     SPDLOG_INFO(
-        "build version={}@{} git={} host={}",
-        build.git_branch,
-        build.build_date,
-        build.git_commit,
+        "build version={}@{} git={} host={}", build.git_branch, build.build_date, build.git_commit,
         build.build_host);
 
     // ===================== 4. 加载配置文件 at_vision.toml =====================
     // 加载视觉业务对应的 TOML 配置文件
     auto config = fcs::load_config("at_vision.toml");
     // 配置加载失败：打印致命日志，直接退出程序
-    if (!config)
-    {
+    if (!config) {
         SPDLOG_CRITICAL("{}", config.error());
         return 1;
     }
@@ -104,12 +99,10 @@ int main()
 
     // ===================== 7. 初始化 Foxglove 可视化模块 =====================
     // 判断配置是否启用可视化功能
-    if (foxglove_cfg.enabled)
-    {
+    if (foxglove_cfg.enabled) {
         // 创建 Foxglove 服务实例（返回 expected，承载结果或错误信息）
         auto server_result = fcs::visualization::create_foxglove_server(foxglove_cfg);
-        if (server_result)
-        {
+        if (server_result) {
             // 服务创建成功：转移所有权到智能指针
             std::shared_ptr<fcs::visualization::FoxgloveServer> server = std::move(*server_result);
 
@@ -122,35 +115,26 @@ int main()
             // 注册 Foxglove 对应的调度系统（数据发布、话题转换、帧转换等任务）
             // 第二个参数：判断后端硬件类型，区分不同机器人设备的适配逻辑
             fcs::visualization::register_foxglove_systems(
-                std::holds_alternative<fcs::hardware::DaedalusConfig>(config->backend),
-                scheduler,
+                std::holds_alternative<fcs::hardware::DaedalusConfig>(config->backend), scheduler,
                 &scheduler);
 
             // 根据传输类型打印启动信息
-            if (foxglove_cfg.transport == fcs::FoxgloveTransport::WebSocket)
-            {
+            if (foxglove_cfg.transport == fcs::FoxgloveTransport::WebSocket) {
                 // WebSocket 模式：实时在线可视化（Foxglove Studio 网页/客户端连接）
                 SPDLOG_INFO(
-                    "Foxglove WebSocket enabled on ws://{}:{}",
-                    foxglove_cfg.host,
+                    "Foxglove WebSocket enabled on ws://{}:{}", foxglove_cfg.host,
                     foxglove_cfg.port);
-            }
-            else
-            {
+            } else {
                 // MCAP 文件模式：离线录制数据，事后回放分析
                 SPDLOG_INFO("Foxglove MCAP enabled at {}", foxglove_cfg.mcap_path);
             }
-        }
-        else
-        {
+        } else {
             // 服务创建失败：打印警告，可视化功能降级关闭
             SPDLOG_WARN(
                 "Foxglove transport failed to initialize: {}. Visualization disabled",
                 server_result.error());
         }
-    }
-    else
-    {
+    } else {
         // 配置显式关闭可视化
         SPDLOG_INFO("Foxglove visualization disabled by config");
     }
@@ -158,8 +142,7 @@ int main()
     // ===================== 8. 执行框架全局引导初始化 =====================
     // 加载所有业务系统、组件、通道、时序逻辑，完成整个机器人框架初始化
     // 传入调度器 + 转移配置对象所有权
-    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r)
-    {
+    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) {
         // 引导初始化失败，致命错误，退出程序
         SPDLOG_CRITICAL("{}", r.error());
         return 1;
@@ -167,29 +150,24 @@ int main()
 
     // 统计并打印整体初始化耗时
     SPDLOG_INFO(
-        "init done. ({}ms)",
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now() - start
-        ).count());
+        "init done. ({}ms)", std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now() - start)
+                                 .count());
 
     // ===================== 9. 启动独立线程：监听退出信号 =====================
     // 原子标记：标记调度器是否已运行结束
     std::atomic<bool> scheduler_finished{false};
 
     // 新建后台监听线程
-    std::thread shutdown_watcher([&scheduler, &scheduler_finished]()
-    {
+    std::thread shutdown_watcher([&scheduler, &scheduler_finished]() {
         bool shutdown_logged = false; // 保证“收到退出信号”日志只打印一次
 
         // 循环监听：调度器未结束则持续轮询
-        while (!scheduler_finished.load(std::memory_order_acquire))
-        {
+        while (!scheduler_finished.load(std::memory_order_acquire)) {
             // 读取全局退出标记
-            if (g_shutdown_requested.load(std::memory_order_acquire))
-            {
+            if (g_shutdown_requested.load(std::memory_order_acquire)) {
                 // 仅首次触发时打印日志
-                if (!shutdown_logged)
-                {
+                if (!shutdown_logged) {
                     SPDLOG_INFO("shutdown signal received, stopping scheduler...");
                     shutdown_logged = true;
                 }
@@ -209,15 +187,13 @@ int main()
     scheduler_finished.store(true, std::memory_order_release);
 
     // 等待监听线程正常退出，防止线程残留
-    if (shutdown_watcher.joinable())
-    {
+    if (shutdown_watcher.joinable()) {
         shutdown_watcher.join();
     }
 
     // ===================== 11. 收尾检查 =====================
     // 调度器异常退出：打印致命日志
-    if (!result)
-    {
+    if (!result) {
         SPDLOG_CRITICAL("run scheduler: {}", result.error());
     }
 
