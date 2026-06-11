@@ -141,6 +141,10 @@ inline void hook_cstream() noexcept {
     static spdlog_streambuf cerr_buf(logger, "cerr", spdlog::level::err);
 
     // 替换标准流的底层缓冲区，完成重定向
+    /*rdbuf() 方法
+    std::ostream::rdbuf() 是标准库接口：
+    流对象.rdbuf(缓冲区指针)：修改当前流绑定的底层缓冲区。
+    默认情况下：cout/cerr 绑定系统默认控制台缓冲区，内容直接输出到黑窗口。*/
     std::cout.rdbuf(&cout_buf);
     std::cerr.rdbuf(&cerr_buf);
 }
