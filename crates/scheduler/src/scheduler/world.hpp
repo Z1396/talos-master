@@ -159,7 +159,7 @@ public:
         if (!p) {
             panic(
                 "UniqueAny bad cast: requested {} but stored {}",
-                detail::demangle(typeid(T).name()), detail::demangle(type().name()));
+                talos::scheduler::detail::demangle(typeid(T).name()), talos::scheduler::detail::demangle(type().name()));
         }
         return *p;
     }
@@ -175,7 +175,7 @@ public:
         if (!p) {
             panic(
                 "UniqueAny bad cast: requested {} but stored {}",
-                detail::demangle(typeid(T).name()), detail::demangle(type().name()));
+                talos::scheduler::detail::demangle(typeid(T).name()), talos::scheduler::detail::demangle(type().name()));
         }
         return *p;
     }
@@ -324,7 +324,7 @@ public:
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）
         if (!inserted) [[unlikely]] {
-            panic("Resource already exists: {}", detail::demangle(typeid(U).name()));
+            panic("Resource already exists: {}", talos::scheduler::detail::demangle(typeid(U).name()));
         }
 
         // 在类型擦除容器中原位构造 Resource 包装器
@@ -374,7 +374,7 @@ public:
     [[nodiscard]] const T& get() const noexcept {
         auto* storage = get_storage<T>();
         if (!storage) [[unlikely]] {
-            panic("Resource not found: {}", detail::demangle(typeid(T).name()));
+            panic("Resource not found: {}", talos::scheduler::detail::demangle(typeid(T).name()));
         }
         return storage->value;
     }
@@ -386,7 +386,7 @@ public:
     [[nodiscard]] T& get_mut() noexcept {
         auto* storage = get_storage_mut<T>();
         if (!storage) [[unlikely]] {
-            panic("Resource not found: {}", detail::demangle(typeid(T).name()));
+            panic("Resource not found: {}", talos::scheduler::detail::demangle(typeid(T).name()));
         }
         return storage->value;
     }
@@ -453,8 +453,8 @@ public:
         // 类型校验失败，报错
         if (!ptr || !*ptr) [[unlikely]] {
             panic(
-                "Channel storage type mismatch: {}@{}", detail::demangle(typeid(T).name()),
-                detail::demangle(typeid(Topic).name()));
+                "Channel storage type mismatch: {}@{}", talos::scheduler::detail::demangle(typeid(T).name()),
+                talos::scheduler::detail::demangle(typeid(Topic).name()));
         }
 
         return ptr->get();
