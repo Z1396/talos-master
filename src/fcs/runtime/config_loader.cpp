@@ -28,10 +28,12 @@ namespace {
  */
 auto format_parse_error(const toml::parse_error& e) -> std::string {
     // 获取错误来源信息（文件、行列）
+    // 注意：e.source() 返回的是一个智能指针，需要解引用获取实际的 source 对象
     const auto& src = e.source();
     // fmt 格式化：拼接错误描述、文件、行、列
     return fmt::format(
         "{} at {}:{}:{}", e.description(), src.path->data(), src.begin.line, src.begin.column);
+        // 注意：src.path->data() 返回的是一个智能指针，需要解引用获取实际的字符串数据  
 }
 
 /**
@@ -145,6 +147,13 @@ auto load_robot_extrinsic_config(std::string_view robot)
  * 5. 根据 backend 后端类型，分支加载硬件/外参配置
  * 6. 统一拼装成最终 RuntimeConfig 并返回
  */
+ /* template<class T, class E>
+    class expected;
+    T：成功时承载的正常业务数据类型（toml::table、自定义句柄、PnPSolver 智能指针等）
+    E：失败时承载的错误类型（字符串、自定义错误结构体、parse_error）
+    两种特殊变体
+    std::expected<void, E>：函数成功无返回值，仅区分成功 / 失败（如纯初始化函数）
+    std::unexpected<E>：用于构造失败分支，专门包装错误对象*/
 [[nodiscard]] std::expected<RuntimeConfig, std::string> load_config(std::string_view path) {
     // ========== 1. 解析主入口配置文件 ==========
     auto entry_tbl = toml::parse_file(path);
