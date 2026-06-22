@@ -114,6 +114,15 @@ int main() {
 
             // 注册 Foxglove 对应的调度系统（数据发布、话题转换、帧转换等任务）
             // 第二个参数：判断后端硬件类型，区分不同机器人设备的适配逻辑
+            /*  std::holds_alternative<T>(var)	判断当前是否存 T，返回 bool	分支判断、if 条件
+                std::get<T>(var)	取出 T 类型的值，类型不匹配抛异常	已确认类型后取值
+                std::get_if<T>(&var)	取 T 的指针，不匹配返回 nullptr	不想抛异常、安全取值
+                
+                2. 执行流程
+                编译阶段：编译器校验 DaedalusConfig 是否在 backend 的 variant 类型列表中，不在直接编译报错；
+                运行阶段：variant 内部维护一个类型索引下标，holds_alternative 对比下标是否对应 DaedalusConfig，无内存拷贝，性能极高；
+                返回布尔结果供 if/else 分支使用。
+            */
             fcs::visualization::register_foxglove_systems(
                 std::holds_alternative<fcs::hardware::DaedalusConfig>(config->backend), scheduler,
                 &scheduler);

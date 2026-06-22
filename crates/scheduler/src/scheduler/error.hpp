@@ -156,7 +156,7 @@ namespace detail {
  */
 template <typename... Args>
 [[noreturn]] inline void panic(const char* fmt, const Args&... args) noexcept {
-    detail::panic_message(fmt::format(fmt::runtime(fmt), args...));
+    talos::scheduler::detail::panic_message(fmt::format(fmt::runtime(fmt), args...));
 }
 
 } // namespace talos::scheduler

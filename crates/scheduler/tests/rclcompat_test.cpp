@@ -14,7 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <memory>
-#include <print>
+#include <iostream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -245,8 +245,7 @@ TEST(PubSlotTest, BindAndPublish) {
     //   - EXPECT_TRUE(slot.pending_write.load()) after publish
     //   - EXPECT_TRUE(was_pending) after exchange
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("test_node", scheduler);
     auto pub = node.create_publisher<TestMessage, TestTag1>();
 
@@ -289,8 +288,7 @@ TEST(PublisherTest, MoveSemantics) {
     //   - EXPECT_FALSE(pub1.valid()) after move
     //   - EXPECT_TRUE(pub3.valid()) after move assign
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("test_node", scheduler);
 
     auto pub1 = node.create_publisher<TestMessage, TestTag1>();
@@ -319,8 +317,7 @@ TEST(PublisherTest, PublishBeforeFinalize) {
     // KEY ASSERTIONS:
     //   - EXPECT_FALSE(pub.ready()) before finalize
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("test_node", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -344,8 +341,7 @@ TEST(PublisherTest, PublishAfterFinalize) {
     //   - EXPECT_TRUE(pub.ready()) after finalize
     //   - EXPECT_TRUE(slot->pending_write.load()) after publish
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("test_node", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -365,8 +361,7 @@ TEST(PublisherTest, PublishAfterFinalize) {
 }
 
 TEST(PublisherTest, SurvivesNodeDestructionBeforeFinalize) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Publisher<TestMessage, TestTag1> pub;
 
     {
@@ -403,8 +398,7 @@ TEST(NodeTest, CreatePublisher) {
     //   - EXPECT_TRUE(pub.valid())
     //   - EXPECT_EQ(node.name(), "my_node")
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("my_node", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -424,8 +418,7 @@ TEST(NodeTest, CreateSubscription) {
     // KEY ASSERTIONS:
     //   - EXPECT_TRUE(result.has_value()) after finalize
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("my_node", scheduler);
 
     // Create publisher first (subscription needs a writer)
@@ -452,8 +445,7 @@ TEST(NodeTest, FinalizeBuild) {
     //   - EXPECT_TRUE(result.has_value())
     //   - print_systems() shows pub -> sub wake chain
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("my_node", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -470,8 +462,7 @@ TEST(NodeTest, FinalizeBuild) {
 }
 
 TEST(NodeTest, DestroyedAfterFinalizeStillRunsOwnedTimerPublisher) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     std::atomic<int> recv_count{0};
 
     {
@@ -524,8 +515,7 @@ TEST(NodeTest, DestroyedAfterFinalizeStillRunsOwnedTimerPublisher) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, SimplePubSubChain) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node camera("camera", scheduler);
     auto camera_pub = camera.create_publisher<ImageFrame, CameraChannel>();
@@ -596,8 +586,7 @@ TEST(RclCompatIntegrationTest, SimplePubSubChain) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, OnePublisherMultipleSubscribers) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Single camera node
     rclcompat::Node camera("camera", scheduler);
@@ -675,8 +664,7 @@ TEST(RclCompatIntegrationTest, OnePublisherMultipleSubscribers) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, ChainedProcessingPipeline) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Stage 1: Camera
     rclcompat::Node camera("camera", scheduler);
@@ -755,8 +743,7 @@ TEST(MermaidExecutionLevels, CountsChannelReadersAndWritersSeparately) {
     struct DebugTag {};
     struct OutputTag {};
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "source", [](talos::spmc_mut<TestMessage, InputTag> out) {
@@ -799,8 +786,7 @@ TEST(MermaidExecutionLevels, RendersCrossLevelDependenciesForMultiInputNodes) {
     struct MergeTag {};
     struct SinkTag {};
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "source", [](talos::spmc_mut<TestMessage, SourceTag> out) {
@@ -856,8 +842,7 @@ TEST(MermaidExecutionLevels, RendersCrossLevelDependenciesForMultiInputNodes) {
 }
 
 TEST(MermaidLabels, DisambiguatesSameTopicDifferentPayloadTypes) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "source", [](talos::spmc_mut<TestMessage, TestTag1> test_out,
@@ -895,8 +880,7 @@ TEST(MermaidLabels, DisambiguatesSameTopicDifferentPayloadTypes) {
 }
 
 TEST(MermaidWakeChains, RequiresBuildForFreshWakeGraph) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "source", [](talos::spmc_mut<TestMessage, TestTag1> out) {
@@ -913,10 +897,9 @@ TEST(MermaidWakeChains, RequiresBuildForFreshWakeGraph) {
 }
 
 TEST(MermaidWakeChains, ExcludesSharedResourceAccess) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
-    world.insert_resource(TestMessage{.value = 7, .text = "resource"});
+    scheduler.world().insert_resource(TestMessage{.value = 7, .text = "resource"});
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "source", [](talos::spmc_mut<AnotherMessage, TestTag1> out) {
@@ -941,8 +924,7 @@ TEST(MermaidWakeChains, ExcludesSharedResourceAccess) {
 }
 
 TEST(MermaidDataFlow, AnnotatesInvalidMultipleWriterChannels) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     scheduler.add_system<talos::fixed_rate<30>>(
         "writer_a", [](talos::spmc_mut<TestMessage, TestTag1> out) {
@@ -965,10 +947,9 @@ TEST(MermaidDataFlow, AnnotatesInvalidMultipleWriterChannels) {
 }
 
 TEST(MermaidDataFlow, IncludesSharedResourceReadAndMutAccess) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
-    world.insert_resource(TestMessage{.value = 3, .text = "resource"});
+    scheduler.world().insert_resource(TestMessage{.value = 3, .text = "resource"});
 
     scheduler.add_system<talos::fixed_rate_silent<30>>(
         "reader", [](talos::res<TestMessage> state) { (void)state->value; });
@@ -1009,8 +990,7 @@ TEST(MermaidDataFlow, IncludesSharedResourceReadAndMutAccess) {
 // -------------------------------------------------------------------------
 
 TEST(HotAddTest, HotAddDuringExecution) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Create an initial source system
     rclcompat::Node source("source", scheduler);
@@ -1036,8 +1016,7 @@ TEST(HotAddTest, HotAddDuringExecution) {
 }
 
 TEST(HotAddTest, FinalizeRemainsUsableAfterPartialHotAddFailure) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     Node source("source", scheduler);
     auto source_pub = source.create_publisher<TestMessage, TestTag1>();
@@ -1075,8 +1054,7 @@ TEST(HotAddTest, FinalizeRemainsUsableAfterPartialHotAddFailure) {
 }
 
 TEST(HotAddTest, UnsafeHotAddSystemWhileRunning) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     Node source("source", scheduler);
     auto source_pub = source.create_publisher<TestMessage, TestTag1>();
@@ -1111,8 +1089,7 @@ TEST(HotAddTest, UnsafeHotAddSystemWhileRunning) {
 }
 
 TEST(HotAddTest, SafeHotAddPanicsWhileRunning) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     ASSERT_TRUE(scheduler.build().has_value());
 
     std::jthread scheduler_thread([&scheduler]() { (void)scheduler.run(); });
@@ -1135,8 +1112,7 @@ TEST(HotAddTest, SafeHotAddPanicsWhileRunning) {
 }
 
 TEST(HotAddTest, FinalizePanicsWhileRunning) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     Node source("source", scheduler);
     ASSERT_TRUE(source.finalize().has_value());
@@ -1186,8 +1162,7 @@ TEST(HotAddTest, FinalizePanicsWhileRunning) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, MultipleIndependentChannels) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // High-frequency camera
     rclcompat::Node camera("camera", scheduler);
@@ -1256,8 +1231,7 @@ TEST(RclCompatIntegrationTest, DuplicatePublisherDetection) {
     //
     // NOTE: Death test requires special gtest setup
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("node", scheduler);
 
@@ -1294,8 +1268,7 @@ TEST(RclCompatIntegrationTest, DuplicatePublisherDetection) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, CrossNodeCommunication) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Producer in one node
     rclcompat::Node producer("producer", scheduler);
@@ -1347,8 +1320,7 @@ TEST(RclCompatIntegrationTest, CrossNodeCommunication) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatIntegrationTest, MessageTransformation) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Raw input stage
     rclcompat::Node raw_input("raw_input", scheduler);
@@ -1414,8 +1386,7 @@ TEST(RclCompatIntegrationTest, MessageTransformation) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatWakeChain, SingleLevelDependency) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node pub_node("pub_node", scheduler);
     [[maybe_unused]] auto pub = pub_node.create_publisher<TestMessage, TestTag1>();
@@ -1450,8 +1421,7 @@ TEST(RclCompatWakeChain, SingleLevelDependency) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatWakeChain, MultiLevelPipeline) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node a("a", scheduler);
     auto a_pub = a.create_publisher<TestMessage, TestTag1>();
@@ -1494,8 +1464,7 @@ TEST(RclCompatWakeChain, MultiLevelPipeline) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatWakeChain, SPMCWakePropagation) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node pub("pub", scheduler);
     [[maybe_unused]] auto p = pub.create_publisher<TestMessage, TestTag1>();
@@ -1535,8 +1504,7 @@ TEST(RclCompatWakeChain, SPMCWakePropagation) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatError, DoubleFinalizeBehavior) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("node", scheduler);
     [[maybe_unused]] auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -1566,8 +1534,7 @@ TEST(RclCompatError, PublishOnMovedFromPublisherSetup) {
     // NOTE: 实际调用 publish() 会导致 abort
     //   这里只验证 move 语义
 
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("node", scheduler);
 
     auto pub1 = node.create_publisher<TestMessage, TestTag1>();
@@ -1597,8 +1564,7 @@ TEST(RclCompatError, PublishOnMovedFromPublisherSetup) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatEdge, EmptyMessageHandling) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node pub("pub", scheduler);
     auto p = pub.create_publisher<TestMessage, TestTag1>();
@@ -1637,8 +1603,7 @@ TEST(RclCompatEdge, EmptyMessageHandling) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatEdge, LargeMessagePayload) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node pub("pub", scheduler);
     auto p = pub.create_publisher<ImageFrame, CameraChannel>();
@@ -1677,8 +1642,7 @@ TEST(RclCompatEdge, LargeMessagePayload) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatEdge, MultipleFinalizesWithNoSystems) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("node", scheduler);
 
@@ -1719,8 +1683,7 @@ TEST(RclCompatEdge, MultipleFinalizesWithNoSystems) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatOwnership, AutoBindWithSchedulerRunning) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Create an fixed_rate system that will trigger the subscription
     std::atomic<bool> fixed_rate_ran{false};
@@ -1803,8 +1766,7 @@ TEST(RclCompatOwnership, RejectSecondCallback_DeathTest) {
     // NOTE: This is a setup test - the actual death test requires
     // special gtest setup with EXPECT_DEATH
     //
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     rclcompat::Node node("test", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -1860,8 +1822,7 @@ TEST(RclCompatOwnership, RejectSecondCallback_DeathTest) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatOwnership, MultipleCallbacksMultiplePublishers) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Create two fixed_rate systems as triggers for the two callbacks
     std::atomic<int> trigger_a_count{0};
@@ -1941,8 +1902,7 @@ TEST(RclCompatOwnership, MultipleCallbacksMultiplePublishers) {
 // -------------------------------------------------------------------------
 
 TEST(RclCompatOwnership, PublisherOutsideCallback) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -1956,8 +1916,7 @@ TEST(RclCompatOwnership, PublisherOutsideCallback) {
 }
 
 TEST(RclCompatFlow, ExternalPublishDrainsCallbackChainInSingleComputeRound) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     Node node("test", scheduler);
 
     auto input_pub     = node.create_publisher<TestMessage, TestTag1>();
@@ -1995,8 +1954,7 @@ TEST(RclCompatFlow, ExternalPublishDrainsCallbackChainInSingleComputeRound) {
 }
 
 TEST(SchedulerStatsTest, FixedRateFrequencyCountsWritesForWriterSystems) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     std::atomic<int> writer_execs{0};
     std::atomic<int> no_output_execs{0};
@@ -2067,8 +2025,7 @@ TEST(ResourceAccessor, DefaultConstruction) {
 }
 
 TEST(ResourceAccessor, CreateFromNode) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2082,8 +2039,7 @@ TEST(ResourceAccessor, CreateFromNode) {
 }
 
 TEST(ResourceAccessor, GetImmutableResource) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2102,8 +2058,7 @@ TEST(ResourceAccessor, GetImmutableResource) {
 }
 
 TEST(ResourceAccessor, GetMutableResource) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2130,8 +2085,7 @@ TEST(ResourceAccessor, GetMutableResource) {
 }
 
 TEST(ResourceAccessor, HasResource) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2146,8 +2100,7 @@ TEST(ResourceAccessor, HasResource) {
 }
 
 TEST(ResourceAccessor, UnsafeInsertResourceAfterFinalize) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
     ASSERT_TRUE(node.finalize().has_value());
@@ -2162,12 +2115,11 @@ TEST(ResourceAccessor, UnsafeInsertResourceAfterFinalize) {
 }
 
 TEST(ResourceAccessor, InsertResourcePanicsAfterFinalize) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     ASSERT_TRUE(scheduler.build().has_value());
 
     EXPECT_DEATH_IF_SUPPORTED(
-        world.insert_resource(TestResource{.value = 1, .name = "forbidden"}), "");
+        scheduler.world().insert_resource(TestResource{.value = 1, .name = "forbidden"}), "");
 }
 
 // -------------------------------------------------------------------------
@@ -2182,8 +2134,7 @@ TEST(ResourceAccessor, InsertResourcePanicsAfterFinalize) {
 // -------------------------------------------------------------------------
 
 TEST(ResourceAccessor, WithCallback) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2251,8 +2202,7 @@ TEST(ResourceAccessor, WithCallback) {
 // -------------------------------------------------------------------------
 
 TEST(ResourceAccessor, Copyable) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     rclcompat::Node node("test", scheduler);
 
@@ -2288,8 +2238,7 @@ TEST(ResourceAccessor, InvalidAfterWorldDestruction) {
     rclcompat::ResourceAccessor<TestResource> accessor;
 
     {
-        World world;
-        Scheduler scheduler(world);
+        Scheduler scheduler;
         rclcompat::Node node("test", scheduler);
 
         node.insert_resource(TestResource{.value = 42, .name = "ephemeral"});
@@ -2318,8 +2267,7 @@ TEST(ResourceAccessor, InvalidAfterWorldDestruction) {
 // -------------------------------------------------------------------------
 
 TEST(RclTimer, BasicTimer) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     Node node("test", scheduler);
 
     std::atomic<int> count{0};
@@ -2354,8 +2302,7 @@ TEST(RclTimer, BasicTimer) {
 // -------------------------------------------------------------------------
 
 TEST(RclTimer, TimerWithPublisher) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     Node node("test", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -2382,8 +2329,7 @@ TEST(RclTimer, TimerWithPublisher) {
 }
 
 TEST(RclTimer, TimerPublisherWakesSubscriber) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     Node node("test", scheduler);
 
     auto pub = node.create_publisher<TestMessage, TestTag1>();
@@ -2417,8 +2363,7 @@ TEST(RclTimer, TimerPublisherWakesSubscriber) {
 // -------------------------------------------------------------------------
 
 TEST(RclTimer, MultipleTimers) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     Node node("test", scheduler);
 
     std::atomic<int> fast_count{0};
@@ -2453,10 +2398,9 @@ TEST(RclTimer, MultipleTimers) {
 // -------------------------------------------------------------------------
 
 TEST(RclTimer, TimerWithResourceAccessor) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
-    world.insert_resource(TestResource{.value = 42, .name = "test_resource"});
+    scheduler.world().insert_resource(TestResource{.value = 42, .name = "test_resource"});
 
     Node node("test", scheduler);
     auto accessor = node.create_resource<TestResource>();
@@ -2489,8 +2433,7 @@ TEST(RclTimer, TimerWithResourceAccessor) {
 // -------------------------------------------------------------------------
 
 TEST(RclTimer, MultipleNodesWithTimers) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
 
     // Node 1: Has a timer
     Node node1("node1", scheduler);
@@ -2542,8 +2485,7 @@ public:
 };
 
 TEST(RclTimer, TimerFrequencyRounding) {
-    World world;
-    Scheduler scheduler(world);
+    Scheduler scheduler;
     ProperNode node("test", scheduler);
 
     // 27Hz timer
