@@ -139,6 +139,9 @@ template <typename Def>
  * @param 承载所有描述符的元组
  * @return 全部初始化成功才返回正常，任一失败则返回错误
  */
+ /*typename：说明后面是类型
+...：省略号，代表 “一堆、任意多个”
+Defs：这一整堆类型的统称（包名，随便取名）*/
 template <typename... Defs>
 [[nodiscard]] inline std::expected<void, std::string> init_all_channels(
     FoxgloveChannels& channels, const ::foxglove::Context& context, FoxgloveTransport transport,
@@ -209,11 +212,30 @@ public:
 // 核心入口：管理通道、队列、后台线程、双输出(WebSocket/MCAP)
 // ============================================================================
 class FoxgloveServer {
+    /* 私有域
+    下面两个东西都放在类私有区域：
+    ConstructorToken 令牌结构体
+    友元声明 friend class FoxgloveServerFactory;
+    外部代码（main、其他业务类）完全看不到这两个，不能使用。
+    2. struct ConstructorToken 令牌结构体
+    ① 为什么放 private
+    外部拿不到这个类型，就没法生成 ConstructorToken{} 实例。
+    如果构造函数要求第一个参数是 ConstructorToken，外部写不出合法参数，自然不能直接 FoxgloveServer s(...)。
+    ② explicit ConstructorToken() = default;
+    explicit：禁止隐式转换，必须显式写 ConstructorToken{}，不会随便传别的类型冒充令牌；
+    = default：编译器生成默认无参构造，空结构体，没有任何成员，只起 “通行证标记” 作用；
+    无任何数据，纯编译期校验，运行时零开销。*/
 private:
     // 私有构造令牌：外部无法直接构造，强制通过工厂创建
     struct ConstructorToken {
         explicit ConstructorToken() = default;
     };
+    /*友元规则：被 friend 标记的类，可以访问本类所有 private 成员。
+    这里权限效果：
+    只有 FoxgloveServerFactory 内部代码，能看见私有 ConstructorToken；
+    只有工厂能创建 ConstructorToken{} 令牌实例；
+    只有工厂能合法调用 FoxgloveServer 的私有构造函数；
+    其余所有外部类、全局函数、业务代码一律禁止直接构造服务。*/
     friend class FoxgloveServerFactory;
 
 public:
