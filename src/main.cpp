@@ -104,6 +104,12 @@ int main() {
         auto server_result = fcs::visualization::create_foxglove_server(foxglove_cfg);
         if (server_result) {
             // 服务创建成功：转移所有权到智能指针
+            /*std::move 本质只有一句话
+            std::move(任意变量) 功能：不管你传进去是左值还是右值，强制转换成右值引用。
+            它和 * 没有绑定关系，* 只是解 expected/ 智能指针拿出内部对象。
+            区分两个东西不要混：
+            *x：解引用运算符，取出容器内部存储的实体，结果一定是左值；
+            std::move(val)：把 val 转右值引用。*/
             std::shared_ptr<fcs::visualization::FoxgloveServer> server = std::move(*server_result);
 
             // 挂载数据接收器：业务数据转发至 Foxglove 服务

@@ -251,38 +251,56 @@ inline void log_quanta_error_once(QuantaPublisherState& state, std::string messa
 }
 
 /**
- * @brief 初始化/复用H265编码器，分辨率/帧率变化自动重建
- * @return true 编码器就绪可用
+ * @brief 确保Quanta视频编码器可用，参数不匹配则重建编码器
+ * @param state 编码器状态结构体（持有编码器实例、分辨率、pts、缓存队列、错误信息）
+ * @param cfg 编码全局配置：码率、最大缩放分辨率、帧率等
+ * @param src_width 原始图像宽度
+ * @param src_height 原始图像高度
+ * @return bool true=编码器就绪可用；false=编码器创建失败
+ * @ noexcept 函数不抛出C++异常
+ * @ [[nodiscard]] 禁止忽略返回值，必须判断编码器是否创建成功
  */
 [[nodiscard]] inline bool ensure_quanta_encoder(
     QuantaPublisherState& state, const quanta::EncodeParams& cfg, int src_width,
     int src_height) noexcept {
-    // 编码器已存在、分辨率/帧率完全匹配，直接复用
+    // 分支1：已有编码器，且分辨率、帧率完全一致 → 直接复用，无需重建
     if (state.encoder && state.src_width == src_width && state.src_height == src_height
         && state.framerate == cfg.framerate) {
         return true;
     }
 
-    // 创建新编码器实例
+    // 分支2：无编码器 / 分辨率/帧率发生变化，需要新建编码器
+    // 工厂创建视频流编码器，传入编码配置、原图分辨率、输出帧率
     auto enc = quanta::StreamEncoder::create(cfg, src_width, src_height, cfg.framerate);
+
+    // 判断编码器创建是否失败（硬件编码不支持、参数非法、内存不足等）
     if (!enc) {
-        // 创建失败，记录错误并清空编码器
+        // 只打印一次本次同类错误，避免刷屏
         log_quanta_error_once(state, std::move(enc.error()));
+        // 释放原有编码器资源
         state.encoder.reset();
+        // 返回失败，上层不可执行编码
         return false;
     }
-    // 保存编码器、重置帧pts与时间戳队列
+
+    // 把创建成功的编码器移动存入state的optional容器，接管所有权
     state.encoder.emplace(std::move(*enc));
+    // 清空待编码帧缓存队列，旧帧分辨率不匹配直接丢弃
     state.pending_frames.clear();
+    // 重置PTS（显示时间戳）计数器，从0重新计数
     state.next_pts   = 0;
+    // 更新状态里记录的当前图像分辨率、帧率
     state.src_width  = src_width;
     state.src_height = src_height;
     state.framerate  = cfg.framerate;
 
+    // 清空上次保存的错误标记
     state.last_error.clear();
+    // 打印日志提示编码器初始化完成，输出原图尺寸、缩放上限、目标码率、帧率
     SPDLOG_INFO(
         "Foxglove quanta encoder initialized: {}x{} -> <= {}x{}, {} bps @ {} fps", src_width,
         src_height, cfg.max_width, cfg.max_height, cfg.target_bitrate, cfg.framerate);
+    // 编码器就绪，返回成功
     return true;
 }
 

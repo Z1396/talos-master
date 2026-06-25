@@ -46,6 +46,11 @@ namespace toml_helper {
 template <typename T>
 concept ReadFrom = requires(T& t, const toml::table& table) {
     // 方法签名必须是：std::expected<void, std::string> read_from(const toml::table&)
+    /*拆分语法 { 表达式 } -> std::same_as<目标类型>
+    { t.read_from(table) }：捕获调用表达式的值类别 + 完整返回类型；
+    -> std::same_as<X>：强制要求这个表达式的返回类型必须和 X 完全等同。
+    放到你代码里的含义：
+    调用 t.read_from(table) 得到的返回值，不能是兼容、不能隐式转换，必须精准就是 std::expected<void, std::string>。*/
     { t.read_from(table) } -> std::same_as<std::expected<void, std::string>>;
 };
 
@@ -59,6 +64,14 @@ concept TomlScalarValue = std::is_arithmetic_v<T>          // int/float/bool
                        || std::is_same_v<T, toml::date_time>;
 
 /// 约束：支持字段反射的结构体，可自动遍历字段名+成员引用
+/*剥离规则（执行顺序固定）
+第一步：去除所有引用
+左值引用 T& → T
+右值引用 T&& → T
+第二步：去除顶层 cv 限定符 const /volatile
+const T → T
+volatile T → T
+const volatile T → T*/
 template <typename T>
 concept Reflectable = field_reflection::field_referenceable<std::remove_cvref_t<T>>
                    && field_reflection::field_namable<std::remove_cvref_t<T>>;

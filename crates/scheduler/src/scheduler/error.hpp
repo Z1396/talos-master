@@ -155,6 +155,11 @@ namespace detail {
  *  4. 标记 noexcept 保证不会抛出异常
  */
 template <typename... Args>
+/*标准属性，告诉编译器：这个函数永远不会正常返回。
+函数内部一定会终止程序、抛出致命异常、死循环，不会执行完回到调用处。
+作用：
+编译器优化：不需要生成返回栈代码；
+消除告警：if 分支调用 panic 后，编译器知道后续代码不可达，不会报 “缺少 return”。*/
 [[noreturn]] inline void panic(const char* fmt, const Args&... args) noexcept {
     talos::scheduler::detail::panic_message(fmt::format(fmt::runtime(fmt), args...));
 }

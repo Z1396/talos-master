@@ -510,11 +510,16 @@ public:
      * @brief 移入资源，会校验资源结构是否允许修改
      * 阶段：仅初始化阶段可用，冻结后禁止调用
      */
+    // 模板函数实现
     template <typename T>
     void insert_resource(T&& resource) {
+        // 1. 去除T的const/volatile/引用，拿到纯净类型U
         using U = std::remove_cvref_t<T>;
+        // 2. 打印日志：注册资源类型名
         SPDLOG_DEBUG("register {}", demangle(typeid(T).name()));
+        // 3. 保证该类型资源的存储结构已初始化
         ensure_resource_structure_mutable<U>();
+        // 4. 在resources_容器中emplace构造/转发存入资源，忽略返回值
         static_cast<void>(resources_.template emplace<U>(std::forward<T>(resource)));
     }
 
@@ -718,7 +723,13 @@ private:
      */
     template <typename T>
     void ensure_resource_structure_mutable() const noexcept {
+        // 原子加载标记：资源结构是否已冻结
+        /*resource_structure_frozen_ 是 std::atomic<bool> 原子变量，全局标记资源表是否冻结；
+        .load(std::memory_order_acquire)：原子加载，保证多线程下内存可见性；
+        true = 已调用 build()，资源结构冻结；
+        false = 还在构建阶段，可以新增资源。*/
         if (resource_structure_frozen_.load(std::memory_order_acquire)) [[unlikely]] {
+            // 直接崩溃并打印提示信息
             panic(
                 "Mutating resource structure for '{}' after build() breaks scheduler invariants; "
                 "use unsafe_insert_resource()/unsafe_emplace_resource() only if you need the "

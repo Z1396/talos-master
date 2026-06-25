@@ -284,6 +284,11 @@ void FoxgloveServer::message_sender_thread() {
         auto server = detail::create_websocket_sink(config, context);
         if (!server)
             return std::unexpected(server.error());
+        /**server
+        server 是 expected 对象，重载了解引用 operator*；
+        *server 得到内部存储的 WebSocketServer& 左值引用。
+        std::move(*server)
+        把左值引用强制转换成右值引用，允许调用移动赋值运算符。*/
         websocket_server = std::move(*server);
         break;
     }

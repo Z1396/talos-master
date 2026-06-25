@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "toml/core.hpp"
+#include "toml/ext/core.hpp"
 #include "toml/ext/containers.hpp"
 
 namespace {

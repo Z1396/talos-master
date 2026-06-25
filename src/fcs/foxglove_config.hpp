@@ -32,6 +32,8 @@ struct FoxgloveConfig {
     uint16_t port{8765};                // 服务监听端口，默认8765
     std::string mcap_path{};           // MCAP文件保存路径，仅传输模式为Mcap时生效
     quanta::EncodeParams quanta{};     // 可视化消息流的编码配置（压缩、格式等）
+    /*{} 是列表初始化（值初始化）。
+    整句：创建一个 quanta 类型的临时对象，所有成员自动零初始化。*/
 };
 
 } // namespace fcs

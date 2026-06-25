@@ -28,13 +28,21 @@ namespace fcs::visualization {
 // 对 Foxglove SDK 原生通道类型做别名，统一用 std::optional 包装
 // std::optional 语义：通道可能未初始化，取值前需判断是否有效
 // ============================================================================
-using SceneCh  = std::optional<::foxglove::schemas::SceneUpdateChannel>;    // 3D场景绘制通道
-using ImageCh  = std::optional<::foxglove::schemas::CompressedImageChannel>; // 压缩图像通道
-using VideoCh  = std::optional<::foxglove::schemas::CompressedVideoChannel>; // 压缩视频通道
-using JsonCh   = std::optional<::foxglove::RawChannel>;                      // 原始二进制通道(承载JSON)
-using TfCh     = std::optional<::foxglove::schemas::FrameTransformsChannel>; // 坐标变换TF通道
-using CalibCh  = std::optional<::foxglove::schemas::CameraCalibrationChannel>;// 相机标定通道
-using LogCh    = std::optional<::foxglove::schemas::LogChannel>;              // 日志消息通道;
+// 类型别名简化写法，统一包装为 std::optional，代表：该通道可选创建、可空
+// 3D场景绘制通道：立方体、线条、标记、网格、模型等3D可视化元素
+using SceneCh  = std::optional<::foxglove::schemas::SceneUpdateChannel>;
+// 压缩图像通道：JPG/PNG 单帧图片，相机画面快照
+using ImageCh  = std::optional<::foxglove::schemas::CompressedImageChannel>;
+// 压缩视频通道：连续H264/H265视频流，低延迟实时画面
+using VideoCh  = std::optional<::foxglove::schemas::CompressedVideoChannel>;
+// 原始二进制通用通道，自定义JSON数据包、自定义结构体透传
+using JsonCh   = std::optional<::foxglove::RawChannel>;
+// TF坐标变换通道：机器人多坐标系转换（base_link、camera、lidar、map）
+using TfCh     = std::optional<::foxglove::schemas::FrameTransformsChannel>;
+// 相机内参/外参标定通道：fx fy cx cy 畸变系数、相机位姿
+using CalibCh  = std::optional<::foxglove::schemas::CameraCalibrationChannel>;
+// 日志消息通道：INFO/WARN/ERROR/DEBUG 打印日志，前端日志面板展示
+using LogCh    = std::optional<::foxglove::schemas::LogChannel>;
 
 // ============================================================================
 // 二、FoxgloveChannels：运行时通道容器
@@ -107,14 +115,23 @@ struct FoxgloveChannels {
 // ============================================================================
 
 // -------------------------- 3D场景通道描述符 --------------------------
+// ====================== 第一大类：3D场景标记通道描述符 SceneUpdate ======================
+// 所有场景通道共用 Foxglove 标准3D绘制结构 SceneUpdate，用于绘制方框、线条、轨迹、模型、装甲板等3D标记
+// 每个struct对应一条独立可视化话题，存放该话题全部静态常量信息
 struct scene_def {
+    // 话题路径，对应前端Foxglove展示的topic名称
     static constexpr std::string_view topic = "/scene";
+    // 该话题对应的通道管理类（之前定义的SceneCh）
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
+    // 单帧发送的数据载荷结构体（一整批3D绘制图元）
     using payload_type                      = ::foxglove::schemas::SceneUpdate;
+    // 指针指向 FoxgloveChannels 容器内对应的可选通道成员，用于运行时读写通道
     static constexpr auto member            = &FoxgloveChannels::scene_ch;
+    // 是否原始二进制Raw通道：false=Foxglove标准结构化通道，前端自动解析渲染
     static constexpr bool is_raw            = false;
 };
 
+// 跟踪目标3D场景话题
 struct track_scene_def {
     static constexpr std::string_view topic = "/track/scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -123,6 +140,7 @@ struct track_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 激光雷达跟踪场景
 struct ldm_track_scene_def {
     static constexpr std::string_view topic = "/ldm/track/scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -131,6 +149,7 @@ struct ldm_track_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 云台解算预测场景
 struct gimbal_scene_def {
     static constexpr std::string_view topic = "/solver/scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -139,6 +158,7 @@ struct gimbal_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 目标匹配关联调试3D场景
 struct association_scene_def {
     static constexpr std::string_view topic = "/debug/association_scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -147,6 +167,7 @@ struct association_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// MPC模型预测轨迹场景
 struct mpc_prediction_scene_def {
     static constexpr std::string_view topic = "/debug/mpc_prediction_scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -155,6 +176,7 @@ struct mpc_prediction_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 能量机关整体绘制场景
 struct rune_scene_def {
     static constexpr std::string_view topic = "/rune/scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -163,6 +185,7 @@ struct rune_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 能量机关EKF滤波预测场景
 struct rune_ekf_scene_def {
     static constexpr std::string_view topic = "/rune/ekf_scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -171,6 +194,7 @@ struct rune_ekf_scene_def {
     static constexpr bool is_raw            = false;
 };
 
+// 真值对比3D场景（仿真/标定真值）
 struct ground_truth_scene_def {
     static constexpr std::string_view topic = "/ground_truth/scene";
     using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
@@ -179,17 +203,18 @@ struct ground_truth_scene_def {
     static constexpr bool is_raw            = false;
 };
 
-// -------------------------- 图像通道描述符 --------------------------
+// -------------------------- 图像通道描述符 压缩单帧图片 CompressedImage --------------------------
 struct img_def {
     static constexpr std::string_view topic      = "/image";
     using channel_type                           = ::foxglove::schemas::CompressedImageChannel;
     using payload_type                           = ::foxglove::schemas::CompressedImage;
     static constexpr auto member                 = &FoxgloveChannels::img_ch;
     static constexpr bool is_raw                 = false;
-    // 传输限制：该通道**仅在 WebSocket 实时模式**启用，MCAP模式屏蔽
+    // 传输模式限制枚举：仅WebSocket实时推流启用，录制MCAP离线包时屏蔽该通道，减少录像体积
     static constexpr FoxgloveTransport transport = FoxgloveTransport::WebSocket;
 };
 
+// 相机标定画面
 struct calibration_img_def {
     static constexpr std::string_view topic = "/calibration/image";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -198,6 +223,7 @@ struct calibration_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// 二值化调试图
 struct binary_img_def {
     static constexpr std::string_view topic = "/debug/binary_img";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -206,6 +232,7 @@ struct binary_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// 数字识别模板匹配图
 struct pattern_img_def {
     static constexpr std::string_view topic = "/debug/number_img";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -214,6 +241,7 @@ struct pattern_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// 能量机关箭头ROI图
 struct rune_arrow_img_def {
     static constexpr std::string_view topic = "/rune/arrow_img";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -222,6 +250,7 @@ struct rune_arrow_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// 能量机关目标区域图
 struct rune_target_img_def {
     static constexpr std::string_view topic = "/rune/target_img";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -230,6 +259,7 @@ struct rune_target_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// 能量机关中心识别图
 struct rune_center_img_def {
     static constexpr std::string_view topic = "/rune/center_img";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -238,6 +268,7 @@ struct rune_center_img_def {
     static constexpr bool is_raw            = false;
 };
 
+// EKF概率热力图
 struct ekf_heatmap_def {
     static constexpr std::string_view topic = "/debug/ekf_heatmap";
     using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
@@ -253,21 +284,24 @@ struct video_def {
     using payload_type                           = ::foxglove::schemas::CompressedVideo;
     static constexpr auto member                 = &FoxgloveChannels::video_ch;
     static constexpr bool is_raw                 = false;
-    // 传输限制：该通道**仅在 MCAP 文件录制模式**启用，WebSocket模式屏蔽
+    // 传输限制：仅离线MCAP录像开启，实时WebSocket不推送视频流，降低带宽占用
     static constexpr FoxgloveTransport transport = FoxgloveTransport::Mcap;
 };
 
-// -------------------------- JSON原始通道描述符（基于RawChannel，编码固定为json） --------------------------
-// 所有调试JSON数据统一使用 RawChannel + vector<uint8_t> 二进制透传
+// -------------------------- JSON原始通道描述符 RawChannel 二进制透传 --------------------------
+// is_raw=true 代表通用原始二进制通道，不使用Foxglove内置结构化类型，自定义编码格式
+// encoding标记二进制内容为json字符串，前端自动解析JSON面板
 struct debug_lights_def {
     static constexpr std::string_view topic    = "/debug/lights";
     using channel_type                         = ::foxglove::RawChannel;
+    // 载荷为原始字节数组，存放序列化后的JSON字符串
     using payload_type                         = std::vector<uint8_t>;
     static constexpr auto member               = &FoxgloveChannels::debug_lights_ch;
     static constexpr bool is_raw               = true;
     static constexpr std::string_view encoding = "json";
 };
 
+// 装甲板检测调试JSON
 struct debug_armors_def {
     static constexpr std::string_view topic    = "/debug/armors";
     using channel_type                         = ::foxglove::RawChannel;
@@ -277,6 +311,7 @@ struct debug_armors_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 视觉测量原始数据
 struct measurement_def {
     static constexpr std::string_view topic    = "/solver/measurement";
     using channel_type                         = ::foxglove::RawChannel;
@@ -286,6 +321,7 @@ struct measurement_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 解算目标参数
 struct target_def {
     static constexpr std::string_view topic    = "/solver/target";
     using channel_type                         = ::foxglove::RawChannel;
@@ -295,6 +331,7 @@ struct target_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 目标选择决策追踪日志
 struct target_selection_trace_def {
     static constexpr std::string_view topic    = "/solver/target_selection";
     using channel_type                         = ::foxglove::RawChannel;
@@ -304,6 +341,7 @@ struct target_selection_trace_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 云台控制指令
 struct cmd_gimbal_def {
     static constexpr std::string_view topic    = "/solver/cmd_gimbal";
     using channel_type                         = ::foxglove::RawChannel;
@@ -313,6 +351,7 @@ struct cmd_gimbal_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 硬件资源占用（CPU/内存）
 struct resources_def {
     static constexpr std::string_view topic    = "/resources";
     using channel_type                         = ::foxglove::RawChannel;
@@ -322,6 +361,7 @@ struct resources_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 性能统计耗时
 struct perf_stats_def {
     static constexpr std::string_view topic    = "/perf_stats";
     using channel_type                         = ::foxglove::RawChannel;
@@ -331,6 +371,7 @@ struct perf_stats_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// MPC预测轨迹数据
 struct mpc_traj_def {
     static constexpr std::string_view topic    = "/mpc/trajectory";
     using channel_type                         = ::foxglove::RawChannel;
@@ -340,6 +381,7 @@ struct mpc_traj_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 能量机关全套调试参数
 struct rune_debug_def {
     static constexpr std::string_view topic    = "/rune/debug";
     using channel_type                         = ::foxglove::RawChannel;
@@ -349,6 +391,7 @@ struct rune_debug_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// PnP位姿解算中间数据
 struct pnp_solver_def {
     static constexpr std::string_view topic    = "/debug/pnp_solver";
     using channel_type                         = ::foxglove::RawChannel;
@@ -358,6 +401,7 @@ struct pnp_solver_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 神经网络置信度输出
 struct nn_confidence_def {
     static constexpr std::string_view topic    = "/debug/nn_confidence";
     using channel_type                         = ::foxglove::RawChannel;
@@ -367,6 +411,7 @@ struct nn_confidence_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 能量计状态
 struct energy_meter_def {
     static constexpr std::string_view topic    = "/energy_meter/state";
     using channel_type                         = ::foxglove::RawChannel;
@@ -376,6 +421,7 @@ struct energy_meter_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 激光雷达原始检测框
 struct ldm_detection_def {
     static constexpr std::string_view topic    = "/ldm/detection";
     using channel_type                         = ::foxglove::RawChannel;
@@ -385,6 +431,7 @@ struct ldm_detection_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 激光雷达测距测量值
 struct ldm_measurement_def {
     static constexpr std::string_view topic    = "/ldm/measurement";
     using channel_type                         = ::foxglove::RawChannel;
@@ -394,6 +441,7 @@ struct ldm_measurement_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 激光雷达滤波状态
 struct ldm_state_def {
     static constexpr std::string_view topic    = "/ldm/state";
     using channel_type                         = ::foxglove::RawChannel;
@@ -403,6 +451,7 @@ struct ldm_state_def {
     static constexpr std::string_view encoding = "json";
 };
 
+// 仿真真值数据
 struct ground_truth_def {
     static constexpr std::string_view topic    = "/ground_truth";
     using channel_type                         = ::foxglove::RawChannel;
@@ -412,7 +461,8 @@ struct ground_truth_def {
     static constexpr std::string_view encoding = "json";
 };
 
-// -------------------------- 特殊系统通道描述符 --------------------------
+// -------------------------- 特殊系统内置通道描述符 TF/相机标定/日志 --------------------------
+// 坐标变换通道，等价ROS2 /tf
 struct tf_def {
     static constexpr std::string_view topic = "/tf";
     using channel_type                      = ::foxglove::schemas::FrameTransformsChannel;
@@ -421,6 +471,7 @@ struct tf_def {
     static constexpr bool is_raw            = false;
 };
 
+// 相机内参标定通道，等价ROS2 CameraInfo
 struct calib_def {
     static constexpr std::string_view topic = "/camera_info";
     using channel_type                      = ::foxglove::schemas::CameraCalibrationChannel;
@@ -429,6 +480,7 @@ struct calib_def {
     static constexpr bool is_raw            = false;
 };
 
+// 全局日志通道，等价ROS2 /rosout
 struct log_def {
     static constexpr std::string_view topic = "/log";
     using channel_type                      = ::foxglove::schemas::LogChannel;
@@ -439,9 +491,9 @@ struct log_def {
 
 // ============================================================================
 // 四、通道注册表
-// 将**所有通道描述符**存入一个 std::tuple 元组，作为全局统一注册表
-// 配合 C++ 折叠表达式 / 编译期遍历，实现「一键批量初始化所有通道」
-// 无需手写循环遍历每一个通道，编译期自动展开
+// 将所有通道描述符存入 std::tuple 编译期元组容器
+// 作用：配合C++17折叠表达式、std::visit、模板遍历，**编译期自动批量处理全部话题**
+// 不用手动写几十行重复代码逐个初始化/销毁通道，新增话题只需添加一个xxx_def并加入tuple
 // ============================================================================
 using ChannelRegistry = std::tuple<
     scene_def, track_scene_def, ldm_track_scene_def, gimbal_scene_def, association_scene_def,
@@ -455,19 +507,19 @@ using ChannelRegistry = std::tuple<
 
 // ============================================================================
 // 五、单通道消息包装模板
-// 模板结构体：根据通道描述符，封装对应载荷数据，作为单条消息载体
-// 上层业务代码构造消息时直接使用该模板
+// 泛型模板，接收任意一个通道描述符xxx_def，自动推导该话题对应的数据载荷
+// 统一封装发送数据包结构，业务层只需填充payload字段即可推流
 // ============================================================================
 template <typename Descriptor>
 struct FoxgloveMsg {
-    // 载荷类型由描述符的 payload_type 推导
+    // 从描述符提取该话题对应的消息载荷类型
     typename Descriptor::payload_type payload;
 };
 
 // ============================================================================
-// 六、消息类型别名（对外易用别名）
-// 基于 FoxgloveMsg + 对应描述符，定义业务层直接使用的消息类型
-// 语义清晰，避免到处写模板参数
+// 六、消息类型对外别名
+// 简化业务代码书写，不用每次写 FoxgloveMsg<scene_def> 冗长模板
+// 直接 using SceneMessage 即用，语义清晰、可读性高
 // ============================================================================
 using SceneMessage                = FoxgloveMsg<scene_def>;
 using TrackSceneMessage           = FoxgloveMsg<track_scene_def>;

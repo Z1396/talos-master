@@ -33,6 +33,17 @@ auto format_parse_error(const toml::parse_error& e) -> std::string {
     // fmt 格式化：拼接错误描述、文件、行、列
     return fmt::format(
         "{} at {}:{}:{}", e.description(), src.path->data(), src.begin.line, src.begin.column);
+        /*e.description()
+            仅输出纯粹错误原因，不带文件、行列，简短报错文本，前面单独讲过；
+
+        src.path->data() 细节重点
+            src.path 类型是 std::shared_ptr<std::string>（字符串智能指针）；
+            -> 解引用智能指针，拿到内部 std::string；
+            .data() 获取字符串底层 const char* 裸指针；
+            fmt 格式化兼容 const char* / std::string，等价写 *src.path 也可以。
+            
+        src.begin.line / src.begin.column
+            src.begin 是 toml::position 结构体，存储错误起始的行、列数字。*/
         // 注意：src.path->data() 返回的是一个智能指针，需要解引用获取实际的字符串数据  
 }
 
@@ -156,6 +167,12 @@ auto load_robot_extrinsic_config(std::string_view robot)
     std::unexpected<E>：用于构造失败分支，专门包装错误对象*/
 [[nodiscard]] std::expected<RuntimeConfig, std::string> load_config(std::string_view path) {
     // ========== 1. 解析主入口配置文件 ==========
+    /*Boost.TOML（C++17，Boost 官方库）
+        核心 API
+        boost::toml::parse_file("cfg.toml") 加载文件
+        boost::toml::parse("字符串") 解析文本
+        toml::find<类型>(root, "a", "b") 取值
+        toml::save_file(root, "out.toml") 写入文件*/
     auto entry_tbl = toml::parse_file(path);
     // 主配置文件解析失败
     if (entry_tbl.failed()) {

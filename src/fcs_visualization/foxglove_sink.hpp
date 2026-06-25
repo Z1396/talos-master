@@ -53,6 +53,7 @@ namespace fcs::visualization {
  * 继承 spdlog 自定义 Sink 基类：所有自定义日志输出都必须继承此类
  */
 template <typename Mutex>
+/*final：禁止其他类继承这个日志槽，防止派生改写日志推送逻辑，保证日志推送逻辑唯一、稳定。*/
 class FoxgloveSink final : public spdlog::sinks::base_sink<Mutex> {
 public:
     /**
