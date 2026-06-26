@@ -114,13 +114,13 @@ FoxgloveServer::FoxgloveServer(
     std::optional<::foxglove::SystemInfoPublisher> publisher,
     std::optional<::foxglove::WebSocketServer> websocket_server,
     std::optional<::foxglove::McapWriter> mcap_writer)
-    : context_(std::move(context))
+    // 标记输出端是否存活，共享原子变量，多线程安全
+    : sink_alive_(std::make_shared<std::atomic<bool>>(true))
+    , context_(std::move(context))
     , channels_(std::move(channels))
     , publisher_(std::move(publisher))
     , websocket_server_(std::move(websocket_server))
-    , mcap_writer_(std::move(mcap_writer))
-    // 标记输出端是否存活，共享原子变量，多线程安全
-    , sink_alive_(std::make_shared<std::atomic<bool>>(true)) {
+    , mcap_writer_(std::move(mcap_writer)) {
     // 设置 Foxglove 底层日志级别
     ::foxglove::setLogLevel(::foxglove::LogLevel::Info);
 

@@ -260,6 +260,9 @@ bool Scheduler::is_running_state(const LifecycleState state) noexcept {
 /// 运行时保护校验：新增系统前必须保证调度器未启动
 void Scheduler::ensure_not_running() const noexcept {
     // 原子加载生命周期状态（获取语义，同步其他线程修改）
+    /*std::memory_order_acquire：内存序约束
+    保证：本 load 之后的所有读写操作，不会被编译器 / CPU 重排到 load 前面；
+    多线程场景下，能完整看到其他线程修改lifecycle_前的所有资源修改，避免数据可见性 bug。*/
     if (is_running_state(lifecycle_.load(std::memory_order_acquire))) {
         panic("add_system: system already running!");
     }
@@ -268,6 +271,16 @@ void Scheduler::ensure_not_running() const noexcept {
 /// 标记拓扑为脏状态：新增系统后依赖图失效，需要重新build构建拓扑
 void Scheduler::mark_topology_dirty() noexcept {
     // 释放语义存储，同步其他线程读取
+    /*lifecycle_
+    成员变量，类型 std::atomic<LifecycleState>
+    原子类型，多线程安全共享调度器生命周期状态，无需手动加锁即可跨线程读写。
+    .store(值, 内存序)
+    原子写入接口：把第一个参数存入原子变量。
+    第一个参数：要写入的枚举状态 LifecycleState::Configuring（配置初始化阶段）。
+    std::memory_order_release 释放内存序
+    核心规则：
+    当前线程中，本句 store 之前的所有读写操作，不会被编译器 / CPU 重排到 store 之后；
+    其他线程使用 memory_order_acquire 读取这个原子变量时，可以完整看到本线程在 store 之前完成的所有数据修改。*/
     lifecycle_.store(LifecycleState::Configuring, std::memory_order_release);
 }
 
