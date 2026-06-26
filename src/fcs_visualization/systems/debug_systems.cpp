@@ -1,30 +1,46 @@
+// 项目基础通用头文件：全局宏、类型别名、工具函数、语义色彩常量、基础工具封装
 #include "base.hpp"
+// ECS调度运行时核心定义：调度器生命周期、系统运行上下文
 #include "core/runtime.hpp"
+// 高精度时间工具：纳秒时间戳生成、秒/纳秒转换、帧时间计算
 #include "core/time.hpp"
+// 弹道相关全局资源：子弹初速度、弹道补偿配置资源结构体
 #include "core/trajectory/resource.hpp"
+// Foxglove 前端消息协议定义：SceneEntity、图像/JSON/3D场景各类消息结构体
 #include "foxglove_types.hpp"
 
+// L3层能量机关跟踪器数据结构：LdmState、滤波状态、观测结构体
 #include "L3_estimation/energy_meter/types.hpp"
+// 全局SPMC消息通道Topic常量：区分视觉、跟踪、控制各类数据流通道标识
 #include "core/channel_topics.hpp"
+// 项目通用基础类型：向量、位姿、枚举、自定义容器、滤波基础结构
 #include "core/types.hpp"
+// ECS调度器主类定义：Scheduler、add_system、系统生命周期、资源容器API
 #include "scheduler/scheduler.hpp"
 
+// 枚举反射工具：自动将枚举值转为人类可读字符串，无需手动写映射表
 #include <magic_enum.hpp>
+// JSON序列化库：将机器人各类状态、指标序列化为JSON下发Foxglove前端调试
 #include <nlohmann/json.hpp>
+// 系统底层工具集：进程信息、内存统计、字符串处理、跨平台系统接口
 #include <system_helpers.hpp>
+// C++通用工具：完美转发、移动语义、容器辅助、类型萃取、模板工具函数
 #include <utility.hpp>
 
+// 命名空间分层隔离：项目fcs -> 可视化模块 -> Foxglove网页调试可视化 -> 系统注册逻辑
 namespace fcs::visualization::foxglove::systems {
 
-/// @brief Register debug visualization systems
-///
-/// This includes all debug publishing systems for L2, L3, and L4 layers:
-/// - L2: PnP solver metrics, NN confidence scores
-/// - L3: Association phase, permutation, filter innovation/covariance, Viterbi, state machine
-/// - L4: MPC horizon, cost, constraints
-/// - Misc: Energy meter state, performance statistics
-/// @param app ECS调度器实例，用于注册可视化System
-/// @param scheduler_ptr 调度器裸指针，用于读取系统性能统计，可为nullptr
+/**
+ * @brief 批量注册全层级调试可视化ECS系统
+ * 覆盖机器人全算法层级可视化数据下发：L2视觉、L3跟踪关联滤波、L4模型预测控制、杂项状态统计
+ * 各层级可视化内容说明：
+ * - L2 视觉层：PnP位姿解算指标、神经网络目标检测置信度可视化
+ * - L3 跟踪估计层：数据关联匹配、排列匹配、滤波残差/协方差、维特比匹配、有限状态机调试
+ * - L4 控制层：MPC预测时域、代价函数值、运动约束可视化
+ * - 杂项模块：能量机关完整跟踪状态、全ECS系统运行性能耗时统计
+ * @param app ECS调度器实例，调用add_system将所有可视化任务注册进调度循环
+ * @param scheduler_ptr 调度器裸指针，非空时才注册性能统计可视化系统；传入nullptr则跳过性能打点可视化
+ */
 void register_debug_systems(talos::scheduler::Scheduler& app, talos::Scheduler* scheduler_ptr) {
 
     // =========================================================================

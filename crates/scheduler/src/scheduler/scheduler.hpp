@@ -531,7 +531,28 @@ auto Scheduler::add_system(std::string&& name, F&& func) -> void {
     mark_topology_dirty();
 
     // 模板工厂：根据策略+函数生成对应系统实例
+    /*前置背景：万能引用 F&& func
+    函数形参是 F&& func，这是转发引用（万能引用），不是单纯右值引用：
+    如果你传临时右值（匿名 lambda、临时对象）：F 推导为裸类型，F&& = 右值引用
+    如果你传普通左值变量：F 推导为 Type&，折叠后 F&& = 左值引用
+    单纯 func 本身永远是左值，哪怕原本传入的是临时对象。
+    如果直接传 func，会强制走拷贝，丢失移动语义。
+    2. std::forward 作用：还原原值的左右值属性
+    std::forward<F>(func) 的唯一功能：
+    根据模板参数 F，把 func 还原成当初传入时的左值 / 右值：
+    当初传入右值 → forward 后变成右值引用，触发移动构造
+    当初传入左值 → forward 后仍是左值引用，触发拷贝*/
     auto system = make_system<F, Policy>(std::move(name), std::forward<F>(func));
+    /*1. 什么是折叠
+    当模板推导出来的类型自带 &，再和函数形参的 && 拼在一起，编译器会合并、化简引用符号，这个合并过程叫引用折叠。
+    模板形参：F&& func
+    F 是推导出来的类型，分两种情况：左值、右值。
+    2. 四条折叠规则（死记这 4 条）
+    T& & → T&
+    T& && → T&
+    T&& & → T&
+    T&& && → T&&
+    口诀：只要有一个左值引用 &，结果一定是左值引用；只有两个 && 才是右值引用。*/
     // 生成执行策略信息
     auto policy = make_policy_info<Policy>();
 

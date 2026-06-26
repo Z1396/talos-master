@@ -1,24 +1,30 @@
+// Google测试框架核心头文件，提供TEST/ASSERT_TRUE/EXPECT_EQ等断言宏
 #include <gtest/gtest.h>
 
+// C++标准通用库
 #include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <expected>
-#include <iostream>
-#include <memory>
-#include <mutex>
-#include <numbers>
-#include <optional>
-#include <string_view>
-#include <thread>
-#include <utility>
-#include <vector>
+#include <chrono>        // 高精度时钟、超时等待
+#include <cmath>         // 基础数学函数atan2/hypot等
+#include <expected>      // C++23 错误处理预期类型，无异常数据流
+#include <iostream>      // 标准控制台IO
+#include <memory>        // 智能指针unique_ptr/shared_ptr
+#include <mutex>         // 多线程互斥锁，测试夹具状态同步
+#include <numbers>       // 标准数学常量 π
+#include <optional>      // 可选空值容器，等待接口返回结果
+#include <string_view>   // 只读字符串视图，无拷贝
+#include <thread>        // 线程创建、休眠
+#include <utility>       // std::move 移动语义
+#include <vector>        // 动态数组容器
 
+// ===================== 业务模块头文件：机器人五层架构 =====================
+// L2感知：装甲ROI读取、图像预处理输出
 #include "L2_perception/armor/readback_roi.hpp"
+// L3估计：能量机关大符、简易大符、多目标跟踪器数据结构
 #include "L3_estimation/energy_meter/types.hpp"
 #include "L3_estimation/ldm_naive/types.hpp"
 #include "L3_estimation/tracker/new_tracker.hpp"
 #include "L3_estimation/tracker/types.hpp"
+// L4规划：瞄准求解器、瞄准系统注册、有限状态机、控制输出、云台规划、选中目标快照、选择追踪日志
 #include "L4_planning/aimer/aimer.hpp"
 #include "L4_planning/aimer/aimer_systems.hpp"
 #include "L4_planning/aimer/fsm.hpp"
@@ -26,7 +32,10 @@
 #include "L4_planning/gimbal_planner/types.hpp"
 #include "L4_planning/selected_target_snapshot.hpp"
 #include "L4_planning/target_selection_trace.hpp"
+// L5武器：发射决策逻辑
 #include "L5_weapon/fire_decision.hpp"
+
+// 全局配置、运行时、时间工具、弹道求解、TF坐标系、调度器错误格式化、调度器核心
 #include "camera_config.hpp"
 #include "core/runtime.hpp"
 #include "core/time.hpp"
@@ -36,37 +45,67 @@
 #include "scheduler/error_formatter.hpp"
 #include "scheduler/scheduler.hpp"
 
+/**
+ * @namespace 全局匿名命名空间
+ * 隔离测试工具类、工厂构造函数、测试夹具，仅本测试文件内部可见
+ * 内容分为三大块：
+ * 1. 模拟弹道求解器（正常Mock/报错Invalid）
+ * 2. 批量工厂函数：快速构造TF变换、目标状态、装甲观测、相机配置、跟踪输出等测试数据
+ * 3. AimerSystemHarness 完整ECS调度测试夹具：拉起真实调度器、模拟各路SPMC输入、捕获规划输出用于断言
+ * 4. 下方TEST宏：单个单元测试，针对Aimer瞄准器分阶段逻辑校验
+ */
 namespace {
 
+// 时间字面量简写 500ms/10ms
 using namespace std::chrono_literals;
 
+// =====================================================================================
+// 1. Mock弹道求解器：纯几何直线无空气阻力，用于单元测试解耦复杂弹道迭代
+// =====================================================================================
+/**
+ * @brief 模拟弹道求解器（无迭代、无空气阻力直线模型）
+ * 真实业务弹道会迭代重力补偿，单元测试只关心角度输出逻辑，屏蔽复杂弹道计算干扰
+ */
 class MockTrajectorySolver final : public fcs::core::trajectory::solver::TrajectorySolver {
 public:
+    /**
+     * @brief 直线弹道解算：仅计算水平/俯仰几何角，飞行距离/弹速
+     * @param target_pos 目标odom三维坐标
+     * @param v0 弹丸初速度
+     * @return AimSolution 瞄准解：yaw/pitch/飞行时间/迭代次数
+     */
     [[nodiscard]] std::expected<fcs::core::trajectory::solver::AimSolution, std::string>
         solve(const Eigen::Vector3d& target_pos, double v0) const noexcept override {
         const double distance = target_pos.norm();
         const double xy       = std::hypot(target_pos.x(), target_pos.y());
+        // 水平偏航角 atan2(y,x)
         return fcs::core::trajectory::solver::AimSolution{
             .yaw            = std::atan2(target_pos.y(), target_pos.x()),
             .pitch          = std::atan2(target_pos.z(), xy),
-            .time_of_flight = distance / std::max(v0, 1e-6),
-            .iterations     = 1,
+            .time_of_flight = distance / std::max(v0, 1e-6), // 防止除0
+            .iterations     = 1, // Mock仅单次计算，无迭代
         };
     }
 
+    // 生成弹道轨迹曲线，测试不需要返回空
     [[nodiscard]] std::vector<std::pair<double, double>>
         generate_trajectory(double, double, double) const noexcept override {
         return {};
     }
 
+    // 求解器名称，日志区分
     [[nodiscard]] std::string_view solver_name() const noexcept override { return "mock"; }
 
+    // 无真实弹道模型
     [[nodiscard]] const fcs::core::trajectory::model::BallisticModel*
         get_model() const noexcept override {
         return nullptr;
     }
 };
 
+/**
+ * @brief 报错弹道求解器：solve永远返回失败，用于测试瞄准器异常容错逻辑
+ */
 class InvalidTrajectorySolver final : public fcs::core::trajectory::solver::TrajectorySolver {
 public:
     [[nodiscard]] std::expected<fcs::core::trajectory::solver::AimSolution, std::string>
@@ -87,18 +126,30 @@ public:
     }
 };
 
+// =====================================================================================
+// 2. 批量工厂构造函数：快速生成各类测试用空/标准结构体，减少测试样板代码
+// =====================================================================================
+// 生成云台单位变换（无平移无旋转）
 fcs::L4::Aimer::GimbalTransform make_gimbal() {
     return fcs::L4::Aimer::GimbalTransform::from_rpy(0.0, 0.0, 0.0);
 }
 
+// 生成枪口零偏移变换
 fcs::L4::Aimer::MuzzleTransform make_muzzle() {
     return fcs::L4::Aimer::MuzzleTransform::from_translation(0.0, 0.0, 0.0);
 }
 
+// 生成带自定义xyz偏移的枪口变换
 fcs::L4::Aimer::MuzzleTransform make_muzzle(double x, double y, double z) {
     return fcs::L4::Aimer::MuzzleTransform::from_translation(x, y, z);
 }
 
+/**
+ * @brief 构造机器人整车目标状态（4装甲标准小车）
+ * @param yaw 车身偏航角
+ * @param v_yaw 车身旋转角速度，默认0
+ * @return RobotTargetState 固定坐标(1,0,0)，前后装甲半径、高度预设
+ */
 fcs::L3::RobotTargetState make_robot_target(double yaw, double v_yaw = 0.0) {
     fcs::L3::RobotTargetState target;
     target.position   = Eigen::Vector3d(1.0, 0.0, 0.0);
@@ -112,6 +163,11 @@ fcs::L3::RobotTargetState make_robot_target(double yaw, double v_yaw = 0.0) {
     return target;
 }
 
+/**
+ * @brief 构造前哨站2D平面目标
+ * @param yaw 前哨旋转角
+ * @param v_yaw 角速度默认0
+ */
 fcs::L3::OutpostTargetState make_outpost_target(double yaw, double v_yaw = 0.0) {
     fcs::L3::OutpostTargetState target;
     target.position = Eigen::Vector2d(1.0, 0.0);
@@ -122,6 +178,12 @@ fcs::L3::OutpostTargetState make_outpost_target(double yaw, double v_yaw = 0.0) 
     return target;
 }
 
+/**
+ * @brief 生成单帧装甲观测测量值
+ * @param armor_pose 装甲位姿 [x,y,z,yaw]
+ * @param name 装甲类型编号
+ * @param image_center_distance 装甲离图像中心距离，用于选择权重
+ */
 fcs::ArmorMeasurement make_measurement(
     const Eigen::Vector4d& armor_pose, fcs::ArmorName name, float image_center_distance = 0.0f) {
     fcs::ArmorMeasurement measurement;
@@ -136,31 +198,41 @@ fcs::ArmorMeasurement make_measurement(
     return measurement;
 }
 
+/**
+ * @brief 生成完整静态TF坐标系树（所有变换单位矩阵，无机械外参偏移）
+ * 测试统一基准，消除标定外参干扰
+ */
 fast_tf::CoordinateSystem make_test_coordinate_system() {
     auto system = fast_tf::CoordinateSystem();
     fast_tf::update<fast_tf::odom>(system, {}, 0);
     fast_tf::update<fast_tf::gimbal_yaw_fuxk_frame>(system, {}, 0);
-    fast_tf::update(
-        system, fast_tf::EdgeTransform<fast_tf::gimbal_pitch_fuxk_frame>::from_translation(0, 0, 0),
-        0);
-    fast_tf::update(
-        system, fast_tf::EdgeTransform<fast_tf::camera_link_fuxk_frame>::from_translation(0, 0, 0),
-        0);
-    fast_tf::update(
-        system,
-        fast_tf::EdgeTransform<fast_tf::camera_optical_fuxk_frame>::from_translation(0, 0, 0), 0);
-    fast_tf::update(
-        system, fast_tf::EdgeTransform<fast_tf::muzzle_link_fuxk_frame>::from_translation(0, 0, 0),
-        0);
+    fast_tf::update(system, fast_tf::EdgeTransform<fast_tf::gimbal_pitch_fuxk_frame>::from_translation(0, 0, 0),0);
+    fast_tf::update(system, fast_tf::EdgeTransform<fast_tf::camera_link_fuxk_frame>::from_translation(0, 0, 0),0);
+    fast_tf::update(system, fast_tf::EdgeTransform<fast_tf::camera_optical_fuxk_frame>::from_translation(0, 0, 0), 0);
+    fast_tf::update(system, fast_tf::EdgeTransform<fast_tf::muzzle_link_fuxk_frame>::from_translation(0, 0, 0),0);
     return system;
 }
 
+/**
+ * @brief 生成简易相机内参矩阵 fx=100 fy=100 cx=50 cy=60，无畸变
+ */
 fcs::CameraConfig make_test_camera_config() {
     fcs::CameraConfig config;
-    config.camera_matrix << 100.0, 0.0, 50.0, 0.0, 100.0, 60.0, 0.0, 0.0, 1.0;
+    config.camera_matrix << 100.0, 0.0, 50.0,
+                            0.0, 100.0, 60.0,
+                            0.0, 0.0, 1.0;
     return config;
 }
 
+/**
+ * @brief 构造单目标跟踪器输出结果
+ * @param name 装甲ID
+ * @param status 跟踪状态Idle/Detecting/Tracking/TempLost
+ * @param position 目标odom坐标
+ * @param image_center_distance_px 图像中心像素距离
+ * @param color 队伍颜色默认蓝方
+ * @param last_observation_timestamp_ns 最后观测时间戳
+ */
 fcs::L3::TrackerOutput make_robot_tracker_output(
     fcs::ArmorName name, fcs::L3::TrackerStatus status, const Eigen::Vector3d& position,
     double image_center_distance_px, fcs::ArmorColor color = fcs::ArmorColor::Blue,
@@ -187,22 +259,39 @@ fcs::L3::TrackerOutput make_robot_tracker_output(
     return tracker;
 }
 
+// =====================================================================================
+// 3. AimerSystemHarness 完整ECS调度测试夹具
+// 用途：拉起真实talos调度器，注册全套瞄准相关系统，模拟各路输入SPMC，提供阻塞等待接口捕获输出
+// 用于集成测试整套L4瞄准流水线，区别于下方纯Aimer类单元测试
+// =====================================================================================
 class AimerSystemHarness {
 public:
+    /**
+     * @brief 夹具构造函数：初始化调度器、插入全局资源、注册所有瞄准相关生产者/消费者系统
+     * @param config L4瞄准器配置
+     * @param readback_roi_config ROI读取配置
+     */
     explicit AimerSystemHarness(
         fcs::L4::L4Config config = {}, fcs::L2::ArmorReadbackRoiConfig readback_roi_config = {}) {
+        // 插入全局静态TF、相机配置、ROI配置
         scheduler_.world().insert_resource(make_test_coordinate_system());
         scheduler_.world().insert_resource(make_test_camera_config());
         scheduler_.world().insert_resource(readback_roi_config);
+        // 注入Mock弹道求解器
         scheduler_.world().insert_resource(
             std::unique_ptr<fcs::core::trajectory::solver::TrajectorySolver>(
                 std::make_unique<MockTrajectorySolver>()));
+        // 弹丸初速全局资源 30m/s
         scheduler_.world().insert_resource(
             fcs::core::trajectory::bullet_speed_data{.bullet_speed = 30.0});
+        // 跟随模式开关全局资源（优先大符/装甲）
         static_cast<void>(scheduler_.world().emplace_resource<fcs::core::FollowingState>());
 
+        // 注册全套瞄准规划业务系统
         fcs::L4::register_aimer_systems(scheduler_, std::move(config));
 
+        // ---------------------- 模拟输入生产者系统（200Hz固定周期） ----------------------
+        // 1. 跟踪器输出模拟生产者：外部设置trackers，每200Hz写入SPMC通道给瞄准器读取
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_tracker_producer",
             [tracker_state = tracker_state_](
@@ -215,6 +304,7 @@ public:
                 }
 
                 const uint64_t now_ns = fcs::clock::now_ns();
+                // 统一填充当前时间戳
                 for (auto& tracker : trackers) {
                     tracker.timestamp_ns = now_ns;
                     if (tracker.status == fcs::L3::TrackerStatus::Tracking) {
@@ -226,6 +316,7 @@ public:
                 tracker_out.write(std::move(trackers));
             });
 
+        // 2. 能量机关大符模拟生产者：默认空跟踪状态
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_rune_producer",
             [](talos::spmc_mut<
@@ -237,6 +328,7 @@ public:
                 rune_out.write(std::move(state));
             });
 
+        // 3. 简易大符LDM生产者：空闲无目标
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_ldm_producer", [](talos::spmc_mut<fcs::L3::ldm::LdmState> ldm_out) {
                 fcs::L3::ldm::LdmState state;
@@ -245,6 +337,8 @@ public:
                 ldm_out.write(std::move(state));
             });
 
+        // ---------------------- 输出捕获消费者系统（200Hz） ----------------------
+        // 1. 捕获控制规划输出ControlIntent，存入线程安全plan_state
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_plan_consumer",
             [plan_state = plan_state_](
@@ -257,6 +351,7 @@ public:
                 plan_state->plan = *plan;
             });
 
+        // 2. 捕获选中目标快照SelectedTargetSnapshot
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_selected_target_consumer",
             [selected_target_state = selected_target_state_](
@@ -271,6 +366,7 @@ public:
                 selected_target_state->snapshot = *selected_target;
             });
 
+        // 3. 捕获目标选择日志Trace，用于调试选择逻辑
         scheduler_.add_system<talos::fixed_rate<200>>(
             "aimer_system_test_trace_consumer",
             [trace_state = trace_state_](
@@ -285,11 +381,15 @@ public:
             });
     }
 
+    /**
+     * @brief 构建调度拓扑，启动后台调度线程
+     */
     void start() {
         const auto build_result = scheduler_.build();
         ASSERT_TRUE(build_result.has_value())
             << "scheduler build failed: " << fmt::format("{}", build_result.error());
 
+        // 后台线程运行调度循环
         scheduler_thread_ = std::thread([this]() {
             if (const auto result = scheduler_.run(); !result) {
                 run_error_ = result.error();
@@ -297,6 +397,9 @@ public:
         });
     }
 
+    /**
+     * @brief 停止调度器，阻塞等待线程退出，校验无运行错误
+     */
     void stop() {
         scheduler_.stop();
         if (scheduler_thread_.joinable()) {
@@ -305,6 +408,9 @@ public:
         ASSERT_FALSE(run_error_.has_value());
     }
 
+    /**
+     * @brief 析构自动停止调度器，防止资源泄漏
+     */
     ~AimerSystemHarness() {
         scheduler_.stop();
         if (scheduler_thread_.joinable()) {
@@ -312,11 +418,16 @@ public:
         }
     }
 
+    /**
+     * @brief 外部测试用例设置跟踪目标列表，清空历史输出缓存
+     * @param trackers 批量跟踪器输出数组
+     */
     void set_trackers(fcs::L3::TrackerOutputs trackers) {
         {
             std::scoped_lock lock(tracker_state_->mutex);
             tracker_state_->trackers = std::move(trackers);
         }
+        // 清空上次规划、选中目标、选择日志缓存
         {
             std::scoped_lock lock(plan_state_->mutex);
             plan_state_->plan.reset();
@@ -331,10 +442,18 @@ public:
         }
     }
 
+    /**
+     * @brief 设置全局跟随模式：true优先大符，false优先装甲
+     */
     void set_following(bool active) {
         scheduler_.world().get_res_mut<fcs::core::FollowingState>()->store(active);
     }
 
+    /**
+     * @brief 阻塞等待规划输出ControlIntent，带超时防止死锁
+     * @param timeout 超时毫秒，默认500ms
+     * @return 规划指令可选空值
+     */
     std::optional<fcs::L4::ControlIntent>
         wait_for_plan(std::chrono::milliseconds timeout = 500ms) const {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -350,6 +469,12 @@ public:
         return std::nullopt;
     }
 
+    /**
+     * @brief 等待选中指定装甲ID的目标快照
+     * @param target_name 装甲编号
+     * @param timeout 超时750ms
+     * @return 目标快照，超时返回最后一帧或空
+     */
     std::optional<fcs::L4::SelectedTargetSnapshot> wait_for_target(
         fcs::ArmorName target_name, std::chrono::milliseconds timeout = 750ms) const {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -370,6 +495,9 @@ public:
         return last_snapshot;
     }
 
+    /**
+     * @brief 等待时间戳大于指定值的新选中目标快照，用于时序隔离测试
+     */
     std::optional<fcs::L4::SelectedTargetSnapshot> wait_for_selected_target_after(
         uint64_t min_timestamp_ns, std::chrono::milliseconds timeout = 750ms) const {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -388,6 +516,9 @@ public:
         return last_snapshot;
     }
 
+    /**
+     * @brief 等待装甲跟踪/射击类规划指令，排除Hold保持指令，要求时间戳大于给定值
+     */
     std::optional<fcs::L4::ControlIntent> wait_for_armor_plan_after(
         uint64_t min_timestamp_ns, std::chrono::milliseconds timeout = 750ms) const {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -396,7 +527,7 @@ public:
             {
                 std::scoped_lock lock(plan_state_->mutex);
                 if (plan_state_->plan.has_value()) {
-                    // Check timestamp and that we have a Track or Shot (not Hold).
+                    // std::visit 多态匹配三种指令Track/Shot/Hold
                     const bool is_armor = std::visit(
                         [min_timestamp_ns](const auto& cmd) {
                             using T = std::decay_t<decltype(cmd)>;
@@ -418,6 +549,9 @@ public:
         return last_plan;
     }
 
+    /**
+     * @brief 等待目标选择日志Trace，要求包含候选目标列表、时间戳大于阈值
+     */
     std::optional<fcs::L4::TargetSelectionTrace> wait_for_selection_trace_after(
         uint64_t min_timestamp_ns, std::chrono::milliseconds timeout = 750ms) const {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -438,6 +572,9 @@ public:
         return last_trace;
     }
 
+    /**
+     * @brief 等待L2 ROI回读缓存快照有效
+     */
     std::optional<fcs::L2::TrackerReadbackSnapshot>
         wait_for_readback_tracker(std::chrono::milliseconds timeout = 750ms) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -453,21 +590,19 @@ public:
     }
 
 private:
+    // 多线程共享状态结构体，带互斥锁保护
     struct TrackerState {
         mutable std::mutex mutex;
         fcs::L3::TrackerOutputs trackers;
     };
-
     struct PlanState {
         mutable std::mutex mutex;
         std::optional<fcs::L4::ControlIntent> plan;
     };
-
     struct SelectedTargetState {
         mutable std::mutex mutex;
         std::optional<fcs::L4::SelectedTargetSnapshot> snapshot;
     };
-
     struct TraceState {
         mutable std::mutex mutex;
         std::optional<fcs::L4::TargetSelectionTrace> trace;
@@ -476,15 +611,24 @@ private:
     talos::Scheduler scheduler_{};
     std::shared_ptr<TrackerState> tracker_state_{std::make_shared<TrackerState>()};
     std::shared_ptr<PlanState> plan_state_{std::make_shared<PlanState>()};
-    std::shared_ptr<SelectedTargetState> selected_target_state_{
-        std::make_shared<SelectedTargetState>()};
+    std::shared_ptr<SelectedTargetState> selected_target_state_{std::make_shared<SelectedTargetState>()};
     std::shared_ptr<TraceState> trace_state_{std::make_shared<TraceState>()};
     std::optional<talos::SchedulerError> run_error_;
     std::thread scheduler_thread_;
 };
 
-} // namespace
+} // 匿名命名空间结束
 
+// =====================================================================================
+// 4. 单元测试 TEST(AimerPhase, xxx)：纯 Aimer::aim() 函数单元测试
+// 不拉起完整调度器，直接实例化Aimer类，输入目标/上下文，断言输出选中装甲ID，分阶段校验瞄准选择逻辑
+// 测试覆盖Aimer有限状态机所有瞄准阶段：SingleArmor / WholeCarArmor / WholeCarPair / WholeCarCenter
+// =====================================================================================
+
+/**
+ * @test SingleArmor阶段：锁定指定对称装甲，上下文preferred_armor_id决定输出ID
+ * 业务逻辑：单装甲锁定模式，强制使用传入的优先装甲编号
+ */
 TEST(AimerPhase, SingleArmorLocksSymmetricCandidates) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -492,15 +636,16 @@ TEST(AimerPhase, SingleArmorLocksSymmetricCandidates) {
     const auto muzzle = make_muzzle();
     const auto target = make_robot_target(-std::numbers::pi / 4.0);
 
+    // 锁定0号装甲
     fcs::L4::ArmorAimContext lock_left;
     lock_left.target_jumped      = true;
     lock_left.phase              = fcs::L4::ArmorAimPhase::SingleArmor;
     lock_left.preferred_armor_id = 0;
-
     const auto left = aimer.aim(target, lock_left, gimbal, muzzle, 0, 0, 0.0, 30.0, solver);
     ASSERT_TRUE(left.has_value()) << left.error();
     EXPECT_EQ(left->selected_armor_id, 0);
 
+    // 锁定1号装甲
     fcs::L4::ArmorAimContext lock_right = lock_left;
     lock_right.preferred_armor_id       = 1;
     const auto right = aimer.aim(target, lock_right, gimbal, muzzle, 0, 0, 0.0, 30.0, solver);
@@ -508,6 +653,10 @@ TEST(AimerPhase, SingleArmorLocksSymmetricCandidates) {
     EXPECT_EQ(right->selected_armor_id, 1);
 }
 
+/**
+ * @test WholeCarArmor整车装甲模式：根据车身角速度选择最小预测误差装甲
+ * 业务逻辑：车身正向旋转选0号，反向选1号，忽略旧优先装甲
+ */
 TEST(AimerPhase, WholeCarArmorUsesPredictedMinDeltaSelection) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -518,12 +667,14 @@ TEST(AimerPhase, WholeCarArmorUsesPredictedMinDeltaSelection) {
     context.target_jumped = true;
     context.phase         = fcs::L4::ArmorAimPhase::WholeCarArmor;
 
+    // 车身正旋 选0
     const auto positive = aimer.aim(
         make_robot_target(-std::numbers::pi / 4.0, 8.0), context, gimbal, muzzle, 0, 0, 0.0, 30.0,
         solver);
     ASSERT_TRUE(positive.has_value()) << positive.error();
     EXPECT_EQ(positive->selected_armor_id, 0);
 
+    // 车身负旋 选1
     const auto negative = aimer.aim(
         make_robot_target(-std::numbers::pi / 4.0, -8.0), context, gimbal, muzzle, 0, 0, 0.0, 30.0,
         solver);
@@ -531,6 +682,9 @@ TEST(AimerPhase, WholeCarArmorUsesPredictedMinDeltaSelection) {
     EXPECT_EQ(negative->selected_armor_id, 1);
 }
 
+/**
+ * @test WholeCarArmor忽略过期preferred_armor，完全依靠角速度预测
+ */
 TEST(AimerPhase, WholeCarArmorIgnoresStalePreferredArmor) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -540,7 +694,7 @@ TEST(AimerPhase, WholeCarArmorIgnoresStalePreferredArmor) {
     fcs::L4::ArmorAimContext context;
     context.target_jumped      = true;
     context.phase              = fcs::L4::ArmorAimPhase::WholeCarArmor;
-    context.preferred_armor_id = 2;
+    context.preferred_armor_id = 2; // 强行设置优先2，预期被忽略
 
     const auto prediction = aimer.aim(
         make_robot_target(-25.0 * std::numbers::pi / 180.0, -8.0), context, gimbal, muzzle, 0, 0,
@@ -550,6 +704,9 @@ TEST(AimerPhase, WholeCarArmorIgnoresStalePreferredArmor) {
     EXPECT_EQ(prediction->selected_armor_id, 0);
 }
 
+/**
+ * @test WholeCarPair上下装甲对：车身有高度差优先上层装甲ID=1
+ */
 TEST(AimerPhase, WholeCarPairUsesHighLayerWhenTargetHasHeight) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -567,6 +724,9 @@ TEST(AimerPhase, WholeCarPairUsesHighLayerWhenTargetHasHeight) {
     EXPECT_EQ(prediction->selected_armor_id, 1);
 }
 
+/**
+ * @test WholeCarPair车身扁平无高度，优先下层装甲ID=0
+ */
 TEST(AimerPhase, WholeCarPairUsesLowLayerWhenTargetIsFlat) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -575,7 +735,7 @@ TEST(AimerPhase, WholeCarPairUsesLowLayerWhenTargetIsFlat) {
 
     auto target    = make_robot_target(-std::numbers::pi / 4.0, 8.0);
     target.z1      = target.position.z();
-    target.radius1 = target.radius0;
+    target.radius1 = target.radius0; // 上下装甲同高，扁平车身
 
     fcs::L4::ArmorAimContext context;
     context.target_jumped = true;
@@ -586,6 +746,9 @@ TEST(AimerPhase, WholeCarPairUsesLowLayerWhenTargetIsFlat) {
     EXPECT_EQ(prediction->selected_armor_id, 0);
 }
 
+/**
+ * @test WholeCarCenter整车中心模式：背对云台选底层装甲ID=2
+ */
 TEST(AimerPhase, WholeCarCenterLowLayerKeepsWholeCarSelection) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -603,6 +766,9 @@ TEST(AimerPhase, WholeCarCenterLowLayerKeepsWholeCarSelection) {
     EXPECT_EQ(prediction->selected_armor_id, 2);
 }
 
+/**
+ * @test WholeCarCenter面朝云台选上层装甲ID=1
+ */
 TEST(AimerPhase, WholeCarCenterHighLayerKeepsWholeCarSelection) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -620,6 +786,9 @@ TEST(AimerPhase, WholeCarCenterHighLayerKeepsWholeCarSelection) {
     EXPECT_EQ(prediction->selected_armor_id, 1);
 }
 
+/**
+ * @test WholeCarCenter无视过期preferred_armor，依据车身朝向选择装甲
+ */
 TEST(AimerPhase, WholeCarCenterUsesCurrentActiveArmorInsteadOfStalePreferredLayer) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -638,6 +807,9 @@ TEST(AimerPhase, WholeCarCenterUsesCurrentActiveArmorInsteadOfStalePreferredLaye
     EXPECT_EQ(prediction->selected_armor_id, 2);
 }
 
+/**
+ * @test WholeCarCenter前哨站目标，选择ID=1装甲
+ */
 TEST(AimerPhase, WholeCarCenterOutpostUsesAllArmors) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -656,10 +828,15 @@ TEST(AimerPhase, WholeCarCenterOutpostUsesAllArmors) {
     EXPECT_EQ(prediction->selected_armor_id, 1);
 }
 
+/**
+ * @test WholeCarCenter带枪口偏移投影校验：装甲坐标沿枪口射线投影，距离、坐标数值断言
+ * 校验坐标投影、飞行距离计算精度
+ */
 TEST(AimerPhase, WholeCarCenterProjectsAlongMuzzleRay) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
     const auto gimbal = make_gimbal();
+    // 枪口x=1向前偏移
     const auto muzzle = make_muzzle(1.0, 0.0, 0.0);
 
     auto target     = make_robot_target(std::atan2(5.0, 1.0));
@@ -677,12 +854,16 @@ TEST(AimerPhase, WholeCarCenterProjectsAlongMuzzleRay) {
     const auto prediction = aimer.aim(target, context, gimbal, muzzle, 0, 0, 0.0, 30.0, solver);
     ASSERT_TRUE(prediction.has_value()) << prediction.error();
     EXPECT_EQ(prediction->selected_armor_id, 0);
+    // 浮点精度断言 1e-6容差
     EXPECT_NEAR(prediction->predicted_position.x(), 1.0, 1e-6);
     EXPECT_NEAR(prediction->predicted_position.y(), 4.8, 1e-6);
     EXPECT_NEAR(prediction->predicted_position.z(), target.position.z(), 1e-6);
     EXPECT_NEAR(prediction->distance, 4.8, 1e-6);
 }
 
+/**
+ * @test 飞行时间精细化修正：跨装甲切换时使用最终选中装甲计算飞行时间，误差在容差内
+ */
 TEST(AimerPhase, FlightTimeTracksFinalArmorAcrossHandoff) {
     fcs::L4::Aimer aimer(fcs::L4::AimerConfig{});
     MockTrajectorySolver solver;
@@ -693,10 +874,12 @@ TEST(AimerPhase, FlightTimeTracksFinalArmorAcrossHandoff) {
     context.target_jumped = true;
     context.phase         = fcs::L4::ArmorAimPhase::SingleArmor;
 
+    // 弹速0.6m/s慢速，放大飞行时间误差便于校验
     const auto prediction =
         aimer.aim(make_robot_target(-3.0, -2.0), context, gimbal, muzzle, 0, 0, 0.0, 0.6, solver);
     ASSERT_TRUE(prediction.has_value()) << prediction.error();
     EXPECT_NE(prediction->rough_selected_armor_id, prediction->selected_armor_id);
+    // 飞行时间 = 目标距离 / 弹速，在允许容差内
     EXPECT_NEAR(
         prediction->flying_time, prediction->predicted_position.norm() / 0.6,
         fcs::L4::kFlyingTimeRefineTolerance);

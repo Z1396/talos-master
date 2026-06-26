@@ -419,63 +419,80 @@ inline void publish_jpeg_image(
 
 } // namespace detail
 
-/**
- * @brief 注册L1底层传感器可视化系统
- * 功能：相机原图叠加装甲/LDM检测框、发布图像流、TF坐标、相机标定内参
- * 系统名：foxglove_l1_image_pub，线程池并行调度
- */
+/// @brief 注册L1传感器图像可视化系统
+/// 功能：读取相机原图、装甲检测、LDM能量机关检测/位姿数据，在图像上绘制各类标注框、文字、特征点
+/// 再根据配置选择 JPEG单帧(WebSocket实时) / H265视频流(Mcap录包) 推送到Foxglove前端
+/// 额外同步发布TF坐标变换、相机标定内参，支撑前端3D可视化
+/// @param app ECS调度器实例，用于注册pool_compute并行图像渲染任务
 void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
     // =========================================================================
-    // 图像发布系统：同步渲染原图+各类检测叠加图层
-    // 输入通道：装甲检测批数据、LDM检测、LDM位姿测量
-    // 共享资源：Foxglove服务实例、相机参数、可视化全局配置、TF树、LDM几何配置
+    // L1 图像可视化发布系统：原图叠加检测图层推流至Foxglove
+    // 调度类型：talos::pool_compute 线程池并行执行，不阻塞视觉主线程
+    // 持久捕获：video_state视频编码器状态、ldm_state LDM绘图缓存状态
+    // 输入SPMC通道：装甲检测批量帧、LDM光斑检测、LDM八边形位姿解算结果
+    // 全局资源：Foxglove服务、相机标定、可视化配置、TF变换树、LDM几何参数
     // =========================================================================
-
     app.add_system<talos::pool_compute>(
         "foxglove_l1_image_pub",
-        // 捕获编码器状态、LDM绘图缓存，mutable允许修改内部状态
+        // 系统持久状态捕获：lambda每次执行复用这两个状态，不会重复创建编码器/缓存
+        // mutable 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
         [video_state = detail::QuantaPublisherState{}, ldm_state = detail::LdmOverlayState{}](
-            // 输入SPMC多生产者单消费者通道
+            // 输入通道1：装甲板神经网络检测批量帧（原图+所有装甲检测结果）
             talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> det_in,
+            // 输入通道2：LDM能量机关光斑blob原始检测数据
             talos::spmc<L2::ldm::LdmDetection, LdmDetectionChannelTopic> ldm_in,
+            // 输入通道3：LDM八边形PnP位姿解算结果（3D坐标、重投影误差、可见立面）
             talos::spmc<L2::ldm::LdmMeasurement, LdmMeasurementChannelTopic> ldm_meas_in,
-            // 全局共享资源：Foxglove服务指针
+
+            // 全局只读资源：Foxglove可视化服务单例智能指针，提供消息发送、TF发布接口
             talos::res<std::shared_ptr<FoxgloveServer>> server,
-            // 相机标定配置
+            // 全局相机标定资源：内参矩阵、畸变系数、图像原始分辨率
             talos::res<CameraConfig> cam,
-            // Foxglove全局配置（传输方式、编码参数）
+            // Foxglove全局配置：传输模式(Mcap/WebSocket)、视频编码参数、码率、分辨率上限
             talos::res<FoxgloveConfig> foxglove_cfg,
+            // 当前敌方识别颜色，本函数未使用，[[maybe_unused]]消除未使用告警
             [[maybe_unused]] core::detecting_color detecting_color_,
-            // TF坐标变换树
+            // TF坐标变换树：相机/底盘/世界坐标系位姿关系
             talos::res<fast_tf::CoordinateSystem> tf_buffer,
-            // LDM八边形几何尺寸配置
+            // LDM八边形几何尺寸配置（外接圆、立面长度，用于投影轮廓绘制）
+            /*1. 默认规则
+            lambda 捕获的变量，在 lambda 内部默认是 const，不能修改里面的成员、不能赋值。
+            不加 mutable，写 video_state.encoder.reset() 直接编译报错。
+            2. mutable 作用
+            解除捕获变量的 const 限制，允许在函数体内修改捕获的对象。*/
             talos::res<L2::ldm::LdmDetectorConfig> ldm_config) mutable {
-            // 校验Foxglove服务是否正常就绪、输入通道有数据
+
+            // 前置统一校验：Foxglove服务已初始化、输入通道存在可读数据
+            // foxglove_ready：封装逻辑：服务非空+通道有数据，无数据直接跳过本轮渲染
             if (!foxglove_ready(*server, det_in)) {
                 return;
             }
 
-            // 读取最新一帧相机图像批数据
+            // 读取装甲检测批量帧（包含原图+所有装甲检测框）
             auto batch = det_in.read();
-            // 无数据/空图像直接退出本轮
+            // 空帧 / 图像数据为空，无需渲染，直接退出
             if (!batch || batch->image.empty()) {
                 return;
             }
 
-            // 1. 发布当前帧所有TF坐标变换
+            // 1. 同步发布当前帧全部TF坐标变换
+            // 前端Foxglove依赖TF实现3D坐标、目标空间位置可视化
             (*server)->publish_tf(*tf_buffer, batch->timestamp_ns);
 
-            // 拷贝原图用于叠加绘图，不修改原始图像帧数据
+            // 克隆原图用于叠加绘图
+            // clone深拷贝，避免修改原始图像帧缓存，不影响其他系统读取原图
             cv::Mat img_bgr = batch->image.clone();
 
-            // 绘制检测ROI有效区域矩形
+            // -------------------------- 绘制ROI有效检测区域矩形 --------------------------
+            // 根据帧是否启用检测器ROI切换矩形颜色
             const cv::Scalar roi_color = tac::to_cv_bgr(
                 batch->has_detector_roi ? tac::Image::ROI_VALID : tac::Image::ROI_MISSING);
             cv::rectangle(
                 img_bgr, batch->detector_roi, roi_color, tac::Image::LINE_MEDIUM, cv::LINE_AA);
 
-            // 绘制相机光心十字标记（内参cx cy）
+            // -------------------------- 绘制相机光心十字标记 --------------------------
+            // 从相机内参取出主点cx cy（图像光学中心）
             const double cx = cam->camera_matrix(0, 2);
             const double cy = cam->camera_matrix(1, 2);
             cv::drawMarker(
@@ -483,29 +500,32 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 tac::to_cv_bgr(tac::Image::OPTICAL_CENTER), cv::MARKER_CROSS,
                 tac::Image::MARKER_SIZE, tac::Image::LINE_MEDIUM);
 
-            // 装甲框文字、线条配色
+            // -------------------------- 装甲板绘图配色定义 --------------------------
             const cv::Scalar box_color  = tac::to_cv_bgr(tac::Image::DETECTION_BOX);
             const cv::Scalar text_color = tac::to_cv_bgr(tac::Image::DETECTION_TEXT);
-            // 四个装甲角点配色：RT红、LT绿、LB蓝、RB黄
-            std::array<cv::Scalar, 4> colors = {
+            // 四个装甲角点配色：RT右上红、LT左上绿、LB左下蓝、RB右下黄
+            std::array<cv::Scalar, 4> corner_colors = {
                 cv::Scalar(255, 0, 0),  // RT
                 cv::Scalar(0, 255, 0),  // LT
                 cv::Scalar(0, 0, 255),  // LB
                 cv::Scalar(0, 255, 255) // RB
             };
-            // 遍历所有装甲检测结果
+
+            // -------------------------- 遍历绘制所有装甲检测结果 --------------------------
             for (const auto& det : batch->detections) {
-                // 绘制4个角点+带箭头边线
+                // 循环绘制4个角点 + 带箭头边线
                 for (size_t j = 0; j < det.corners.size(); j++) {
                     auto pp1 = det.corners[j];
                     auto pp2 = det.corners[(j + 1) % 4];
-                    cv::circle(img_bgr, pp1, 2, colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
+                    // 绘制角点小圆点
+                    cv::circle(img_bgr, pp1, 2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
+                    // 带箭头边线，箭头大小随线段长度自适应
                     cv::arrowedLine(
-                        img_bgr, pp1, pp2, colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
+                        img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
                         cv::LINE_AA, 0, 10.0 / cv::norm(pp1 - pp2));
                 }
 
-                // 装甲类型、颜色文字
+                // 装甲名称/类型/敌方颜色文字
                 cv::Point2f text_pos(det.rect.x, det.rect.y + det.rect.height + 20);
                 std::string name_type = fmt::format(
                     "{} {} {}", magic_enum::enum_name(det.name), magic_enum::enum_name(det.type),
@@ -514,7 +534,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     img_bgr, name_type, text_pos, cv::FONT_HERSHEY_SIMPLEX, tac::Image::TEXT_SMALL,
                     text_color, tac::Image::TEXT_THIN, cv::LINE_AA);
 
-                // 置信度文字
+                // 网络置信度文字
                 cv::Point2f conf_pos(det.rect.x, det.rect.y + det.rect.height + 40);
                 std::string conf_str = fmt::format("conf: {:.2f}", det.confidence);
                 cv::putText(
@@ -522,11 +542,13 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     text_color, tac::Image::TEXT_THIN, cv::LINE_AA);
             }
 
-            // LDM帧同步最大允许200ms时间偏移
+            // -------------------------- LDM能量机关帧同步阈值配置 --------------------------
+            // 允许图像帧与LDM检测帧最大时间偏差200ms，超过则不叠加LDM图层防止画面错位
             constexpr uint64_t kMaxLdmOverlaySkewNs = 200'000'000;
-            // 读取当前最新LDM检测、测量结果缓存
+            // 读取当前最新LDM光斑检测、LDM位姿解算数据缓存
             const auto maybe_ldm_det  = ldm_in.read_current();
             const auto maybe_ldm_meas = ldm_meas_in.read_current();
+            // 更新系统持久缓存ldm_state，缓存最新一帧LDM数据，无新数据则保留上一帧
             if (maybe_ldm_det) {
                 ldm_state.latest_detection = *maybe_ldm_det;
             }
@@ -534,14 +556,15 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 ldm_state.latest_measurement = *maybe_ldm_meas;
             }
 
-            // 判断LDM检测帧是否与当前图像帧同步，允许叠加绘图
+            // -------------------------- 判断LDM光斑检测帧是否可叠加 --------------------------
+            // 同步规则：帧ID完全相同 / 时间戳差值小于200ms
             const auto use_ldm_det = ldm_state.latest_detection.has_value()
                                   && (ldm_state.latest_detection->frame_id == batch->frame_id
                                       || detail::frame_sync_ok(
                                           ldm_state.latest_detection->timestamp_ns,
                                           batch->timestamp_ns, kMaxLdmOverlaySkewNs));
 
-            // 绘制LDM原始blob、配对中点、配对连线
+            // 绘制LDM光斑、配对连线、中点标记
             if (use_ldm_det) {
                 const auto& ldm_det           = *ldm_state.latest_detection;
                 const cv::Scalar blob_color   = tac::to_cv_bgr(tac::Image::LDM_SECONDARY);
@@ -549,22 +572,26 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 const cv::Scalar center_color = tac::to_cv_bgr(tac::Image::LDM_CENTER);
                 cv::Rect2f ldm_rect           = ldm_det.rect;
 
-                // 绘制单个光斑blob矩形框
+                // 绘制单个光斑blob包围矩形
                 for (const auto& blob : ldm_det.blobs) {
                     cv::rectangle(
                         img_bgr, blob.rect, blob_color, tac::Image::LINE_THIN, cv::LINE_AA);
                 }
 
-                // 绘制光斑配对连线、中点标记、配对编号
+                // 遍历光斑配对，绘制上下光斑连线、端点、中点、配对编号
                 for (size_t i = 0; i < ldm_det.pairs.size(); ++i) {
                     const auto& pair = ldm_det.pairs[i];
                     cv::line(
                         img_bgr, pair.top_center_px, pair.bottom_center_px, pair_color,
                         tac::Image::LINE_MEDIUM, cv::LINE_AA);
-                    cv::circle(img_bgr, pair.top_center_px, 4, colors[0], tac::Image::LINE_MEDIUM);
+                    // 上端点圆点
+                    cv::circle(img_bgr, pair.top_center_px, 4, corner_colors[0], tac::Image::LINE_MEDIUM);
+                    // 下端点圆点
                     cv::circle(
-                        img_bgr, pair.bottom_center_px, 4, colors[2], tac::Image::LINE_MEDIUM);
+                        img_bgr, pair.bottom_center_px, 4, corner_colors[2], tac::Image::LINE_MEDIUM);
+                    // 配对中点实心圆
                     cv::circle(img_bgr, pair.midpoint_px, 3, center_color, -1);
+                    // 配对编号文字
                     cv::putText(
                         img_bgr, fmt::format("p{}", i), pair.midpoint_px + cv::Point2f(4.0f, -4.0f),
                         cv::FONT_HERSHEY_SIMPLEX, tac::Image::TEXT_SMALL, center_color,
@@ -583,7 +610,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     }
                 }
 
-                // 绘制LDM整体包围框与配对数量文字
+                // 绘制LDM整体包围框 + 配对数量文字
                 if (ldm_rect.width > 0.0f && ldm_rect.height > 0.0f) {
                     cv::rectangle(
                         img_bgr, ldm_rect, pair_color, tac::Image::LINE_MEDIUM, cv::LINE_AA);
@@ -597,7 +624,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 }
             }
 
-            // 判断LDM位姿解算测量帧是否同步
+            // -------------------------- 判断LDM位姿解算帧是否可叠加 --------------------------
             const auto use_ldm_meas = ldm_state.latest_measurement.has_value()
                                    && (ldm_state.latest_measurement->frame_id == batch->frame_id
                                        || detail::frame_sync_ok(
@@ -605,7 +632,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                                            batch->timestamp_ns, kMaxLdmOverlaySkewNs));
             if (use_ldm_meas) {
                 const auto& ldm_meas = *ldm_state.latest_measurement;
-                // 左上角打印配对数、深度质量、置信度
+                // 左上角打印配对总数、有效配对、深度质量、解算置信度
                 cv::putText(
                     img_bgr,
                     fmt::format(
@@ -615,7 +642,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     tac::to_cv_bgr(tac::Image::LDM_PRIMARY), tac::Image::TEXT_MEDIUM_PX,
                     cv::LINE_AA);
 
-                // 打印解算后相机坐标系XYZ坐标
+                // 打印八边形相机坐标系XYZ三维坐标（单位m）
                 if (ldm_meas.transform_cam.has_value()) {
                     const auto center = ldm_meas.transform_cam->translation();
                     cv::putText(
@@ -627,23 +654,24 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                         cv::LINE_AA);
                 }
 
-                // 绘制八边形完整投影轮廓（带背面剔除虚线）
+                // 绘制八边形3D模型投影轮廓、可见立面信息
                 const auto& selected_idx = ldm_meas.selected_candidate_idx;
                 if (selected_idx.has_value() && *selected_idx >= 0
                     && static_cast<size_t>(*selected_idx) < ldm_meas.mesh_candidates.size()) {
                     const auto& selected =
                         ldm_meas.mesh_candidates[static_cast<size_t>(*selected_idx)];
+                    // 投影轮廓点数量为16个，绘制八边形外框（背面虚线、正面实线）
                     if (selected.projected_outline_image.size() == 16) {
                         detail::draw_ldm_projected_outline(
                             img_bgr, selected, ldm_config->geometry, box_color);
                     }
 
-                    // 绘制八边形中心十字标记
+                    // 绘制八边形图像中心十字标记
                     cv::drawMarker(
                         img_bgr, ldm_meas.center_image_px, tac::to_cv_bgr(tac::Image::LDM_CENTER),
                         cv::MARKER_CROSS, 18, tac::Image::LINE_MEDIUM);
 
-                    // 打印可见立面编号、重投影RMSE误差
+                    // 拼接可见立面编号字符串
                     std::string faces_text;
                     for (size_t i = 0; i < selected.octagon_face_indices.size(); ++i) {
                         if (!faces_text.empty()) {
@@ -651,11 +679,13 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                         }
                         faces_text += std::to_string(selected.octagon_face_indices[i]);
                     }
+                    // 重投影误差格式化，非法数值显示n/a
                     const std::string rmse_text =
                         std::isfinite(selected.reprojection_rmse_px)
                             ? fmt::format("{:.2f}", selected.reprojection_rmse_px)
                             : "n/a";
 
+                    // 在八边形包围框上方打印可见立面、重投影RMSE误差
                     const cv::Rect2f meas_rect =
                         detail::projected_outline_bounds(selected.projected_outline_image);
                     cv::putText(
@@ -669,23 +699,26 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 }
             }
 
-            // 根据Foxglove传输模式选择推流方式
+            // -------------------------- 根据传输模式分两种推流逻辑 --------------------------
             if (foxglove_cfg->transport == FoxgloveTransport::Mcap) {
-                // MCAP离线录包：H265视频流编码发送
+                // Mcap离线录包模式：使用Quanta H265硬件编码器输出视频流
+                // video_state持久保存编码器，分辨率不变时复用编码器，无需重复创建
                 detail::publish_quanta_video(
                     *(*server), video_state, foxglove_cfg->quanta, img_bgr, batch->timestamp_ns);
             } else {
-                // WebSocket实时可视化：单帧JPEG图片发送
+                // WebSocket实时调试模式：单帧压缩为JPEG图片逐帧发送，延迟低
                 detail::publish_jpeg_image(*(*server), img_bgr, batch->timestamp_ns);
             }
 
-            // 发布相机内参标定消息，客户端可读取畸变、内参用于3D可视化
+            // -------------------------- 发布相机标定消息给Foxglove前端 --------------------------
+            // 把Eigen内参矩阵、畸变系数转为标准数组格式
             std::array<double, 9> camera_matrix_arr;
             std::copy_n(cam->camera_matrix.data(), 9, camera_matrix_arr.begin());
             std::vector<double> dist_coeffs(
                 cam->distort_coefficient.data(),
                 cam->distort_coefficient.data() + cam->distort_coefficient.size());
 
+            // 发送CameraCalibration消息，前端可完成图像去畸变、3D点云投影
             (*server)->publish_camera_calibration(
                 cam->width, cam->height, camera_matrix_arr, dist_coeffs, batch->timestamp_ns);
         });
