@@ -712,11 +712,25 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
             // -------------------------- 发布相机标定消息给Foxglove前端 --------------------------
             // 把Eigen内参矩阵、畸变系数转为标准数组格式
+            // 定义固定长度数组，存储相机内参矩阵（3×3，共9个double浮点元素）
+            // std::array<double,9> 栈内存分配，长度固定，对应OpenCV相机内参矩阵3行3列9个参数
             std::array<double, 9> camera_matrix_arr;
+
+            // std::copy_n：从源地址复制指定数量的数据到目标容器
+            // 参数1：cam->camera_matrix.data() 源指针，OpenCV Mat/矩阵的数据首地址，指向9个内参浮点数
+            // 参数2：9 需要复制的元素总个数（3*3相机矩阵固定9个值）
+            // 参数3：camera_matrix_arr.begin() 目标数组起始迭代器，写入到std::array中
             std::copy_n(cam->camera_matrix.data(), 9, camera_matrix_arr.begin());
+
+            // 构建畸变系数std::vector<double>动态数组
+            // vector构造函数重载：传入【起始迭代器/数据指针】、【末尾数据指针】，自动拷贝区间内所有元素
+            // cam->distort_coefficient.data()：畸变系数数组首地址
+            // cam->distort_coefficient.data() + cam->distort_coefficient.size()：畸变系数尾部边界（不包含）
+            // 自动适配任意长度畸变系数（k1,k2,p1,p2,k3等，长度不固定）
             std::vector<double> dist_coeffs(
                 cam->distort_coefficient.data(),
-                cam->distort_coefficient.data() + cam->distort_coefficient.size());
+                cam->distort_coefficient.data() + cam->distort_coefficient.size()
+            );
 
             // 发送CameraCalibration消息，前端可完成图像去畸变、3D点云投影
             (*server)->publish_camera_calibration(

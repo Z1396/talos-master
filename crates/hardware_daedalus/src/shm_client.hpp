@@ -1,24 +1,39 @@
 #pragma once
+// 头文件保护，防止重复包含导致重定义编译错误
 
+// 时间工具：steady_clock计时、system_clock纳秒时间戳
 #include <chrono>
+// C++23 标准错误返回类型，用于connect/create返回成功/错误
 #include <expected>
+// OpenCV核心矩阵，用于图像帧存储、零拷贝映射共享内存图像
 #include <opencv2/core.hpp>
+// 可选值，无数据时返回std::nullopt，区分“无新帧”和“有效帧”
 #include <optional>
+// 线程休眠，用于等待生产者就绪轮询
 #include <thread>
 
+// 共享内存全局布局结构体定义（魔数、版本、三缓冲通道、相机内参等）
 #include "shm_layout.hpp"
+// 单块共享内存区域封装类，负责shmget/shmat/shmdt生命周期管理
 #include "shm_region.hpp"
+// 无锁三缓冲数据结构，实现生产者-消费者无锁并发
 #include "shm_triple_buffer.hpp"
 
 namespace ipc {
 
 /**
  * @brief 共享内存 IPC 客户端
+ * 通信双方：Rust模拟器(生产者) ↔ C++视觉/云台程序(消费者)
+ * 两种工作模式：
+ * 1. 消费者模式 connect()：连接Rust已创建的共享内存，只读订阅图像、位姿、真值；可下发云台控制指令
+ * 2. 生产者模式 create()：新建共享内存，仅单元测试使用，模拟Rust发布图像/位姿
  *
- * 提供高级 API 用于:
- * - 订阅图像流 (Rust → C++)
- * - 订阅位姿数据 (Rust → C++)
- * - 发布云台控制命令 (C++ → Rust)
+ * 核心能力：
+ * - 图像流订阅：零拷贝cv::Mat直接映射共享内存图像池
+ * - 多通道位姿订阅：云台、底盘、枪口、相机位姿
+ * - 底盘观测、仿真真值、仿真运行状态读取
+ * - 下发云台目标角度、距离、开火建议指令
+ * - 心跳保活、版本/魔数校验、生产者就绪等待
  *
  * 使用示例:
  * ```cpp
@@ -28,145 +43,169 @@ namespace ipc {
  *     return;
  * }
  *
- * // 订阅图像
+ * // 非阻塞读取最新图像帧
  * if (auto frame = client->recv_image()) {
  *     cv::Mat img = frame->image;
- *     // 处理图像...
+ *     // 业务处理图像...
  * }
  *
- * // 发布云台命令
+ * // 下发云台控制指令：偏航15°，俯仰-8°，距离3.5m，允许开火
  * client->send_gimbal_cmd(15.0f, -8.0f, 3.5f, true);
  * ```
  */
 class ShmClient {
 public:
     /**
-     * @brief 接收到的图像帧
+     * @brief 从共享内存读取到的图像帧封装结构体
      */
     struct ImageFrame {
-        cv::Mat image;         // 零拷贝 cv::Mat (直接指向共享内存)
-        uint64_t seq;          // 帧序号
-        uint64_t timestamp_ns; // 时间戳
-    };
-
-    /**
-     * @brief 接收到的位姿数据
-     */
-    struct Pose {
-        double x, y, z;        // 位置 (米)
-        double qw, qx, qy, qz; // 四元数
-        uint64_t frame_seq;    // 对应图像帧序号
+        // 零拷贝OpenCV矩阵，内存直接指向共享内存图像池，不复制像素
+        // 风险：下次调用recv_image()后，内存可能被生产者覆盖，矩阵失效
+        cv::Mat image;
+        // 图像帧全局递增序列号，用于匹配对应位姿数据
+        uint64_t seq;
+        // 帧生成纳秒时间戳，与Rust端SystemTime对齐
         uint64_t timestamp_ns;
     };
 
+    /**
+     * @brief 位姿数据结构体（位置+四元数）
+     */
+    struct Pose {
+        // 三维坐标，单位米
+        double x, y, z;
+        // 单位四元数 qw + qx qy qz
+        double qw, qx, qy, qz;
+        // 关联对应的图像帧序列号，实现图像-位姿时间对齐
+        uint64_t frame_seq;
+        // 位姿生成纳秒时间戳
+        uint64_t timestamp_ns;
+    };
+
+    // 默认析构：成员ShmRegion自动析构，执行shmdt脱离共享内存，释放资源
     ~ShmClient() = default;
 
-    // Move-only
+    // 仅允许移动语义，禁止拷贝
+    // 共享内存句柄是独占资源，拷贝会导致重复shmdt、内存野指针崩溃
     ShmClient(ShmClient&&)                 = default;
     ShmClient& operator=(ShmClient&&)      = default;
     ShmClient(const ShmClient&)            = delete;
     ShmClient& operator=(const ShmClient&) = delete;
 
     /**
-     * @brief 连接到共享内存 (消费者模式)
-     *
-     * 消费者连接到已由 Rust 模拟器创建的共享内存区域
+     * @brief 消费者模式：连接Rust预先创建好的共享内存
+     * @return std::expected<ShmClient, ShmError> 成功返回客户端实例，失败返回错误码
+     * 校验逻辑：打开元数据区+图像池 → 校验魔数、版本号，防止旧版本内存不兼容
      */
     [[nodiscard]] static std::expected<ShmClient, ShmError> connect() {
-        // 打开元数据区域
+        // 1. 打开全局元数据共享内存：存储三缓冲、相机内参、心跳、真值等控制信息
         auto meta_result = ShmRegion::open(SHM_NAME_META, sizeof(ShmMetaRegion));
         if (!meta_result) {
+            // 打开失败（共享内存不存在/权限不足）直接返回错误
             return std::unexpected(meta_result.error());
         }
 
-        // 打开图像池
+        // 2. 打开图像像素池共享内存：存放所有图像原始像素数据
         auto pool_result = ShmRegion::open(SHM_NAME_IMAGE_POOL, IMAGE_POOL_SIZE);
         if (!pool_result) {
             return std::unexpected(pool_result.error());
         }
 
-        // 验证魔数和版本
+        // 3. 内存映射完成，获取元数据头部指针
         const auto* meta = meta_result->as<ShmMetaRegion>();
+
+        // 魔数校验：区分合法共享内存与残留垃圾shm文件
         if (meta->header.magic != SHM_MAGIC) {
-            return std::unexpected(ShmError::InvalidSize); // 实际应该是 InvalidMagic
+            return std::unexpected(ShmError::InvalidSize); // 注释：实际应新增InvalidMagic错误枚举
         }
+        // 版本校验：防止C++与Rust两端shm_layout结构体定义不一致
         if (meta->header.version != SHM_VERSION) {
-            return std::unexpected(ShmError::InvalidSize); // 实际应该是 VersionMismatch
+            return std::unexpected(ShmError::InvalidSize); // 注释：实际应新增VersionMismatch错误枚举
         }
 
+        // 构造客户端实例，移交两块共享内存所有权
         return ShmClient(std::move(*meta_result), std::move(*pool_result));
     }
 
     /**
-     * @brief 创建共享内存 (生产者模式，仅用于测试)
+     * @brief 生产者模式：全新创建共享内存，仅单元测试使用
+     * 业务场景仅Rust作为生产者，C++正常业务不调用此接口
+     * @return 初始化完成的ShmClient，包含初始化好的三缓冲通道
      */
     [[nodiscard]] static std::expected<ShmClient, ShmError> create() {
-        // 创建元数据区域
+        // 创建元数据共享内存段
         auto meta_result = ShmRegion::create(SHM_NAME_META, sizeof(ShmMetaRegion));
         if (!meta_result) {
             return std::unexpected(meta_result.error());
         }
 
-        // 创建图像池
+        // 创建图像像素池共享内存段
         auto pool_result = ShmRegion::create(SHM_NAME_IMAGE_POOL, IMAGE_POOL_SIZE);
         if (!pool_result) {
             return std::unexpected(pool_result.error());
         }
 
-        // 初始化元数据区域
+        // 获取元数据裸指针，初始化头部信息
         auto* meta = meta_result->as<ShmMetaRegion>();
 
-        // 初始化头部
+        // 填充共享内存头部标识
         meta->header.magic   = SHM_MAGIC;
         meta->header.version = SHM_VERSION;
+        // 记录共享内存创建时间戳
         meta->header.created_ns =
             static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        // 写入全局图像分辨率配置
         meta->header.image_width  = IMAGE_WIDTH;
         meta->header.image_height = IMAGE_HEIGHT;
 
-        // 初始化所有 TripleBuffer (CRITICAL: memset 破坏了默认初始化器)
-        // 正确初始状态: state=1 (ready slot), write_idx=0, read_idx=2
+        // 关键：手动初始化全部TripleBuffer三缓冲
+        // 底层ShmRegion::create会调用memset全内存清零，会覆盖三缓冲合法初始状态
+        // 标准初始状态规范：state=1，write_idx=0，read_idx=2
         init_triple_buffer(meta->image);
+        // 批量初始化5路位姿三缓冲
         for (auto& pose : meta->poses) {
             init_triple_buffer(pose);
         }
+        // 初始化云台下发指令三缓冲
         init_triple_buffer(meta->gimbal_cmd);
 
         return ShmClient(std::move(*meta_result), std::move(*pool_result));
     }
 
-    // ============ 图像订阅 ============
-
+    // ====================== 图像订阅接口（消费者） ======================
     /**
-     * @brief 尝试接收最新图像帧
-     * @return 如果有新图像，返回 ImageFrame；否则返回 nullopt
-     *
-     * 返回的 cv::Mat 直接指向共享内存，零拷贝。
-     * 注意：cv::Mat 在下次 recv_image() 调用后可能失效！
+     * @brief 非阻塞读取最新图像帧
+     * @return std::nullopt 无新图像；返回ImageFrame 存在未消费新帧
+     * 零拷贝机制：cv::Mat直接绑定共享内存像素地址，无内存拷贝开销
+     * 警告：下次recv_image调用后，图像内存可能被生产者覆盖，不要长期持有ImageFrame
      */
     [[nodiscard]] std::optional<ImageFrame> recv_image() const {
+        // 图像三缓冲操作封装，绑定元数据内图像通道
         ImageOps ops(&meta_->image);
+        // borrow：无锁借用最新就绪帧，无新数据返回空
         const auto slot = ops.borrow();
         if (!slot) {
             return std::nullopt;
         }
 
+        // 取出帧元数据（序号、分辨率、buffer索引、格式）
         const auto& img_meta = **slot;
 
-        // 计算图像数据在 pool 中的偏移
+        // 根据buffer_id计算像素数据在图像池内的内存偏移
         uint8_t* img_data = image_pool_ + img_meta.buffer_id * IMAGE_SIZE;
 
-        // 确定 OpenCV 类型
-        int cv_type = CV_8UC3; // 默认 RGB8
+        // 根据图像格式映射OpenCV矩阵类型
+        int cv_type = CV_8UC3; // 默认RGB8
         if (img_meta.format == 1)
-            cv_type = CV_8UC3; // BGR8
+            cv_type = CV_8UC3; // BGR8格式
         else if (img_meta.format == 2)
-            cv_type = CV_8UC1; // GRAY8
+            cv_type = CV_8UC1; // 单通道灰度图
 
-        // 创建零拷贝 cv::Mat
+        // 构造零拷贝cv::Mat，仅记录尺寸、类型、内存地址，不分配像素缓存
         const cv::Mat image(
             static_cast<int>(img_meta.height), static_cast<int>(img_meta.width), cv_type, img_data);
 
+        // 封装帧信息返回
         return ImageFrame{
             .image        = image,
             .seq          = img_meta.seq,
@@ -175,21 +214,21 @@ public:
     }
 
     /**
-     * @brief 检查是否有新图像
+     * @brief 快速判断是否存在未读取的新图像，不取出帧
      */
     [[nodiscard]] bool has_new_image() const {
         const ImageOps ops(&meta_->image);
         return ops.has_new_data();
     }
 
-    // ============ 位姿订阅 ============
-
+    // ====================== 位姿订阅接口（消费者） ======================
     /**
-     * @brief 尝试接收指定类型的位姿
-     * @param index 位姿类型 (POSE_GIMBAL, POSE_ODOM, POSE_MUZZLE, POSE_CAMERA,
-     * POSE_CHASSIS_OBSERVATION[legacy])
+     * @brief 读取指定类型位姿数据
+     * @param index 位姿枚举索引：POSE_GIMBAL/POSE_ODOM/POSE_MUZZLE/POSE_CAMERA/POSE_CHASSIS_OBSERVATION
+     * @return 存在新位姿返回Pose，无数据返回nullopt
      */
     [[nodiscard]] std::optional<Pose> recv_pose(const PoseIndex index) const {
+        // 索引越界直接返回空
         if (index > 4)
             return std::nullopt;
 
@@ -199,6 +238,7 @@ public:
             return std::nullopt;
         }
 
+        // 解析位姿结构体到对外Pose类型
         const auto& pose = **slot;
         return Pose{
             .x            = pose.position[0],
@@ -214,10 +254,9 @@ public:
     }
 
     /**
-     * @brief 接收底盘观测数据（推荐接口）
-     *
-     * 数据来源为 ShmMetaRegion::chassis_observation（独立结构体通道）。
-     * 若 timestamp_ns=0，表示生产者尚未发布有效数据。
+     * @brief 读取底盘观测独立通道数据
+     * 区别于poses数组：单独全局结构体，不使用三缓冲，生产者直接覆盖写入
+     * @return timestamp_ns=0代表无有效数据，返回nullopt
      */
     [[nodiscard]] std::optional<ChassisObservation> recv_chassis_observation() const {
         const auto observation = meta_->chassis_observation;
@@ -227,13 +266,9 @@ public:
         return observation;
     }
 
-    // ============ Ground Truth ============
-
+    // ====================== 真值/仿真状态订阅 ======================
     /**
-     * @brief 接收 ground truth 数据
-     *
-     * 数据来源为 ShmMetaRegion::ground_truth。
-     * 若 timestamp_ns=0，表示生产者尚未发布有效数据。
+     * @brief 读取仿真全局真值批量数据（目标真值、障碍物真值等）
      */
     [[nodiscard]] std::optional<GroundTruthBatch> recv_ground_truth() const {
         const auto& gt = meta_->ground_truth;
@@ -244,10 +279,8 @@ public:
     }
 
     /**
-     * @brief Receive simulator runtime state.
-     *
-     * The state lives in the formerly reserved tail of the metadata region, so older publishers
-     * expose no valid state (`timestamp_ns == 0`) rather than an incorrect value.
+     * @brief 读取仿真运行状态（是否跟随目标等标识）
+     * 数据存储在元数据尾部预留空间，旧版本Rust生产者无此字段，timestamp=0表示无效
      */
     [[nodiscard]] std::optional<RuntimeState> recv_runtime_state() const {
         const auto state = meta_->runtime_state;
@@ -257,21 +290,23 @@ public:
         return state;
     }
 
-    // ============ 云台命令发布 ============
-
+    // ====================== 云台指令下发（消费者写通道） ======================
     /**
-     * @brief 发布云台控制命令
-     * @param yaw_deg 目标偏航角 (度)
-     * @param pitch_deg 目标俯仰角 (度)
-     * @param distance_m 目标距离 (米)，-1 表示无效
-     * @param fire_advice 是否建议开火
+     * @brief 向Rust模拟器下发云台控制目标
+     * @param yaw_deg 目标偏航角 单位度
+     * @param pitch_deg 目标俯仰角 单位度
+     * @param distance_m 目标预测距离，-1代表无效
+     * @param fire_advice 是否允许开火建议
      */
     void send_gimbal_cmd(
         const float yaw_deg, const float pitch_deg, const float distance_m,
         const bool fire_advice) const {
+        // 获取云台指令三缓冲写入操作器
         GimbalOps ops(&meta_->gimbal_cmd);
+        // borrow_mut 获取可修改的写入槽位
         auto& cmd = ops.borrow_mut();
 
+        // 填充当前纳秒时间戳
         cmd.timestamp_ns =
             static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
         cmd.yaw_deg     = yaw_deg;
@@ -279,18 +314,13 @@ public:
         cmd.distance_m  = distance_m;
         cmd.fire_advice = fire_advice ? 1 : 0;
 
+        // publish 发布新指令，切换缓冲槽，消费者可见
         ops.publish();
     }
 
-    // ============ 相机信息 ============
-
+    // ====================== 生产者专属发布接口（仅测试create模式） ======================
     /**
-     * @brief 获取相机内参 (直接访问，不使用 TripleBuffer)
-     */
-    [[nodiscard]] const CameraInfo& camera_info() const { return meta_->camera_info; }
-
-    /**
-     * @brief 发布位姿 (生产者模式)
+     * @brief 生产者：写入位姿数据到指定通道
      */
     void publish_pose(const PoseIndex index, const Pose& pose) const {
         if (index > 4) {
@@ -312,80 +342,82 @@ public:
     }
 
     /**
-     * @brief 设置相机内参 (生产者模式)
+     * @brief 生产者：全局写入相机内参（单变量覆盖，无缓冲）
      */
     void publish_camera_info(const CameraInfo& info) const { meta_->camera_info = info; }
 
     /**
-     * @brief 发布运行时状态 (生产者模式)
+     * @brief 生产者：更新仿真运行状态标识
      */
     void publish_runtime_state(const bool following, const uint64_t timestamp_ns) const {
         meta_->runtime_state.timestamp_ns = timestamp_ns;
         meta_->runtime_state.following    = following ? 1U : 0U;
     }
 
-    // ============ 诊断 ============
-
+    // ====================== 诊断/保活工具接口 ======================
     /**
-     * @brief 获取共享内存头部信息
+     * @brief 获取共享内存全局头部（魔数、版本、分辨率、心跳）
      */
     [[nodiscard]] const ShmHeader& header() const { return meta_->header; }
 
     /**
-     * @brief 更新心跳 (生产者调用)
+     * @brief 生产者：更新心跳时间戳，标记进程存活
      */
     void update_heartbeat() const { meta_->header.heartbeat_ns = now_ns(); }
 
     /**
-     * @brief 检查生产者是否存活 (消费者调用)
-     * @param timeout_ns 超时时间 (纳秒)
+     * @brief 消费者：判断生产者是否存活
+     * @param timeout_ns 心跳超时阈值，默认1秒无更新判定离线
      */
     [[nodiscard]] bool is_producer_alive(const uint64_t timeout_ns = 1'000'000'000) const {
+        // 当前时间 - 上次心跳 < 超时阈值 = 存活
         return now_ns() - meta_->header.heartbeat_ns < timeout_ns;
     }
 
     /**
-     * @brief 等待生产者就绪
-     * @param timeout 超时时间
-     * @return true 如果生产者在超时前变为活跃状态
-     *
-     * 用于防止连接到旧的共享内存文件。调用此方法会等待直到
-     * 生产者的 heartbeat 开始更新，确认是一个活跃的连接。
+     * @brief 阻塞等待生产者上线，超时自动退出
+     * @param timeout 最大等待时长，默认5秒
+     * @return true 生产者正常上线；false 等待超时
+     * 作用：避免连接到残留旧共享内存，等待Rust启动并刷新心跳
      */
     [[nodiscard]] bool
         wait_for_producer(const std::chrono::milliseconds timeout = std::chrono::seconds(5)) const {
+        // 计算截止时间点
         const auto deadline = std::chrono::steady_clock::now() + timeout;
+        // 循环轮询心跳，每50ms检测一次
         while (std::chrono::steady_clock::now() < deadline) {
             if (is_producer_alive()) {
                 return true;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
+        // 超时未检测到活跃生产者
         return false;
     }
 
-    // ============ 图像发布 (生产者模式，用于测试) ============
-
     /**
-     * @brief 发布图像 (生产者模式)
-     * @param image 图像数据
-     * @param seq 帧序号
-     * @param timestamp_ns 时间戳
+     * @brief 生产者测试接口：将OpenCV图像写入共享内存图像池并发布
+     * @param image 待发布图像矩阵
+     * @param seq 帧序列号
+     * @param timestamp_ns 帧时间戳
      */
     void
         publish_image(const cv::Mat& image, const uint64_t seq, const uint64_t timestamp_ns) const {
         ImageOps ops(&meta_->image);
         auto& meta = ops.borrow_mut();
 
-        // 选择下一个 buffer
+        // 轮换图像缓冲ID 0/1/2 三缓冲循环
         uint8_t buffer_id = meta.buffer_id;
         buffer_id         = (buffer_id + 1) % 3;
 
-        // 复制图像数据到 pool
+        // 计算目标像素内存地址
         uint8_t* dst = image_pool_ + buffer_id * IMAGE_SIZE;
+        // 区分连续/非连续Mat，安全拷贝像素到共享内存
         if (image.isContinuous()) {
+            // 内存连续，一次性memcpy
             std::memcpy(dst, image.data, IMAGE_SIZE);
         } else {
+            // 行不连续，逐行拷贝
             for (int row = 0; row < image.rows; ++row) {
                 std::memcpy(
                     dst + row * image.cols * image.channels(), image.ptr(row),
@@ -393,28 +425,27 @@ public:
             }
         }
 
-        // 更新元数据
+        // 更新图像元数据
         meta.seq          = seq;
         meta.timestamp_ns = timestamp_ns;
         meta.width        = static_cast<uint32_t>(image.cols);
         meta.height       = static_cast<uint32_t>(image.rows);
         meta.buffer_id    = buffer_id;
-        meta.format       = image.type() == CV_8UC1 ? 2 : 1; // BGR8 或 GRAY8
+        // 图像格式映射：灰度=2，BGR=1
+        meta.format       = image.type() == CV_8UC1 ? 2 : 1;
 
+        // 发布新帧，消费者可读取
         ops.publish();
     }
 
 private:
     /**
-     * @brief 初始化 TripleBuffer 到正确的初始状态
-     *
-     * ShmRegion::create() 使用 memset 清零内存，会破坏 TripleBuffer
-     * 的默认成员初始化器。必须手动重新初始化。
-     *
-     * 正确初始状态:
-     * - state = 1 (ready slot 是 1, 无 FLAG_NEW)
-     * - write_idx = 0 (生产者写入 slot 0)
-     * - read_idx = 2 (消费者上次读取 slot 2)
+     * @brief 静态工具：重置三缓冲到合法初始状态
+     * 问题根源：创建共享内存时memset清零，会覆盖TripleBuffer原子变量与索引
+     * 标准初始化状态约定：
+     * state=1：无新数据标记
+     * write_idx=0：生产者写入槽位
+     * read_idx=2：消费者上次读取槽位
      */
     template <typename TripleBuffer>
     static void init_triple_buffer(TripleBuffer& buf) {
@@ -424,9 +455,8 @@ private:
     }
 
     /**
-     * @brief 获取当前时间的纳秒时间戳 (UNIX epoch)
-     *
-     * 使用 system_clock 与 Rust 端的 SystemTime::now() 保持一致
+     * @brief 获取系统时钟纳秒时间戳，与Rust SystemTime对齐
+     * steady_clock仅用于程序内计时，system_clock用于跨进程时间同步
      */
     [[nodiscard]] static uint64_t now_ns() {
         return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -434,15 +464,25 @@ private:
                                          .count());
     }
 
+    /**
+     * @brief 私有构造函数，仅connect/create静态方法调用
+     * 移动传入两块共享内存区域，并缓存内存映射指针
+     */
     ShmClient(ShmRegion meta_region, ShmRegion pool_region)
         : meta_region_(std::move(meta_region))
         , pool_region_(std::move(pool_region))
+        // 缓存元数据结构体指针，避免重复调用as<>
         , meta_(meta_region_.as<ShmMetaRegion>())
+        // 缓存图像池像素内存起始地址
         , image_pool_(static_cast<uint8_t*>(pool_region_.data())) {}
 
+    // 元数据共享内存管理对象（三缓冲、相机内参、心跳、真值）
     ShmRegion meta_region_;
+    // 图像像素池共享内存管理对象（所有图像原始像素）
     ShmRegion pool_region_;
+    // meta_region_映射后的结构体裸指针，缓存优化
     ShmMetaRegion* meta_;
+    // pool_region_映射后的像素内存起始指针，缓存优化
     uint8_t* image_pool_;
 };
 

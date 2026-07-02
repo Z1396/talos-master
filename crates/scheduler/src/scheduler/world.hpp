@@ -728,6 +728,11 @@ private:
         .load(std::memory_order_acquire)：原子加载，保证多线程下内存可见性；
         true = 已调用 build()，资源结构冻结；
         false = 还在构建阶段，可以新增资源。*/
+        /*C++20 标准属性：[[unlikely]] / [[likely]]
+        标准语法，跨编译器（GCC/Clang/MSVC）
+        作用：告诉编译器这个分支极少执行，优化指令排布：
+        把 unlikely 分支代码放到冷区，减少缓存失效
+        流水线不预取冷门分支，提升高频分支速度*/
         if (resource_structure_frozen_.load(std::memory_order_acquire)) [[unlikely]] {
             // 直接崩溃并打印提示信息
             panic(
