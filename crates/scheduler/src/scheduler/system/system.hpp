@@ -351,7 +351,28 @@ template <typename F, typename Policy = default_policy>
 [[nodiscard]] std::unique_ptr<SystemBase> make_system(std::string name, F&& func) noexcept {
     // 退化类型、转发可调用对象，创建具体 System 实例
     return std::make_unique<System<std::decay_t<F>, Policy>>(
+        /*std::forward<F>(func) 配合 decay 完整流程
+        入参 F&& func：万能引用，既能接收左值 lambda，也能接收右值临时 lambda；
+        std::decay_t<F>：拿到 lambda 原始类型，作为 System 的模板参数；
+        std::forward<F>(func)：完美转发，把 lambda 原样移入 System 内部，避免拷贝；*/
         std::move(name), std::forward<F>(func));
 }
+        /*1. 先拆分两个核心部分
+        std::decay_t<F>：类型退化工具元函数
+        System<T>：模板包装类，用来包裹任意可调用对象（lambda / 函数指针 / 仿函数）
+        一、std::decay_t<F> 作用
+        std::decay 是类型转换工具，等价于：
+        先去掉 const / volatile 修饰
+        去掉引用 & / &&
+        数组转指针、函数转函数指针
+        模板别名 decay_t<T> = typename std::decay<T>::type
+        为什么这里必须用 decay？
+        传入的 F 往往是：
+        右值 lambda（auto&& 万能引用捕获）
+        带 &/&& 的可调用对象
+        如果直接写 System<F>：
+        若 F 是引用类型 Func&，模板实例化会带引用，无法存到 unique_ptr/ 容器；
+        lambda 万能引用 auto&& f 推导出 Func&&，带右值引用，不能作为模板参数存到结构体；
+        decay_t<F> 统一剥离引用、cv 限定，得到纯粹的值类型，保证 System<T> 存的是实体类型，而非引用。*/
 
 } // namespace talos::scheduler::system

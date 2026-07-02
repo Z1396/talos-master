@@ -28,6 +28,16 @@ constexpr uint8_t INDEX_MASK = 0x03; // Bits 0-1: 槽位索引 (0-2)
  */
 template <typename T>
 struct TripleBufferLayout {
+    /*std::atomic<uint8_t> state{1}; 直接列表初始化（C++11 统一初始化，工业项目首选）
+
+    std::atomic<uint8_t> state = 1; 拷贝初始化     
+     不推荐
+     执行流程：
+        先用1构造一个临时std::atomic<uint8_t>临时对象；
+        尝试调用拷贝构造函数把临时对象拷贝给state；
+        由于std::atomic删除了拷贝构造函数，理论上这里存在语法坑，但是编译器做了 ** 拷贝消除（copy elision）** 优化，直接等价构造，代码能跑。
+
+    std::atomic<uint8_t> state(1); 直接构造初始化（圆括号）     不推荐： 和列表初始化逻辑接近，但不限制窄转换；函数声明歧义、无类型保护*/   
     std::atomic<uint8_t> state{1}; // ready 槽位初始为 1，三槽位彼此分离
     uint8_t write_idx{0};          // 生产者写入槽位
     uint8_t read_idx{2};           // 消费者读取槽位

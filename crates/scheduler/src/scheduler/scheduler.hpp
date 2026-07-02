@@ -557,6 +557,10 @@ auto Scheduler::add_system(std::string&& name, F&& func) -> void {
     auto policy = make_policy_info<Policy>();
 
     // 构造系统条目
+    /*前缀 . + 成员名，显式指定给哪个字段赋值；
+    赋值顺序可以和结构体内部定义顺序无关；
+    没写的成员会执行值初始化（内置类型零初始化、类默认构造）；
+    最后一行末尾允许带逗号 ,，编译器兼容，方便批量增删代码。*/
     SystemEntry entry{
         .system = std::move(system),
         .policy = policy,

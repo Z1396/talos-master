@@ -86,8 +86,12 @@ enum class channel_kind {
  * 职责：对接底层原始队列，对外提供统一的读接口
  */
 template <
-    typename T, typename Topic = DefaultTopic, typename UnderlyingChannel = void,
-    channel_kind Kind = static_cast<channel_kind>(0), bool HasNew = false>
+    typename T, 
+    typename Topic = DefaultTopic, 
+    typename UnderlyingChannel = void,
+    channel_kind Kind = static_cast<channel_kind>(0), 
+    bool HasNew = false>
+    
 struct basic_channel {
     // 对外暴露类型：遵循统一组件规范
     using value_type           = T;
@@ -257,8 +261,11 @@ using spsc_mut =
  */
 template <typename T, typename Topic = DefaultTopic>
 using spmc = basic_channel<
-    T, Topic, typename primitive::SpmcChannel<T>::Reader, channel_kind::spmc_reader,
-    true   // SPMC 启用 has_new() 判断新数据
+    T,                                  // 参数1：消息负载类型
+    Topic,                              // 参数2：话题类型
+    typename primitive::SpmcChannel<T>::Reader, // 参数3：读取器实现类
+    channel_kind::spmc_reader,          // 参数4：通道枚举类型标记
+    true                                // 参数5：特性开关：开启has_new()接口
 >;
 
 /**
