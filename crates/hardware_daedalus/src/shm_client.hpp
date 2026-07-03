@@ -342,6 +342,12 @@ public:
     }
 
     /**
+     * @brief 消费者：读取相机内参（单变量，无三缓冲）
+     * @return CameraInfo 相机内参结构体（焦距、主点、畸变系数、分辨率）
+     */
+    [[nodiscard]] const CameraInfo& camera_info() const { return meta_->camera_info; }
+
+    /**
      * @brief 生产者：全局写入相机内参（单变量覆盖，无缓冲）
      */
     void publish_camera_info(const CameraInfo& info) const { meta_->camera_info = info; }

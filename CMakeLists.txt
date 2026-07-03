@@ -41,9 +41,24 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(TALOS_INSTALL_BIN_DIR "${PROJECT_SOURCE_DIR}/bin")
 
 # 获取项目源码绝对真实路径（消除软链接影响），用于编译日志脱敏
+#参数 1：输出变量
+#PROJECT_SOURCE_DIR_ABS
+#解析完成后的结果会存到这个变量，后面代码直接使用。
+#参数 3：处理模式 REALPATH
+#核心关键字：
+#REALPATH：递归解析所有软链接（符号链接），返回硬盘上真实物理路径；
+#自动消除 .、.. 相对路径片段；
+#如果路径不存在也不会报错，尽可能规范化路径字符串。
 get_filename_component(PROJECT_SOURCE_DIR_ABS "${CMAKE_SOURCE_DIR}" REALPATH)
 
 # GCC/Clang专属编译参数：路径脱敏，报错/日志中绝对源码路径替换为空，保护开发环境目录结构
+#语法规则
+#-fmacro-prefix-map=OLD=NEW
+#含义：编译过程中，把源码里所有出现的 OLD 字符串替换成 NEW。
+#这里：
+#-fmacro-prefix-map=${PROJECT_SOURCE_DIR_ABS}/=
+#OLD = 项目源码真实绝对路径（末尾带 /）
+#NEW = 空字符串
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-fmacro-prefix-map=${PROJECT_SOURCE_DIR_ABS}/=)
 endif ()
@@ -98,9 +113,15 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 # ==============================================================================
 # RPATH 动态链接库运行时搜索路径配置（工程离线运行核心）
 # Linux $ORIGIN / macOS @loader_path 代表当前可执行/库自身所在目录
+#@loader_path：macOS 动态库相对自身路径关键字
+#$ORIGIN：Linux 动态库相对自身路径关键字
 # 实现：拷贝bin文件夹到任意设备可直接运行，无需配置LD_LIBRARY_PATH
 # ==============================================================================
 # 区分操作系统设置基础rpath标识
+#2. CMake 如何判断当前是 macOS（Apple）
+#CMake 内部会检测系统底层标识：
+#读取 CMAKE_SYSTEM_NAME 系统名称；
+#如果系统内核是 Darwin（macOS 底层内核叫 Darwin），自动把内置变量 APPLE 置为 TRUE，否则 FALSE。
 if(APPLE)
     set(TALOS_INSTALL_RPATH "@loader_path")
 else()
@@ -109,6 +130,12 @@ endif()
 
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)  # 将链接阶段依赖库路径写入rpath
 set(CMAKE_BUILD_RPATH_USE_ORIGIN TRUE)        # 编译阶段构建产物启用$ORIGIN规则
+# 含义
+# CMAKE_INSTALL_RPATH 是 CMake 全局内置变量，定义安装打包后二进制内置的运行时库搜索路径。
+# 你的工程：
+# Linux：TALOS_INSTALL_RPATH = "$ORIGIN"
+# macOS：TALOS_INSTALL_RPATH = "@loader_path"
+# 作用：打包后 bin 文件夹内的程序，运行时优先在自身所在文件夹查找依赖动态库，实现离线拷贝即用。
 set(CMAKE_INSTALL_RPATH "${TALOS_INSTALL_RPATH}")
 
 # 适配micromamba conda开发环境：自动提取conda库目录注入rpath
@@ -692,6 +719,8 @@ function(talos_collect_imported_shared_libraries out_var)
 endfunction()
 
 # 基础待安装目标集合：自有动态库、所有可执行程序
+# 注意：此列表假设所有目标均已编译（使用 cmake --build build 无 --target 参数）
+# 若使用 ./build.sh 默认模式（仅编译 talos），需先执行 cmake --build build 编译全部目标
 set(TALOS_INSTALL_TARGETS
         foxglove_cpp
         quanta
