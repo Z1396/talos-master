@@ -59,9 +59,14 @@ get_filename_component(PROJECT_SOURCE_DIR_ABS "${CMAKE_SOURCE_DIR}" REALPATH)
 #-fmacro-prefix-map=${PROJECT_SOURCE_DIR_ABS}/=
 #OLD = 项目源码真实绝对路径（末尾带 /）
 #NEW = 空字符串
+# 4. 区分容易混淆的两个参数
+# -fmacro-prefix-map：只改 __FILE__ 这类预处理宏字符串（代码运行时打印的路径）
+# -fdebug-prefix-map：只改调试信息（gdb 断点、addr2line 看到的源码路径）
+# -ffile-prefix-map=A=B = 同时开启上面两个，一次性替换宏 + 调试符号路径
+# 你这条只处理运行时打印的文件名字符串，不影响 gdb 调试路径。
 if (CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-fmacro-prefix-map=${PROJECT_SOURCE_DIR_ABS}/=)
-endif ()
+endif()
 
 # ==============================================================================
 # 调试模块1：AddressSanitizer 内存消毒器
@@ -157,9 +162,18 @@ include(cmake/calibration.cmake)
 
 # 统一给fmt、spdlog第三方库设置RPATH打包属性
 foreach(_runtime_target IN ITEMS fmt spdlog)
+    # 判断：当前工程中是否存在名为 ${_runtime_target} 的编译目标（库/可执行文件）
+    # TARGET 是 CMake 内置判断关键字：检查是否已定义该编译目标（add_library / add_executable 创建的目标）。
+    # 加双引号 "${_runtime_target}" 防止变量为空、带空格时报语法错误，更安全。
+    # 作用：防御性判断
+    # 循环遍历 fmt /spdlog 这类第三方库时，如果某些场景下该库未编译导入（例如系统自带、仅头文件库），
+    # 不存在对应 TARGET，此时跳过设置属性，避免 CMake 报「目标不存在」致命错误。
     if(TARGET "${_runtime_target}")
+        # 给该目标设置两个RPATH相关属性
         set_target_properties(${_runtime_target} PROPERTIES
+            # 编译阶段就使用安装路径的rpath，而非构建目录临时rpath
             BUILD_WITH_INSTALL_RPATH TRUE
+            # 指定程序安装后的运行时库搜索路径（RPATH）
             INSTALL_RPATH "${TALOS_INSTALL_RPATH}"
         )
     endif()
@@ -192,8 +206,21 @@ target_compile_definitions(toml_impl PUBLIC
 # magic_enum 编译期枚举反射头文件库
 # 限制枚举数值范围0~16，减少模板实例化编译膨胀，适配机器人有限枚举ID
 # ------------------------------
+# 创建一个INTERFACE类型的虚拟库目标，名称为magic_enum
+# INTERFACE含义：纯头文件库，没有.cpp实现文件，不会编译生成.a/.lib静态库文件
+# 仅用于打包统一配置：头文件路径、全局宏、编译选项，供其他目标一键继承
 add_library(magic_enum INTERFACE)
+
+# 给magic_enum这个虚拟库添加头文件搜索目录
+# INTERFACE修饰：所有链接magic_enum的程序/库，自动继承该头文件路径，无需重复配置
+# 3dparty/magic_enum：magic_enum头文件所在的文件夹，让代码#include <magic_enum.hpp>能找到头文件
 target_include_directories(magic_enum INTERFACE 3dparty/magic_enum)
+
+# 为使用magic_enum的代码全局预定义两个宏
+# INTERFACE修饰：只要链接该库，当前项目所有代码自动带上这两个宏定义
+# MAGIC_ENUM_RANGE_MIN=0：限定枚举反射扫描最小值为0
+# MAGIC_ENUM_RANGE_MAX=16：限定枚举反射扫描最大值为16
+# 作用：缩小magic_enum枚举遍历范围，减少编译体积、降低嵌入式编译耗时与内存占用
 target_compile_definitions(magic_enum INTERFACE
         MAGIC_ENUM_RANGE_MIN=0
         MAGIC_ENUM_RANGE_MAX=16
@@ -538,6 +565,7 @@ target_precompile_headers(fcs_visualization PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 # ==============================================================================
 if(TALOS_BUILD_TESTING)
     file(GLOB FCS_TESTS "${CMAKE_CURRENT_SOURCE_DIR}/src/fcs/tests/*_test.cpp")
+    #旧版foreach写法foreach(循环变量 列表)
     foreach(test_file ${FCS_TESTS})
         # 提取文件名作为测试程序名
         get_filename_component(test_name ${test_file} NAME_WE)

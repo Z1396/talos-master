@@ -389,9 +389,11 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
     auto expected = LifecycleState::Built;
     if (!lifecycle_.compare_exchange_strong(
             expected, LifecycleState::Running, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+            std::memory_order_acquire)) 
+    {
         // CAS交换失败，判断当前实际状态
-        if (expected == LifecycleState::Running) {
+        if (expected == LifecycleState::Running) 
+        {
             return std::unexpected(SchedulerError::AlreadyRunning);
         }
         // 未执行build，拓扑未初始化，禁止启动
@@ -399,7 +401,8 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
     }
 
     // 批量创建所有FixedRate定时后台线程
-    for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) {
+    for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) 
+    {
         auto& entry = fixed_rate_systems_[i];
         // 线程运行上下文，保存系统、调度器、生命周期等指针
         FixedRateContext ctx{
@@ -429,6 +432,24 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
 }
 
 /// 停止调度器：生命周期切回Built，唤醒阻塞等待的计算循环
+/* T 为原子封装类型，如 enum、int、bool
+bool compare_exchange_strong(
+    T& expected,          // 传入预期值，失败时会被改写为当前原子真实值
+    T desired,             // CAS 成功后要写入的新值
+    std::memory_order success,  // CAS 修改成功时的内存序
+    std::memory_order failure  // CAS 修改失败时的内存序
+) noexcept;*/
+ /*最简小例子
+std::atomic<int> num = 5;
+int exp = 5;
+// 预期5，想改成10
+bool ok = num.compare_exchange_strong(exp, 10);
+num 现在是 5 == exp，修改成功 → num=10，ok=true
+
+std::atomic<int> num = 8;
+int exp = 5;
+bool ok = num.compare_exchange_strong(exp, 10);
+num=8≠5，修改失败 → exp 自动变成 8，ok=false*/
 void Scheduler::stop() noexcept {
     // CAS将Running状态切回Built
     auto expected = LifecycleState::Running;
@@ -436,6 +457,9 @@ void Scheduler::stop() noexcept {
         expected, LifecycleState::Built, std::memory_order_acq_rel, std::memory_order_acquire);
 
     // 清除暂停标记，唤醒等待的计算循环线程
+    /*1. 最外层一对 {}：局部作用域（代码块）
+    单独用大括号凭空造出一个临时作用域，作用只有一个：
+    控制 lock_guard 的生命周期，出括号自动解锁。*/
     {
         std::lock_guard lock(pause_mutex_);
         pause_requested_.store(false, std::memory_order_release);
@@ -1854,87 +1878,118 @@ auto Scheduler::get_stats_json() const -> std::string {
     return root.dump();
 }
 
-// ============================================================================
-// FixedRate 定时后台线程执行逻辑
-// 每个FixedRate系统独立一条pthread线程，支持CPU亲和、实时优先级、固定周期/无限速两种模式
-// ============================================================================
 void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
-    // 运行状态判断闭包：读取调度器全局生命周期原子标记
+    // 定义循环持续运行判断闭包
+    // 读取外部传入的调度器生命周期原子状态，判断调度器是否仍处于可运行状态
+    // memory_order_acquire：保证读到其他线程release写入的最新生命周期状态
     const auto keep_running = [&ctx] {
         return is_running_state(ctx.lifecycle->load(std::memory_order_acquire));
     };
 
-    // 1. 绑定CPU核心亲和性，隔离线程到指定CPU，减少上下文切换
+    // ===================== 1、CPU核心绑定，线程隔离优化 =====================
+    // 配置中cpu_affinity >= 0 代表需要将本线程绑定至指定逻辑CPU核心
     if (ctx.policy.cpu_affinity >= 0) {
+        // 调用底层工具类将当前线程锁死到目标核心
         auto result = primitive::ThreadAffinity::pin_to_core(
+            // 策略核心号是有符号int，转无符号uint32传给绑核接口
             static_cast<std::uint32_t>(ctx.policy.cpu_affinity));
-        // 绑定失败仅打印警告，不终止线程
+        // 判断绑核操作是否失败
         if (!result) {
+            // 输出警告日志：打印当前系统名称 + 底层返回的错误描述
+            // 绑核失败属于非致命错误，仅告警不终止线程运行
             SPDLOG_WARN("{}: {}", ctx.system->meta().name, result.error());
         }
     }
 
-    // 2. 设置Linux实时调度优先级（SCHED_FIFO/SCHED_RR）
+    // ===================== 2、设置实时调度优先级（Linux SCHED_FIFO） =====================
+    // thread_priority > 0 代表启用实时调度，0/负数使用系统默认分时调度
     if (ctx.policy.thread_priority > 0) {
+        // 初始化实时调度配置结构体
         primitive::ThreadAffinity::RealtimeConfig rt_config{};
+        // 将配置的实时优先级赋值，转为uint8_t适配底层接口参数类型
         rt_config.priority = static_cast<std::uint8_t>(ctx.policy.thread_priority);
+        // 链式判断：调用设置实时优先级接口，失败则打印警告
         if (auto result = primitive::ThreadAffinity::set_realtime_priority(rt_config); !result) {
             SPDLOG_WARN("{}: {}", ctx.system->meta().name, result.error());
         }
     }
 
+    // 读取配置的运行频率，单位Hz（每秒执行次数）
     const auto frequency        = ctx.policy.frequency_hz;
-    // 绑定当前系统对应的性能统计对象引用
+    // 绑定当前系统专属的性能统计对象引用，用于记录循环耗时、延迟直方图
     auto& stats                 = ctx.scheduler->fixed_rate_stats_[ctx.system_index];
-    // 判断系统是否存在输出通道（执行后会唤醒下游）
+    // 判断当前系统是否属于输出型系统：执行完成后会产生数据传递给下游系统
     const bool write_mode       = counts_written_calls(ctx.system->meta());
-    // 执行结果记录闭包：更新计数、写入延迟直方图、按需触发下游唤醒
+    // 执行完成统计闭包：统一处理计数、延迟统计、下游唤醒逻辑
     const auto record_execution = [&](const bool written, const std::uint64_t elapsed) {
+        // 宽松内存序：仅本地统计自增，无跨线程同步需求，性能最优
+        // 全局总执行次数 +1
         stats.execution_count.fetch_add(1, std::memory_order_relaxed);
-        // 仅产生有效输出时记录运行次数与延迟
+
+        // 两种场景需要记录有效计算延迟：
+        // 1. 系统本身不是输出型系统(write_mode=false)，每次执行都算有效计算
+        // 2. 输出型系统，本次执行成功产出数据(written=true)
         if (!write_mode || written) {
+            // 有效执行计数自增
             stats.record_count.fetch_add(1, std::memory_order_relaxed);
+            // 将本次执行耗时存入延迟直方图，用于统计平均/最大/分位延迟
             stats.latency_hist.record(elapsed);
         }
-        // 产生输出 且 配置允许唤醒下游 → 调用notify置位就绪掩码
+
+        // 满足两个条件则唤醒下游依赖系统：
+        // 1. 本次执行产出有效输出数据 written=true
+        // 2. 配置开启自动通知下游 notifies=true
+        // [[likely]] 编译器提示：该分支是高频正常路径，优化分支预测
         if (written && ctx.policy.notifies) [[likely]] {
+            // 调度器通知接口：将当前系统对应的就绪掩码置1，下游计算循环会检测并执行
             ctx.scheduler->notify(ctx.system_index);
         }
     };
 
-    // 模式1：频率0，无限制全速循环运行（无定时休眠）
+    // ===================== 模式1：frequency=0 无固定周期，全速无限循环 =====================
     if (frequency == 0) {
+        // 调度器未停止则持续循环执行系统逻辑
         while (keep_running()) {
+            // 延迟探针：高精度计时工具，记录单次系统执行耗时
             primitive::LatencyProbe probe;
-            // 执行系统业务逻辑，返回值：是否产生数据输出
+            // 执行当前系统业务逻辑，入参是全局世界数据；返回值bool代表是否产生输出数据
             const bool written = ctx.system->run(*ctx.world);
-            // 获取本次执行耗时纳秒
+            // 获取从探针创建到当前的总执行耗时，单位纳秒
             const auto elapsed = probe.elapsed_ns();
 
+            // 调用统计闭包，统一更新计数、延迟、下游唤醒
             record_execution(written, elapsed);
         }
+        // 调度器停止，退出该线程函数
         return;
     }
 
-    // 模式2：固定周期定时运行
-    [[assume(frequency > 0)]]; // 编译器提示消除除零优化分支
-    // 计算单周期纳秒时长：1s / 频率
+    // ===================== 模式2：frequency>0 固定频率定时循环 =====================
+    // [[assume(frequency > 0)]] 编译器提示，消除编译器除零警告、辅助优化
+    [[assume(frequency > 0)]];
+    // 计算单次周期纳秒时长：1秒(1e9纳秒) / 目标频率Hz
     const auto period =
         std::chrono::nanoseconds(1'000'000'000ULL / static_cast<std::uint64_t>(frequency));
-    // 下一次执行的时间点
+    // 记录下一次需要执行任务的时间点，初始为当前时刻
     auto next_tick = Clock::now();
 
+    // 调度器运行时持续定时执行
     while (keep_running()) [[likely]] {
-        // 推进下一次定时点
+        // 把下一次执行时间点向后推移一个完整周期
         next_tick += period;
 
+        // 开启计时探针
         primitive::LatencyProbe probe;
+        // 执行业务系统逻辑，获取是否产出输出
         const bool written = ctx.system->run(*ctx.world);
+        // 读取本次执行耗时ns
         const auto elapsed = probe.elapsed_ns();
 
+        // 统一执行统计、唤醒逻辑
         record_execution(written, elapsed);
 
-        // 休眠至下一个周期，高精度定时
+        // 高精度阻塞休眠，直到下一个周期时间点再唤醒线程
+        // 相比sleep_for：解决任务执行耗时导致周期漂移累积问题
         std::this_thread::sleep_until(next_tick);
     }
 }
@@ -1945,93 +2000,124 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
 // ============================================================================
 void Scheduler::run_compute_loop() {
     // 自适应空闲退避三级策略：自旋 → 让出CPU → 短休眠
-    // 目的：低负载时降低CPU占用，高负载无延迟
-    constexpr std::size_t SPIN_LIMIT  = 100;  // 自旋最大迭代次数
-    constexpr std::size_t YIELD_LIMIT = 1000;  // 让出CPU最大迭代次数
-    constexpr auto SLEEP_DURATION     = std::chrono::microseconds(10); // 低负载休眠时长
-    std::size_t idle_count            = 0;     // 连续空闲计数
+    // 设计目标：高负载有任务时零延迟、低负载无任务时降低CPU空转占用
+    // 阶段1：短时自旋，CPU空跑，不放弃时间片，唤醒后立刻执行业务，延迟最低
+    // 阶段2：std::this_thread::yield() 主动放弃当前CPU时间片，交给其他就绪线程
+    // 阶段3：短时间休眠，内核收回CPU，彻底降低整机CPU使用率
+    constexpr std::size_t SPIN_LIMIT  = 100;        // 第一阶段自旋最大累计空闲次数
+    constexpr std::size_t YIELD_LIMIT = 1000;       // 第二阶段yield让出CPU最大累计空闲次数
+    constexpr auto SLEEP_DURATION     = std::chrono::microseconds(10); // 第三阶段休眠时长 10微秒
+    std::size_t idle_count            = 0;          // 连续无任务空闲计数，用于切换三级退避策略
 
-    // 是否开启定时打印性能统计
+    // 读取配置：是否定时打印性能统计日志
     const auto should_print = config_.print_stats;
-    // 打印统计间隔5秒
+    // 统计打印固定间隔：5秒输出一次
     auto print_interval     = std::chrono::seconds(5);
+    // 记录上一次打印统计的时间点，用于间隔判断
     auto last_print         = Clock::now();
 
-    // 调度器处于运行状态则持续循环
+    // 主循环：调度器处于Running运行状态时持续循环调度系统任务
+    // [[likely]] 编译器提示：绝大多数情况条件为true，编译器优化分支预测
     while (is_running()) [[likely]] {
-        // 【罕见分支】收到热新增系统暂停请求
+        // 【罕见分支】外部下发暂停指令，需要阻塞当前计算线程
+        // [[unlikely]] 编译器提示：暂停属于低频事件，优化分支预测，不占用快速路径
         if (pause_requested_.load(std::memory_order_acquire)) [[unlikely]] {
+            // 进入暂停逻辑，重置空闲计数器，退出退避状态
             idle_count = 0;
 
-            // 标记主线程已进入暂停状态，通知热更线程
+            // 上锁修改paused_原子标记，对外通知本计算线程已进入暂停阻塞状态
+            // 独立{}局部作用域控制lock_guard生命周期，执行完自动解锁
             {
+                // RAII互斥锁，构造上锁，出作用域自动析构解锁，异常安全
                 std::lock_guard lock(pause_mutex_);
+                // release内存序：本次标记修改对其他读取paused_的线程全局可见
                 paused_.store(true, std::memory_order_release);
             }
+            // 唤醒所有等待暂停状态的外部线程
             pause_cv_.notify_all();
 
-            // 阻塞等待恢复信号
+            // 阻塞等待恢复信号，unique_lock支持条件变量wait自动解锁/重新上锁
             {
                 std::unique_lock lock(pause_mutex_);
+                // wait阻塞条件：两个任意满足其一即可唤醒线程
+                // 1. pause_requested_恢复为false（收到恢复指令）
+                // 2. 调度器整体停止is_running()=false（停机信号）
                 pause_cv_.wait(lock, [this] {
+                    // acquire读取保证拿到最新暂停标记与调度器运行状态
                     return !pause_requested_.load(std::memory_order_acquire) || !is_running();
                 });
+                // 线程被唤醒，清除“正在暂停”标记，release同步修改
                 paused_.store(false, std::memory_order_release);
             }
 
-            // 恢复后调度器已停止，直接退出循环
+            // 唤醒后校验调度器状态：如果已经下发停机指令，直接跳出主循环终止计算
             if (!is_running()) {
                 break;
             }
+            // 仅收到恢复暂停信号，回到循环头部继续正常调度
             continue;
         }
 
-        // 原子交换取出当前所有就绪系统掩码，同时清空就绪标记
+        // 原子交换操作：取出当前待执行系统掩码，同时把全局就绪掩码置0清空
+        // acq_rel复合内存序：读旧掩码带acquire、写0清空带release，同步跨线程就绪标记
         const auto ready = ready_systems_.exchange(0, std::memory_order_acq_rel);
 
+        // ready != 0 代表存在需要执行的ECS系统任务，正常业务路径（高频分支）
         if (ready != 0) [[likely]] {
-            // 存在待执行任务，重置空闲计数器
+            // 存在任务，清空连续空闲计数，退出退避逻辑
             idle_count = 0;
 
+            // 延迟计时探针，用于统计单次系统分层执行耗时（纳秒精度）
             primitive::LatencyProbe probe;
-            // 分层并行执行所有就绪系统
+            // 根据就绪掩码分层执行对应ECS系统，返回执行结果（包含本轮新产生的延迟就绪掩码）
             const auto result  = run_compute_selective(ready);
+            // 获取从probe创建到当前的总执行耗时（单位ns）
             const auto elapsed = probe.elapsed_ns();
 
-            // 更新全局计算循环统计
+            // 宽松内存序更新全局统计：仅内部读取统计，无跨线程同步依赖，性能最优
+            // 全局总执行循环次数 +1
             compute_cycles_.fetch_add(1, std::memory_order_relaxed);
+            // 累加本次执行耗时到总耗时统计
             compute_total_time_ns_.fetch_add(elapsed, std::memory_order_relaxed);
+            // 覆盖更新上一轮单次循环耗时，用于实时观测单次延迟
             compute_last_time_ns_.store(elapsed, std::memory_order_relaxed);
-            // 本轮执行产生新就绪系统，合并回全局就绪掩码
+            // 本轮系统执行过程中产生了延后执行的系统掩码，或运算合并回全局就绪标记等待下一轮调度
             if (result.deferred_mask != 0) {
+                // release写屏障，保证新就绪掩码对下一轮exchange读取可见
                 ready_systems_.fetch_or(result.deferred_mask, std::memory_order_release);
             }
 
-            // 到达打印间隔则输出性能统计
+            // 配置开启打印统计时，才执行间隔判断（低频分支）
             if (should_print) [[unlikely]] {
+                // 获取当前高精度时间戳
                 const auto now = Clock::now();
+                // 判断距离上一次打印是否达到5秒打印间隔
                 if (now - last_print >= print_interval) [[unlikely]] {
+                    // 输出全部性能统计指标：循环次数、平均耗时、单次最大延迟等
                     print_stats();
+                    // 更新本次打印时间戳，重置计时窗口
                     last_print = now;
                 }
             }
         } else {
-            // 无就绪任务，进入三级退避
-            ++idle_count;
+            // ready == 0，无任何就绪系统任务，进入三级空闲退避逻辑
+            ++idle_count; // 连续空闲计数自增，用于切换退避阶段
 
             if (idle_count <= SPIN_LIMIT) {
-                // 阶段1：CPU自旋，延迟最低
+                // 阶段1：短时间自旋等待，CPU空循环不放弃时间片
+                // SPIN_HINT() 平台内置自旋提示指令，减少CPU功耗、优化缓存
                 SPIN_HINT();
             } else if (idle_count <= YIELD_LIMIT) {
-                // 阶段2：让出CPU给其他线程
+                // 阶段2：自旋次数超过阈值，主动让出当前CPU时间片
+                // 内核调度其他就绪线程运行，本线程重新进入就绪队列等待调度
                 std::this_thread::yield();
             } else {
-                // 阶段3：短休眠，大幅降低CPU占用
+                // 阶段3：长时间无任务，执行短休眠，内核挂起线程，大幅降低CPU占用
                 std::this_thread::sleep_for(SLEEP_DURATION);
             }
         }
     }
-    // 调度器退出前，顺序执行所有注册的清理钩子
+    // 主循环正常退出 = 调度器标记为停止，执行所有注册的停机清理钩子函数
     for (auto& hook : shutdown_hooks_) {
         hook();
     }

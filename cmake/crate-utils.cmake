@@ -36,6 +36,13 @@
 function(crate)
     # cmake_parse_arguments：解析本函数传入的命名参数
     # 格式：cmake_parse_arguments(前缀 无值开关列表 单值参数列表 多值参数列表 原始参数${ARGN})
+    #     cmake_parse_arguments(
+    #     PREFIX                     解析后所有变量的前缀，比如填 ARG，解析出的变量叫 ARG_NAME、ARG_TYPE
+    #     OPTIONS                    无值开关（布尔参数，只写关键字 = ON，不写 = OFF），分号分隔列表
+    #     ONE_VALUE_KEYWORDS         单值参数，关键字后面只能跟 1 个值
+    #     MULTI_VALUE_KEYWORDS       多值参数，关键字后面可以跟一串值
+    #     ARGN                       捕获当前函数调用时传入的所有原始参数
+    # )
     cmake_parse_arguments(
         ARG                                 # 解析后变量前缀，所有参数都会变成 ARG_xxx
         ""                                  # 无布尔开关（如 OPTIONAL 这种不带值参数）
@@ -163,15 +170,15 @@ function(crate)
         if(NOT EXISTS "${EXPORT_HPP_FILE}")
             # 写入跨平台导出宏：Linux/macOS用visibility default，Windows需扩展此处
             file(WRITE "${EXPORT_HPP_FILE}"
-"#pragma once
+                "#pragma once
 
-// ${ARG_NAME} library export macros
-#ifdef ${CRATE_NAME_UPPER}_EXPORTS
-#define ${CRATE_NAME_UPPER}_API __attribute__((visibility(\"default\")))
-#else
-#define ${CRATE_NAME_UPPER}_API
-#endif
-")
+                // ${ARG_NAME} library export macros
+                #ifdef ${CRATE_NAME_UPPER}_EXPORTS
+                #define ${CRATE_NAME_UPPER}_API __attribute__((visibility(\"default\")))
+                #else
+                #define ${CRATE_NAME_UPPER}_API
+                #endif
+                ")
             message(STATUS "Generated ${EXPORT_HPP_FILE}")
         endif()
     endif()
