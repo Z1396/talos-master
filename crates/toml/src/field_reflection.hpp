@@ -82,6 +82,11 @@ constexpr void for_each_field_impl(T&& obj, F&& func, std::index_sequence<Is...>
 /// @tparam T 待反射的聚合结构体类型
 /// @tparam F 回调函数，接收 (std::string_view name, auto&& field_val)
 /// @param obj 待遍历的结构体实例，支持左值/右值/const对象万能转发
+/*关键知识点 ：
+
+- T&& 在模板中是 转发引用 （万能引用）
+- T&& 在非模板中是 右值引用 （只接受右值）
+- std::forward<T>() 实现完美转发，保留原始值类别*/
 template <typename T, typename F>
 constexpr void for_each_field(T&& obj, F&& func) {
     // 剥离对象修饰符，得到纯净裸类型，用于获取字段数量

@@ -62,7 +62,10 @@ template <typename T>
 /// @return 成功void，失败返回错误信息
 template <detail::TableReadable T>
 [[nodiscard]] std::expected<void, std::string> read_into(const toml::table& table, T& out) {
-    // 临时构造空结构体，防止半填充污染原有数据
+    /*为什么用临时结构体？
+    
+    原因 ：防止 半填充污染 。如果直接解析填入 out ，中途某字段解析失败， 
+    out 已被部分修改，数据不一致。使用临时结构体，成功后一次性移动赋值，保证 原子性 。*/
     T parsed{};
     // 递归解析table所有字段填入临时结构体
     auto result = detail::read_object_into(table, parsed);
