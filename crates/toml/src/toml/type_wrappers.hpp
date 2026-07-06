@@ -83,6 +83,11 @@ struct required {
     [[nodiscard]] constexpr bool has_value() const noexcept { return value.has_value(); }
 
     // -------------------------- get() 取值接口（全部noexcept(false)，无值时抛异常） --------------------------
+    /*写法	调用对象要求	返回值
+    get() &	仅左值对象	T&
+    get() const &	const 左值	const T&
+    get() &&	临时右值	T&&*/
+    //noexcept(false)相当于不写noexcept，会主动抛出异常，提前暴露必填字段缺失问题、而且也为了接口统一
     // 左值对象取出T引用
     [[nodiscard]] constexpr T& get() & noexcept(false) { return value.value(); }
     // const左值取出const T引用
