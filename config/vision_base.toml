@@ -1,211 +1,251 @@
+# ====================== 顶层全局视觉基础配置 ======================
+# 推理后端选择，四选一，对应不同硬件平台
+# Traditional：传统OpenCV图像处理（无AI，纯轮廓/二值化装甲识别）
+# OnnxRuntime：通用CPU/GPU ONNX推理，跨平台通用
+# TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
+# Axera：爱芯AX650嵌入式NPU专用模型推理
 backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
-detect_color = "Blue"
-capabilities = ["Armor"]
+detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
+capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、LDM大符、Rune小符、Energy能量机关
 
+# ====================== [quanta_filter] 图像预处理流水线 ======================
+# 相机原图预处理模块：降噪、锐化、饱和度、轮廓增强、量化压缩
 [quanta_filter]
-enable = true
-enable_saturation = true
-saturation = 1.0
-enable_denoise_luma = true
-enable_denoise_chroma = true
-enable_denoise_tl = true
-denoise_tl = 0.0
-enable_denoise_tc = true
-denoise_tc = 0.0
+enable = true                      # 总开关：是否开启整套图像预处理管线
+enable_saturation = true           # 开启饱和度调节
+saturation = 1.0                   # 饱和度系数，>1更鲜艳，<1褪色
+enable_denoise_luma = true         # 亮度通道降噪开关
+enable_denoise_chroma = true       # 色度通道降噪开关
+enable_denoise_tl = true           # 时域亮度降噪（多帧平滑，抑制画面频闪噪点）
+denoise_tl = 0.0                   # 时域亮度降噪强度
+enable_denoise_tc = true           # 时域色度降噪
+denoise_tc = 0.0                   # 时域色度降噪强度
+
+# 三级亮度锐化，分层强化装甲灯条边缘
 enable_sharpen1_luma = true
-sharpen1_luma = 2.0
+sharpen1_luma = 2.0                # 一级亮度锐化强度
 enable_sharpen2_luma = true
-sharpen2_luma = 0.0
+sharpen2_luma = 0.0                # 二级亮度锐化强度
 enable_sharpen3_luma = true
-sharpen3_luma = 0
+sharpen3_luma = 0                  # 三级亮度锐化强度
+
+# 三级色度锐化，强化红蓝装甲色彩边缘
 enable_sharpen1_chroma = true
 sharpen1_chroma = 2.0
 enable_sharpen2_chroma = true
 sharpen2_chroma = 0.0
 enable_sharpen3_chroma = true
 sharpen3_chroma = 0.0
-enable_luma_quantization = false
-luma_levels = 16
-enable_chroma_quantization = false
-chroma_levels = 16
-enable_contour = false
-contour_strength = 1.0
-contour_low_thresh = 36
-contour_high_thresh = 96
-contour_width = 1
-qp_delta_map = false
-qp_edge_delta = 0
-qp_interior_delta = 16
-enable_psy_rd = true
+
+enable_luma_quantization = false   # 亮度通道量化压缩（降低色阶，减少算力，嵌入式用）
+luma_levels = 16                   # 量化后亮度分级
+enable_chroma_quantization = false # 色度量化
+chroma_levels = 16                 # 色度分级
+
+enable_contour = false             # 是否开启轮廓增强滤波
+contour_strength = 1.0             # 轮廓强化强度
+contour_low_thresh = 36            # 轮廓Canny低阈值
+contour_high_thresh = 96           # 轮廓Canny高阈值
+contour_width = 1                  # 轮廓线条粗细
+
+qp_delta_map = false               # 视频编码量化参数动态调整开关
+qp_edge_delta = 0                  # 边缘区域编码QP偏移（边缘更清晰则降低QP）
+qp_interior_delta = 16             # 平坦区域QP偏移（省带宽）
+
+enable_psy_rd = true               # 人眼视觉优化：主观率失真优化
 psy_rd = 0.0
-enable_psy_trellis = true
+enable_psy_trellis = true          # 码率控制Trellis优化，提升画质
 psy_trellis = 0.0
 
+# 亮度通道高斯降噪子配置
 [quanta_filter.denoise_luma]
-kernel_size = 5
-sigma_x = 1.0
-sigma_y = 1.0
+kernel_size = 5                    # 高斯核大小 5x5
+sigma_x = 1.0                      # X方向高斯模糊系数
+sigma_y = 1.0                      # Y方向高斯模糊系数
 
+# 色度通道高斯降噪子配置
 [quanta_filter.denoise_chroma]
-kernel_size = 3
+kernel_size = 3                    # 色度用更小核，避免色彩糊掉
 sigma_x = 1.0
 sigma_y = 1.0
 
+# ====================== [quanta] 图像编码推流参数 ======================
+# WebRTC/本地录像H.264/H.265编码器配置，用于画面回传上位机
 [quanta]
-max_width = 200
-max_height = 200
-gop_size = 20
-framerate = 30
-preset = "fast"
-tune = "ssim"
-intra_refresh = false
-crf = 52
-lookahead = 0
-target_bitrate = 45000
-enVBR = false
-min_bit_rate = 0
-max_bit_rate = 50000
-vbv_bufsize = 10000
-refresh_num = 4
-bframe = 0
-enScenecut = true
-enAqMode = true
-aq_strength = 0.4
+max_width = 200                    # 编码输出最大宽度（缩小码流，降低传输延迟）
+max_height = 200                   # 编码输出最大高度
+gop_size = 20                      # I帧间隔，每20帧一张关键帧
+framerate = 30                     # 编码帧率
+preset = "fast"                    # x264编码预设：ultrafast/fast/medium/slow
+tune = "ssim"                      # 调优目标：ssim画质 / zerolatency低延迟
+intra_refresh = false              # 帧内刷新（弱网防花屏）
+crf = 52                           # CRF恒定画质系数，越大压缩越狠、越模糊
+lookahead = 0                      # 前瞻帧数，0为超低延迟模式
+target_bitrate = 45000             # 目标平均码率 bps
+enVBR = false                      # 可变码率开关
+min_bit_rate = 0                   # 最低码率限制
+max_bit_rate = 50000               # 峰值最大码率
+vbv_bufsize = 10000                # 码率控制缓冲区大小
+refresh_num = 4                    # 帧内刷新行数
+bframe = 0                         # B帧数量，0关闭B帧降低延迟
+enScenecut = true                  # 场景切换自动插入I帧
+enAqMode = true                    # 自适应量化（画面复杂区域分配更多码率）
+aq_strength = 0.4                  # 自适应量化强度
 
-# Required if backend_type = "traditional"
+# ====================== [traditional] 纯OpenCV传统视觉识别参数 ======================
+# backend_type = "Traditional" 时生效，无AI，基于二值化+轮廓匹配装甲板
 [traditional]
-advanced_binary = false
-dark_percentage = 0.5
-binary_threshold = 85
-light_min_ratio = 0.0001
-light_max_ratio = 1.0
-light_max_angle = 40.0
-light_color_diff_thresh = 30
-armor_min_light_ratio = 0.8
-armor_min_small_center_distance = 0.8
-armor_max_small_center_distance = 3.5
-armor_min_large_center_distance = 3.5
-armor_max_large_center_distance = 8.0
-armor_max_angle = 40.0
+advanced_binary = false           # 高级自适应二值化开关
+dark_percentage = 0.5              # 暗场占比阈值，用于自适应曝光二值
+binary_threshold = 85              # 全局二值化分割阈值，提取红蓝灯条
+light_min_ratio = 0.0001           # 灯条最小像素占比（过滤极小噪点轮廓）
+light_max_ratio = 1.0              # 灯条最大像素占比（过滤大面积色块）
+light_max_angle = 40.0             # 灯条倾斜最大角度，超出丢弃
+light_color_diff_thresh = 30       # 灯条色彩差值阈值，筛选敌方颜色
 
-# Classifier configuration (ONNX-based number classification)
-classifier_model_path = "models/mlp_finetuned.onnx"
-classifier_confidence_threshold = 0.1
-classifier_enable_type_filtering = false
-classifier_use_softmax = true
+# 装甲配对几何约束（上下灯条匹配规则）
+armor_min_light_ratio = 0.8               # 两个灯条面积最小比例（大小不能差太多）
+armor_min_small_center_distance = 0.8     # 小型装甲两灯最小中心距离(像素比例)
+armor_max_small_center_distance = 3.5      # 小型装甲两灯最大中心距离
+armor_min_large_center_distance = 3.5      # 大型装甲两灯最小中心距离
+armor_max_large_center_distance = 8.0       # 大型装甲两灯最大中心距离
+armor_max_angle = 40.0                     # 装甲整体倾斜角上限
 
+# ====================== 数字分类器：装甲数字识别MLP ======================
+# 所有推理后端共用，识别装甲板上0-5数字
+classifier_model_path = "models/mlp_finetuned.onnx"  # 数字分类ONNX模型路径
+classifier_confidence_threshold = 0.1               # 分类置信度阈值，低于丢弃
+classifier_enable_type_filtering = false            # 是否过滤无效数字类别
+classifier_use_softmax = true                       # 输出前启用softmax归一化概率
+
+# ====================== [onnx_runtime] ONNX通用CPU/GPU推理配置 ======================
+# backend_type = "OnnxRuntime" 生效，通用跨平台AI装甲检测
 [onnx_runtime]
-model_path = "models/best_fp16.onnx"
-cache_dir = "/tmp/ort_cache"
-confidence_threshold = 0.25
-nms_threshold = 0.30
-top_k = 128
+model_path = "models/best_fp16.onnx"   # 装甲检测ONNX模型文件
+cache_dir = "/tmp/ort_cache"           # 算子优化缓存目录，加速首次加载
+confidence_threshold = 0.25            # 检测框置信度过滤阈值
+nms_threshold = 0.30                   # NMS非极大抑制IOU阈值，去重叠框
+top_k = 128                            # 最多保留前128个候选检测框
 
-# Required if backend_type = "TensorRT"
+# ====================== [tensor_rt] NVIDIA GPU TensorRT加速推理 ======================
+# backend_type = "TensorRT" 生效，Jetson Orin/Xavier/台式RTX专用
 [tensor_rt]
-model_path = "models/best_fp16.onnx"  # Path to ONNX model (will be compiled to TensorRT engine)
-engine_path = "models/best_fp16_sm87_fp16.engine"  # Optional: Path to pre-built TensorRT engine (.engine file)
-engine_cache_dir = "/tmp/tensorrt_cache"  # Directory for caching compiled engines
-device_id = 0  # CUDA device ID
-num_streams = 2  # Number of CUDA streams for concurrent inference
-compute_capability = "87"  # GPU compute capability (e.g., "87" for Jetson Orin, "86" for RTX 3090)
-enable_fp16 = true  # Enable FP16 precision (faster, slightly less accurate)
-enable_dla = true  # Enable DLA accelerator (if available)
-dla_core = 0  # DLA core to use (if enable_dla = true)
+model_path = "models/best_fp16.onnx"          # 原始ONNX模型（编译引擎用）
+engine_path = "models/best_fp16_sm87_fp16.engine" # 预编译TRT引擎文件，跳过编译加速启动
+engine_cache_dir = "/tmp/tensorrt_cache"     # 引擎缓存目录
+device_id = 0                                 # 使用第0号GPU卡
+num_streams = 2                               # CUDA并行流数量，多帧并行推理
+compute_capability = "87"                     # GPU算力版本 sm87=Orin，sm86=RTX30系
+enable_fp16 = true                            # 开启半精度FP16，速度翻倍、显存减半
+enable_dla = true                             # 开启Jetson内置DLA硬件加速器
+dla_core = 0                                  # 使用0号DLA核心
 confidence_threshold = 0.20
 nms_threshold = 0.30
 top_k = 128
 
-# Required if backend_type = "Axera" (AX650 NPU)
+# ====================== [axera] 爱芯AX650 NPU嵌入式推理 ======================
+# backend_type = "Axera" 生效，车载/嵌入式NPU专用量化模型
 [axera]
-model_path = "models/qat_u16_all.axmodel"  # Path to AX650 .axmodel file
-input_width = 768
-input_height = 576
-num_colors = 4
-num_kpts = 4
-num_pairs = 12
-strides = [8, 16, 32]
+model_path = "models/qat_u16_all.axmodel" # AX650量化后模型文件
+input_width = 768                        # 模型输入图像宽
+input_height = 576                        # 模型输入图像高
+num_colors = 4                            # 输出分类通道数
+num_kpts = 4                              # 关键点数量（装甲四角）
+num_pairs = 12                            # 输出配对候选数
+strides = [8, 16, 32]                     # 多尺度检测步长
 confidence_threshold = 0.5
 nms_threshold = 0.10
 top_k = 128
 
+# ====================== [readback_roi] 局部裁剪ROI参数 ======================
+# 跟踪阶段只裁剪目标附近画面推理，大幅降低算力
 [readback_roi]
-enabled = false
-stale_timeout_s = 0.20
-margin_ratio_x = 0.20
-margin_ratio_y = 0.00
-box_size_m = [0.6, 0.6, 0.6]
+enabled = false                      # ROI局部推理总开关
+stale_timeout_s = 0.20               # 目标丢失超时，超时切回全图检测
+margin_ratio_x = 0.20                # ROI框左右扩张比例
+margin_ratio_y = 0.00                # ROI框上下扩张比例
+box_size_m = [0.6, 0.6, 0.6]         # ROI基础尺寸(米)，随距离自适应缩放
 
+# ====================== [ldm] 大符（能量机关）轮廓几何检测主参数 ======================
+# LDM=Large Det Marker 八边形能量机关主识别滤波约束
 [ldm]
-min_blob_area_px = 4
-min_blob_fill_ratio = 0.35
-min_blob_aspect_ratio = 0.35
-max_blob_aspect_ratio = 4.0
-min_pair_center_dy_ratio = 1.0
-max_pair_center_dy_ratio = 12.0
-max_pair_size_delta_ratio = 0.75
-max_gap_cv = 0.65
-min_preliminary_candidate_score = 0.80
-min_preliminary_candidate_score_two_pair = 0.87
-min_two_pair_mean_center_dy_px = 12.0
-min_pairs_for_detection = 2
-rmse_stable_threshold_px = 8.0
-rmse_constrained_threshold_px = 8.0
-max_pose_angle_rad = 0.872664626
+min_blob_area_px = 4                 # 最小色块面积(像素)，过滤噪点
+min_blob_fill_ratio = 0.35           # 色块填充率下限，排除细长杂线
+min_blob_aspect_ratio = 0.35         # 最小宽高比
+max_blob_aspect_ratio = 4.0          # 最大宽高比
+min_pair_center_dy_ratio = 1.0       # 成对色块中心最小垂直距离比例
+max_pair_center_dy_ratio = 12.0      # 成对色块中心最大垂直距离比例
+max_pair_size_delta_ratio = 0.75      # 配对两个色块面积最大差值比例
+max_gap_cv = 0.65                    # 色块间隙系数阈值
+min_preliminary_candidate_score = 0.80        # 单组候选最低匹配得分
+min_preliminary_candidate_score_two_pair = 0.87 # 两组配对最低得分
+min_two_pair_mean_center_dy_px = 12.0         # 两组配对垂直中心最小像素距离
+min_pairs_for_detection = 2                   # 至少2组配对才判定为有效大符
+rmse_stable_threshold_px = 8.0               # 轮廓拟合误差阈值，小于判定稳定
+rmse_constrained_threshold_px = 8.0          # 约束拟合误差上限
+max_pose_angle_rad = 0.872664626             # 大符最大倾斜角度（弧度，≈50度）
 
+# LDM真实世界几何尺寸（单位m，用于PnP解位姿）
 [ldm.geometry]
-octagon_side_length_m = 0.020711
-octagon_circumradius_m = 0.02706
-pair_center_separation_m = 0.036514
-window_length_m = 0.012
-window_width_m = 0.009618
-volume_height_m = 0.067
-detectable_center_z_range_m = [-0.01, 0.01]
+octagon_side_length_m = 0.020711      # 八边形单边长
+octagon_circumradius_m = 0.02706      # 外接圆半径
+pair_center_separation_m = 0.036514   # 上下灯条中心间距
+window_length_m = 0.012              # 灯条长度
+window_width_m = 0.009618            # 灯条宽度
+volume_height_m = 0.067              # 整体高度
+detectable_center_z_range_m = [-0.01, 0.01] # Z轴深度允许误差
 
+# ====================== [naive_ldm] 大符卡尔曼跟踪滤波器 ======================
+# 能量机关目标状态估计，预测下一帧位置
 [naive_ldm]
-tracking_threshold = 5
-lost_threshold = 1.0
-initial_sigma_rot = 0.05
-initial_sigma_velocity_body = 5.0
-initial_sigma_position = 0.20
+tracking_threshold = 5               # 连续5帧识别到判定稳定跟踪
+lost_threshold = 1.0                 # 丢失超时(s)，超时释放跟踪
+initial_sigma_rot = 0.05             # 初始旋转噪声方差
+initial_sigma_velocity_body = 5.0    # 机体速度初始噪声
+initial_sigma_position = 0.20        # 位置初始噪声
 
+# 卡尔曼过程噪声矩阵Q参数
 [naive_ldm.model]
-sigma_inert_omega = 100.0
-sigma_inert_accel = 150.0
-sigma_rot_x = 0.5
-sigma_rot_y = 1.5
-sigma_rot_z = 1.5
-sigma_r_bearing_yaw = 0.5
-sigma_r_bearing_pitch = 0.2
-sigma_distance_min = 0.01
-k_distance_depth = 4.0
-k_distance_planar = 0.5
+sigma_inert_omega = 100.0    # 角速度噪声
+sigma_inert_accel = 150.0    # 加速度噪声
+sigma_rot_x = 0.5           # X轴旋转噪声
+sigma_rot_y = 1.5           # Y轴旋转噪声
+sigma_rot_z = 1.5           # Z轴旋转噪声
+sigma_r_bearing_yaw = 0.5    # 观测偏航噪声
+sigma_r_bearing_pitch = 0.2  # 观测俯仰噪声
+sigma_distance_min = 0.01   # 距离最小噪声
+k_distance_depth = 4.0       # 深度噪声系数
+k_distance_planar = 0.5      # 平面距离噪声系数
 
-[tracker]
+# ====================== [tracker] 通用目标跟踪器（装甲/大符共用卡尔曼） ======================
+## [tracker.robot] 敌方机器人装甲跟踪滤波器
 [tracker.robot]
-matcher_gate = 10.0  # Aligned with at_vision rm_bringup config
-lost_threshold = 0.5  # Aligned with at_vision rm_bringup config
-tracking_threshold = 5  # Aligned with at_vision rm_bringup config
+matcher_gate = 10.0        # 马氏距离门限，超过则不匹配当前观测
+lost_threshold = 0.5       # 丢失0.5s取消跟踪
+tracking_threshold = 5     # 连续5帧匹配成功进入稳定跟踪状态
 
+# 机器人卡尔曼模型噪声参数
 [tracker.robot.model]
-sigma_a_xy = 10.0
-sigma_a_z = 1.0
-sigma_a_yaw = 20.0
-sigma_r0 = 1e-5
-sigma_r1 = 1e-5
-sigma_h = 0.2
-meas_yaw_var_floor = 4e-3
-meas_pitch_var_floor = 4e-3
-meas_dist_var_floor = 2.5e-3
-meas_dist_delta_angle_k = 1.0
-meas_armor_yaw_var_floor = 9e-2
-meas_armor_yaw_range_k = 0.005
+sigma_a_xy = 10.0          # XY平面加速度噪声
+sigma_a_z = 1.0            # Z深度加速度噪声
+sigma_a_yaw = 20.0         # 旋转加速度噪声
+sigma_r0 = 1e-5            # 观测噪声项0
+sigma_r1 = 1e-5            # 观测噪声项1
+sigma_h = 0.2              # 高度观测噪声
+meas_yaw_var_floor = 4e-3  # 偏航观测最小方差下限
+meas_pitch_var_floor = 4e-3# 俯仰观测最小方差下限
+meas_dist_var_floor = 2.5e-3 # 距离观测下限
+meas_dist_delta_angle_k = 1.0 # 距离角度噪声系数
+meas_armor_yaw_var_floor = 9e-2 # 装甲偏航观测下限
+meas_armor_yaw_range_k = 0.005 # 装甲距离噪声系数
 
+# InEKF 紧耦合里程计融合参数（IMU+视觉融合）
 [tracker.robot_inekf]
-radius0 = 0.23
-radius1 = 0.23
-height = 0.05
+radius0 = 0.23    # 左轮半径
+radius1 = 0.23    # 右轮半径
+height = 0.05     # IMU安装高度
 
+## [tracker.outpost] 前哨站大符跟踪器
 [tracker.outpost]
 matcher_gate = 9.0
 lost_threshold = 1.0
@@ -223,15 +263,13 @@ meas_armor_yaw_var_floor = 9e-3
 yaw_log_k = 0.0005
 
 # ============================================================================
-# L4 Planning Configuration (Aimer + Planner Architecture)
+# L4 Aim 自动瞄准决策层：目标选择、状态机、弹道解算
 # ============================================================================
-# Aimer configuration (shared by all target types: Robot/Outpost/Rune)
+# [aimer] 自瞄有限状态机、目标打分选择器
 [aimer]
-# System delay compensation (seconds)
-# Includes: camera exposure, image processing, communication, gimbal response
-delay = 0.0
+delay = 0.0  # 全链路系统延迟补偿(秒)：曝光+图像处理+通信+云台响应补偿
 
-# Authoritative four-state auto-aim FSM thresholds
+# 四状态自瞄FSM切换阈值（单灯→成对灯→完整装甲状态切换）
 single_whole_up = 1.5
 single_whole_down = 1.0
 whole_pair_up = 8.5
@@ -239,125 +277,128 @@ whole_pair_down = 9.5
 pair_center_up = 9.0
 pair_center_down = 6.0
 transfer_thresh = 20
-# Armor selection windows
-front_window_deg = 60.0
+front_window_deg = 60.0  # 仅60度前方目标参与瞄准，过滤侧后方
 
+# 目标选择器核心配置
 [aimer.target_selection]
-decider = "Manned"
-temp_lost_state_score = 0.05
-optical_stale_timeout_s = 0.25
-switch_margin = 0.08
+decider = "Manned"               # 决策模式：Manned人工/自动自动瞄准
+temp_lost_state_score = 0.05     # 临时丢失目标基础分数
+optical_stale_timeout_s = 0.25    # 视觉数据超时作废
+switch_margin = 0.08              # 切换目标分数差阈值，防止频繁切目标
 
+# 多维度打分权重（决定优先打哪个装甲）
 [aimer.target_selection.weights]
-image_center = 1.0
-track_state = 3.0
-tof = 1.5
-gimbal_effort = 1.0
-armor_name = 6.5
+image_center = 1.0      # 画面中心权重（越靠近中心分越高）
+track_state = 3.0       # 跟踪稳定度权重
+tof = 1.5               # 距离权重（近分高）
+gimbal_effort = 1.0     # 云台转动代价权重（少转优先）
+armor_name = 6.5        # 装甲优先级权重（最重要）
 
+# 打分参考基准值
 [aimer.target_selection.refs]
 image_center_ref_px = 300.0
 tof_ref_s = 0.35
 yaw_effort_ref_deg = 20.0
 pitch_effort_ref_deg = 10.0
 
+# 不同装甲类型基础优先级分数（越高越优先打击）
 [aimer.target_selection.armor_name_score]
-sentry = 0.5
-one = 0.5
-two = 0.3
-three = 0.8
-four = 0.8
-five = 0.0
-outpost = 0.3
-base = 0.5
-base_large = 0.5
-invalid = 0.0
+sentry = 0.5    # 哨兵
+one = 0.5       # 1号装甲
+two = 0.3       # 2号
+three = 0.8     # 3号
+four = 0.8      # 4号
+five = 0.0      # 5号（最不优先）
+outpost = 0.3   # 前哨站
+base = 0.5      # 基地
+base_large = 0.5# 大基地
+invalid = 0.0   # 无效丢弃
 
+# ====================== [reference_trajectory] 弹道轨迹插值缓存 ======================
 [reference_trajectory]
-horizon_ahead = 50
-horizon_back = 50
-dt = 0.01
+horizon_ahead = 50    # 向前预测50步弹道
+horizon_back = 50     # 向后缓存50步历史轨迹
+dt = 0.01             # 轨迹步长0.01s
 
+# ====================== [trajectory] 弹道物理模型 ======================
 [trajectory]
-type = "LinearDrag"
+type = "LinearDrag"  # 弹道模型：线性空气阻力模型
 
-iteration_times = 10
+iteration_times = 10 # 迭代求解次数，迭代修正重力下坠
+gravity = 9.7997     # 本地重力加速度
+resistance = 0.0005  # 空气阻力系数
 
-gravity = 9.7997
-resistance = 0.0005
-
-diameter = 0.017
-mass = 0.00312
-
-rho = 1.225
+# 弹丸物理参数（17mm步兵弹丸）
+diameter = 0.017     # 弹丸直径 m
+mass = 0.00312       # 弹丸质量 kg
+rho = 1.225          # 空气密度 kg/m³
 
 # ============================================================================
-# L5 Weapon MPC Controller Configuration
+# L5 MPC云台控制器：模型预测控制，云台跟踪执行层
 # ============================================================================
-# Fire decision configuration
+# [fire_decision] 开火判断逻辑
 [fire_decision]
-# Minimum shooting threshold (radians), used for long distances
-# Shared fire gate threshold for L5
-fire_thresh = 0.008444444
-# Physical window dimensions (meters)
+fire_thresh = 0.008444444  # 预测弹着点与目标误差阈值(rad)，小于允许开火
+# 物理射击窗口尺寸（米）
 shooting_range_h = 0.12
 shooting_range_w_small = 0.12
 shooting_range_w_large = 0.24
 
-# L5-only MPC settings live under [mpc_weapon].
+# MPC模型预测控制器总开关
 [mpc_weapon]
 enabled = true
-enable_debug = true
-reference_age_threshold_s = 0.5
+enable_debug = true                # 输出MPC调试日志
+reference_age_threshold_s = 0.5   # 轨迹参考数据0.5s过期作废
 
-# Pitch limits (radians)
+# 云台俯仰机械限位(弧度) ±40°
 pitch_min = -0.69813169  # -40deg
-pitch_max = 0.69813169  # 40deg
+pitch_max = 0.69813169   # 40deg
 
-# MPC core parameters
+# MPC求解器核心参数
 [mpc_weapon.mpc]
-max_iterations = 30
-abs_tol = 0.1
-rho = 1.0
+max_iterations = 30 # 求解最大迭代次数
+abs_tol = 0.1       # 收敛误差阈值
+rho = 1.0           # 正则化系数
 
-# MPC yaw axis configuration
+# 偏航Y轴代价权重
 [mpc_weapon.mpc.yaw]
-q_pos = 9e6
-q_vel = 0.0
-r = 1.0
-max_acc = 50.0
+q_pos = 9e6    # 位置误差权重（极大，优先对准目标）
+q_vel = 0.0    # 速度权重
+r = 1.0        # 控制输出权重（平滑云台转动）
+max_acc = 50.0 # 云台最大角加速度上限
 
-# MPC pitch axis configuration
+# 俯仰Pitch轴代价权重
 [mpc_weapon.mpc.pitch]
 q_pos = 9e6
 q_vel = 0.0
 r = 1.0
 max_acc = 100.0
 
+# ====================== [rune_detector] 小符（旋转能量机关）识别 ======================
 [rune_detector]
-draw = true
-debug_mode = false  # L2层调试模式，启用时输出详细错误信息
-arrow_threshold = 210
-target_threshold = 40
-rcenter_threshold = 120
+draw = true               # 绘图可视化调试框
+debug_mode = false        # 详细调试日志开关
+arrow_threshold = 210     # 箭头灯条二值阈值
+target_threshold = 40     # 靶心色块阈值
+rcenter_threshold = 120   # 中心圆形阈值
 
-# 流水灯参数
-min_roundness = 0.6
+# 流水箭头灯条轮廓过滤
+min_roundness = 0.6           # 最小圆度
 max_roundness = 1.0
-min_arrow_light_area = 250.0
+min_arrow_light_area = 250.0  # 最小像素面积
 max_arrow_light_area = 2000.0
-min_arrow_light_aspect_ratio = 4.5
+min_arrow_light_aspect_ratio = 4.5  # 细长箭头宽高比下限
 max_arrow_light_aspect_ratio = 10.0
 
-# ROI参数
+# ROI局部裁剪加速
 global_roi_length_ratio = 1.5
 local_roi_distance_ratio = 6.0
 local_roi_width = 150
 
-# R中心参数
+# 旋转中心圆约束
 max_center_aspect_ratio = 3.0
 
-# 靶参数
+# 靶心色块过滤
 min_target_light_area = 50
 max_target_light_area = 30000
 min_target_light_contour_area = 75
@@ -366,15 +407,15 @@ min_target_light_aspect_ratio = 0.5
 max_target_light_aspect_ratio = 1.5
 min_target_roi_area = 100.0
 
+# ====================== [energy_meter] 能量机关旋转叶片跟踪器 ======================
 [energy_meter]
-lost_thres = 10
-tracking_thres = 3
-# Mahalanobis distance-squared gate for observation-to-track association
-matcher_gate = 25.0
-# Frames a locked blade must be lost before unlocking and re-selecting
-blade_unlock_frames = 10
-reset_vote_time = 1.0
+lost_thres = 10               # 连续10帧丢失判定脱锁
+tracking_thres = 3            # 连续3帧匹配进入稳定跟踪
+matcher_gate = 25.0           # 马氏距离匹配门限
+blade_unlock_frames = 10      # 脱锁前等待帧数
+reset_vote_time = 1.0         # 跟踪状态重置冷却时间(s)
 
+# 大型叶片卡尔曼模型
 [energy_meter.big_model]
 sigma_xy = 0.3
 sigma_z = 0.225
@@ -388,6 +429,7 @@ radius = 0.7
 R_scale = 0.02
 meas_dist_k = 0.43
 
+# 小型叶片卡尔曼模型
 [energy_meter.small_model]
 sigma_xy = 0.001
 sigma_z = 0.001

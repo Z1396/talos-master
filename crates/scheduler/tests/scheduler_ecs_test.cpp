@@ -111,8 +111,8 @@ void test_scheduler_fixed_rate_and_pool() {
     printf("    IMU reads:      %d (expected ~20 at 100Hz)\n", final_imu);
     printf("    Camera reads:   %d (expected ~6 at 30Hz)\n", final_camera);
     printf("    Fusion runs:    %d\n", final_fusion);
-    printf("    Notify count:   %llu\n", stats.notify_count);
-    printf("    Compute cycles: %llu\n", stats.compute_cycle_count);
+    printf("    Notify count:   %lu\n", stats.notify_count);
+    printf("    Compute cycles: %lu\n", stats.compute_cycle_count);
 
     // Verify
     bool imu_ok    = final_imu >= 10;                              // At least 10 IMU reads
@@ -177,7 +177,9 @@ void test_silent_vs_notify() {
 
     printf("  Silent calls:   %d (200Hz, ~30 expected)\n", silent_count.load());
     printf("  Notify calls:   %d (50Hz, ~7 expected)\n", notify_count.load());
-    printf("  Actual notifies: %llu (should match notify calls)\n", stats.notify_count);
+    printf("  Actual notifies: %lu (should match notify calls)\n", stats.notify_count);
+
+
 
     // Only the notify_source should have triggered notifies
     const bool notify_match = stats.notify_count == static_cast<uint64_t>(notify_count.load());

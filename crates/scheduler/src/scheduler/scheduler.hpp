@@ -148,6 +148,8 @@ public:
      * @brief 调度器构造函数
      * @param config 调度器配置参数，默认空配置
      * noexcept 保证构造不抛异常
+     1. explicit作用核心
+     * 修饰单参数构造函数 / 转换构造函数，禁止编译器隐式类型转换，只允许显式调用构造。
      */
     explicit Scheduler(SchedulerConfig config = {}) noexcept;
 

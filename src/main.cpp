@@ -157,6 +157,12 @@ int main() {
     // ===================== 8. 执行框架全局引导初始化 =====================
     // 加载所有业务系统、组件、通道、时序逻辑，完成整个机器人框架初始化
     // 传入调度器 + 转移配置对象所有权
+    /*3. 等价传统写法（C++11/14，更啰嗦）
+    auto r = fcs::boot(scheduler, std::move(config.value()));
+    if (!r)
+    {
+        // 错误处理
+    }*/
     if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) {
         // 引导初始化失败，致命错误，退出程序
         SPDLOG_CRITICAL("{}", r.error());
