@@ -1,21 +1,33 @@
 #include "L2_perception/ldm/ldm_detector.hpp"
 
+// 大符几何工具、三维模型定义
 #include "L2_perception/ldm/ldm_geometry.hpp"
+// 装甲颜色、Blob、灯对、候选网格、检测结果结构体
 #include "core/armor_types.hpp"
 
+// 标准算法容器、数学、固定宽度整数、数值极值、常数、累加器
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <numbers>
 #include <numeric>
+// OpenCV图像处理：轮廓、滤波、颜色空间转换、基础几何
 #include <opencv2/imgproc.hpp>
+// 日志打印
 #include <spdlog/spdlog.h>
 
 namespace fcs::L2::ldm {
 
-namespace {
+namespace { // 内部匿名命名空间，仅本编译单元可见工具函数
 
+/**
+ * @brief 获取当前候选网格最低合格分数阈值
+ * 规则：<=2组灯对（半符）要求更高打分阈值，>=3组放宽
+ * @param candidate 待校验大符网格候选
+ * @param config 检测器全局配置
+ * @return 最低合格分数float
+ */
 [[nodiscard]] float
     min_candidate_score(const LdmMeshCandidate& candidate, const LdmDetectorConfig& config) {
     return static_cast<float>(
@@ -23,65 +35,104 @@ namespace {
                                              : config.min_preliminary_candidate_score);
 }
 
+/**
+ * @brief 获取候选所属聚类内总灯对数量
+ * 若候选无聚类ID，直接返回自身携带灯对数量；有聚类则统计同cluster全部灯对
+ * @param candidate 网格候选
+ * @param pairs 全局全部灯对数组
+ * @return 同聚类灯对总数
+ */
 [[nodiscard]] size_t candidate_cluster_pair_count(
     const LdmMeshCandidate& candidate, const std::vector<LightPair>& pairs) {
+    // 无聚类标记，直接使用自身灯对数量
     if (candidate.cluster_id < 0) {
         return candidate.pair_indices.size();
     }
-
+    // 统计所有同cluster_id的灯对
     return static_cast<size_t>(
         std::count_if(pairs.begin(), pairs.end(), [&](const LightPair& pair) {
             return pair.cluster_id == candidate.cluster_id;
         }));
 }
 
+/**
+ * @brief 校验孤立双灯对横向跨度是否满足最低比例约束
+ * 仅当候选恰好2组灯对、聚类内仅2组灯对时生效，过滤狭窄并排残缺灯条
+ * @param candidate 网格候选
+ * @param pairs 全局灯对数组
+ * @param config 检测器配置
+ * @return true 满足跨度要求，false 跨度不足丢弃
+ */
 [[nodiscard]] bool has_min_isolated_two_pair_order_span(
     const LdmMeshCandidate& candidate, const std::vector<LightPair>& pairs,
     const LdmDetectorConfig& config) {
+    // 灯对数量不是2，无需校验直接放行
     if (candidate.pair_indices.size() != 2u) {
         return true;
     }
+    // 聚类内总灯对不是2，说明存在其他配对，无需校验
     if (candidate_cluster_pair_count(candidate, pairs) != 2u) {
         return true;
     }
+    // 配置参数非法直接拦截
     if (!std::isfinite(config.min_isolated_two_pair_order_span_ratio)
         || config.min_isolated_two_pair_order_span_ratio < 0.0) {
         return false;
     }
 
+    // 计算两组灯对纵向层分隔均值
     float mean_pair_layer = 0.0f;
     for (const int pair_idx : candidate.pair_indices) {
+        // 索引越界直接判定非法
         if (pair_idx < 0 || static_cast<size_t>(pair_idx) >= pairs.size()) {
             return false;
         }
         mean_pair_layer += pair_layer_separation_px(pairs[static_cast<size_t>(pair_idx)]);
     }
     mean_pair_layer /= static_cast<float>(candidate.pair_indices.size());
+    // 层间距过小，数值退化直接拦截
     if (mean_pair_layer <= 1e-3f) {
         return false;
     }
 
+    // 获取两组灯对前后横向坐标差值
     const auto first_pair_idx = static_cast<size_t>(candidate.pair_indices.front());
     const auto last_pair_idx  = static_cast<size_t>(candidate.pair_indices.back());
     const float order_span =
         std::abs(pairs[last_pair_idx].local_order_px - pairs[first_pair_idx].local_order_px);
+    // 横向跨度 / 纵向层间距 >= 阈值才合法
     return order_span / mean_pair_layer
         >= static_cast<float>(config.min_isolated_two_pair_order_span_ratio);
 }
 
+/**
+ * @brief 候选整体检测门限校验，综合多重过滤条件
+ * 1. 最少灯对数量校验
+ * 2. 基础打分阈值校验
+ * 3. 孤立双灯对跨度校验
+ * 4. 双灯对竖直高度兜底打分提升校验
+ * @param candidate 待过滤网格候选
+ * @param pairs 全局灯对数组
+ * @param config 检测器配置
+ * @return true 通过所有门限，保留候选；false 丢弃
+ */
 [[nodiscard]] bool candidate_passes_detection_gate(
     const LdmMeshCandidate& candidate, const std::vector<LightPair>& pairs,
     const LdmDetectorConfig& config) {
+    // 校验1：灯对数量不满足最低要求
     if (static_cast<int>(candidate.pair_indices.size()) < config.min_pairs_for_detection) {
         return false;
     }
+    // 校验2：基础打分低于最低阈值
     if (candidate.preliminary_score < min_candidate_score(candidate, config)) {
         return false;
     }
+    // 校验3：孤立双灯对横向跨度不达标
     if (!has_min_isolated_two_pair_order_span(candidate, pairs, config)) {
         return false;
     }
 
+    // 仅2组灯对时额外校验竖直高度
     if (candidate.pair_indices.size() <= 2) {
         double mean_center_dy_px = 0.0;
         int valid_pair_count     = 0;
@@ -92,12 +143,15 @@ namespace {
             mean_center_dy_px += pairs[static_cast<size_t>(pair_idx)].center_dy_px;
             ++valid_pair_count;
         }
+        // 无有效灯对直接拦截
         if (valid_pair_count == 0) {
             return false;
         }
         mean_center_dy_px /= static_cast<double>(valid_pair_count);
+        // 竖直高度不足，需要额外打分余量兜底
         if (mean_center_dy_px < config.min_two_pair_mean_center_dy_px) {
             constexpr float kFlatTwoPairScoreMargin = 0.015f;
+            // 打分未达到抬高后的阈值，丢弃
             if (candidate.preliminary_score
                 < min_candidate_score(candidate, config) + kFlatTwoPairScoreMargin) {
                 return false;
@@ -105,20 +159,29 @@ namespace {
         }
     }
 
+    // 全部校验通过
     return true;
 }
 
+/**
+ * @brief 保留最优候选关联的全部灯条，删除无交集候选
+ * 多候选筛选后，只保留包含最优候选灯条集合的网格，剔除重叠冲突候选
+ * @param candidates 全部生成的网格候选数组，原地过滤
+ */
 void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates) {
     if (candidates.empty()) {
         return;
     }
 
+    // 取出最优候选的灯对索引并排序，用于二分查找匹配
     auto selected_pair_indices = candidates.front().pair_indices;
     std::sort(selected_pair_indices.begin(), selected_pair_indices.end());
+    // 删除任意灯对不在最优候选内的网格
     candidates.erase(
         std::remove_if(
             candidates.begin(), candidates.end(),
             [&](const LdmMeshCandidate& candidate) {
+                // 当前候选所有灯对必须全部存在于最优候选集合
                 return !std::all_of(
                     candidate.pair_indices.begin(), candidate.pair_indices.end(),
                     [&](const int pair_idx) {
@@ -129,52 +192,88 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         candidates.end());
 }
 
+/**
+ * @brief 计算最大姿态角约束下，灯条投影最小竖直高度比例
+ * 用于配对校验，过滤水平歪斜过大、透视畸变严重的灯条配对
+ * @param config 检测器配置，读取最大允许姿态角
+ * @return 最小竖直投影比例float
+ */
 [[nodiscard]] float min_projected_pair_vertical_ratio(const LdmDetectorConfig& config) {
+    // 读取配置最大姿态角，限制上限89.999°防止cos趋近0
     const double max_pose_angle =
         (std::isfinite(config.max_pose_angle_rad) && config.max_pose_angle_rad > 0.0)
             ? std::min(config.max_pose_angle_rad, std::numbers::pi_v<double> * 0.5 - 1e-3)
             : 0.872664626;
+    // 0.75 * cos(最大俯仰角)，下限0.35防止数值过小
     return std::max(0.35f, 0.75f * static_cast<float>(std::cos(max_pose_angle)));
 }
 
+/**
+ * @brief 获取整型矩形浮点中心坐标
+ * @param rect OpenCV整型矩形
+ * @return 矩形中心点cv::Point2f
+ */
 [[nodiscard]] cv::Point2f rect_center(const cv::Rect& rect) {
     return cv::Point2f(
         rect.x + static_cast<float>(rect.width) * 0.5f,
         rect.y + static_cast<float>(rect.height) * 0.5f);
 }
 
+/**
+ * @brief 整型矩形转浮点矩形，用于高精度像素计算
+ * @param rect 输入int矩形
+ * @return cv::Rect2f 浮点矩形
+ */
 [[nodiscard]] cv::Rect2f rect2f_from_rect(const cv::Rect& rect) {
     return cv::Rect2f(
         static_cast<float>(rect.x), static_cast<float>(rect.y), static_cast<float>(rect.width),
         static_cast<float>(rect.height));
 }
 
+/**
+ * @brief 判断HSV色相是否匹配目标装甲颜色
+ * 红：0~30 或 160~180；蓝：90~140；紫：125~165；默认匹配全部三色
+ * @param hue 单通道色相值 [0,180]
+ * @param color 目标装甲颜色枚举
+ * @return true 色相匹配目标颜色
+ */
 [[nodiscard]] bool hue_matches_target_color(double hue, ArmorColor color) {
     switch (color) {
     case ArmorColor::Blue: return hue >= 90.0 && hue <= 140.0;
     case ArmorColor::Purple: return hue >= 125.0 && hue <= 165.0;
     case ArmorColor::Red: return (hue >= 0.0 && hue <= 30.0) || (hue >= 160.0 && hue <= 180.0);
     default:
+        // 无指定颜色，兼容红/蓝/紫全部
         return hue_matches_target_color(hue, ArmorColor::Red)
             || hue_matches_target_color(hue, ArmorColor::Blue)
             || hue_matches_target_color(hue, ArmorColor::Purple);
     }
 }
 
+/**
+ * @brief 根据目标颜色生成二值掩码，分离灯条区域
+ * @param image_bgr 原始BGR图像
+ * @param color 目标装甲颜色
+ * @param min_value V通道最低亮度阈值，默认80，高亮度掩码传入140
+ * @return 单通道二值掩码，灯条白色背景黑色
+ */
 [[nodiscard]] cv::Mat
     threshold_target_color(const cv::Mat& image_bgr, ArmorColor color, int min_value = 80) {
     cv::Mat hsv;
+    // BGR转HSV颜色空间，用于色相分割
     cv::cvtColor(image_bgr, hsv, cv::COLOR_BGR2HSV);
 
     cv::Mat mask;
     switch (color) {
     case ArmorColor::Blue:
+        // 蓝色色相区间，饱和度下限70，亮度min_value
         cv::inRange(hsv, cv::Scalar(90, 70, min_value), cv::Scalar(140, 255, 255), mask);
         break;
     case ArmorColor::Purple:
         cv::inRange(hsv, cv::Scalar(125, 70, min_value), cv::Scalar(165, 255, 255), mask);
         break;
     case ArmorColor::Red: {
+        // 红色两段色相区间，合并掩码
         cv::Mat mask1, mask2;
         cv::inRange(hsv, cv::Scalar(0, 80, min_value), cv::Scalar(30, 255, 255), mask1);
         cv::inRange(hsv, cv::Scalar(160, 80, min_value), cv::Scalar(180, 255, 255), mask2);
@@ -182,6 +281,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         break;
     }
     default: {
+        // 全颜色模式，合并三色掩码
         cv::Mat red    = threshold_target_color(image_bgr, ArmorColor::Red, min_value);
         cv::Mat blue   = threshold_target_color(image_bgr, ArmorColor::Blue, min_value);
         cv::Mat purple = threshold_target_color(image_bgr, ArmorColor::Purple, min_value);
@@ -190,8 +290,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     }
     }
 
-    // Remove thin red borders / HUD overlays so they cannot connect unrelated pixels
-    // into a single frame-sized contour.
+    // 清除图像边缘2像素边框，去除HUD、界面边框干扰噪点
     constexpr int border_px = 2;
     if (mask.rows > border_px * 2 && mask.cols > border_px * 2) {
         mask.rowRange(0, border_px).setTo(0);
@@ -202,18 +301,29 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     return mask;
 }
 
+/**
+ * @brief 从轮廓生成标准灯条Blob结构体，执行全套阈值过滤
+ * @param contour 单条轮廓点集合
+ * @param mask 对应二值掩码，用于统计有效像素
+ * @param offset 轮廓ROI偏移坐标，还原原图绝对像素
+ * @param config 检测器阈值配置
+ * @return 合法LightBlob，非法返回std::nullopt
+ */
 [[nodiscard]] std::optional<LightBlob> make_light_blob_from_contour(
     const std::vector<cv::Point>& contour, const cv::Mat& mask, const cv::Point& offset,
     const LdmDetectorConfig& config) {
     cv::Rect rect = cv::boundingRect(contour);
+    // 叠加ROI偏移，映射到原图坐标
     if (offset.x != 0 || offset.y != 0) {
         rect.x += offset.x;
         rect.y += offset.y;
     }
+    // 矩形宽高非法直接丢弃
     if (rect.width <= 0 || rect.height <= 0) {
         return std::nullopt;
     }
 
+    // 计算长宽比，过滤过扁/过窄噪点
     const float aspect_ratio =
         static_cast<float>(rect.width) / static_cast<float>(std::max(rect.height, 1));
     if (aspect_ratio < static_cast<float>(config.min_blob_aspect_ratio)
@@ -221,24 +331,30 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         return std::nullopt;
     }
 
+    // 轮廓面积、掩码内有效像素统计
     const double contour_area   = cv::contourArea(contour);
     const int pixel_count       = cv::countNonZero(mask(rect));
+    // 有效面积取轮廓面积/像素数量二者中较大值
     const double effective_area = (contour_area >= static_cast<double>(config.min_blob_area_px))
                                     ? contour_area
                                     : static_cast<double>(pixel_count);
+    // 面积低于最小阈值丢弃
     if (effective_area < static_cast<double>(config.min_blob_area_px)) {
         return std::nullopt;
     }
 
+    // 填充率计算：轮廓面积/外接矩形面积；有效像素/外接矩形面积
     const float rect_area      = static_cast<float>(std::max(1, rect.width * rect.height));
     const float fill_ratio_geo = static_cast<float>(contour_area) / rect_area;
     const float fill_ratio_px  = static_cast<float>(pixel_count) / rect_area;
+    // 几何填充达标 或 稀疏像素数量达标，二者满足其一保留
     const bool passes_fill     = fill_ratio_geo >= static_cast<float>(config.min_blob_fill_ratio);
     const bool passes_sparse   = pixel_count >= config.min_sparse_blob_pixel_count;
     if (!passes_fill && !passes_sparse) {
         return std::nullopt;
     }
 
+    // 稀疏灯条使用像素填充率，完整灯条使用几何轮廓填充率
     const bool used_sparse_gate = !passes_fill;
     const float fill_ratio      = used_sparse_gate ? fill_ratio_px : fill_ratio_geo;
     return LightBlob{
@@ -249,6 +365,17 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         .fill_ratio   = fill_ratio};
 }
 
+/**
+ * @brief 生成窄长条Yaw专用灯条Blob（特殊极窄灯条，用于远距离大符）
+ * 额外长宽、尺寸、色相强约束，区别于标准灯条
+ * @param contour 轮廓点
+ * @param hsv 原图HSV图像，用于色相校验
+ * @param mask 二值掩码
+ * @param offset ROI偏移
+ * @param config 检测器配置
+ * @param color 目标装甲颜色
+ * @return 合法窄灯条Blob/nullopt
+ */
 [[nodiscard]] std::optional<LightBlob> make_narrow_yaw_blob_from_contour(
     const std::vector<cv::Point>& contour, const cv::Mat& hsv, const cv::Mat& mask,
     const cv::Point& offset, const LdmDetectorConfig& config, ArmorColor color) {
@@ -261,6 +388,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         return std::nullopt;
     }
 
+    // 窄灯条固定尺寸约束
     constexpr float kMinNarrowAspect = 0.15f;
     constexpr int kMaxNarrowWidth    = 5;
     constexpr int kMinNarrowHeight   = 10;
@@ -270,11 +398,13 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
 
     const float aspect_ratio =
         static_cast<float>(rect.width) / static_cast<float>(std::max(rect.height, 1));
+    // 长宽比、宽高尺寸过滤
     if (aspect_ratio >= static_cast<float>(config.min_blob_aspect_ratio)
         || aspect_ratio < kMinNarrowAspect || rect.width > kMaxNarrowWidth
         || rect.height < kMinNarrowHeight || rect.height > kMaxNarrowHeight) {
         return std::nullopt;
     }
+    // ROI越界直接丢弃
     if (rect.x < 0 || rect.y < 0 || rect.x + rect.width > hsv.cols
         || rect.y + rect.height > hsv.rows) {
         return std::nullopt;
@@ -282,10 +412,12 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
 
     const double contour_area = cv::contourArea(contour);
     const int pixel_count     = cv::countNonZero(mask(rect));
+    // 面积、像素数量下限校验
     if (contour_area < kMinNarrowArea || pixel_count < kMinNarrowPixels) {
         return std::nullopt;
     }
 
+    // 取ROI平均色相校验颜色
     const double mean_hue = cv::mean(hsv(rect), mask(rect))[0];
     if (!hue_matches_target_color(mean_hue, color)) {
         return std::nullopt;
@@ -301,11 +433,21 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         .fill_ratio   = fill_ratio_px};
 }
 
+/**
+ * @brief 拆分粘连合并灯条：单个Blob覆盖左右成对灯条时切分为两个独立Blob
+ * 基于几何配置、已生成灯对、网格候选判断是否需要切分
+ * @param blobs 原始全部灯条Blob
+ * @param pairs 已生成灯对
+ * @param mesh_candidates 网格候选
+ * @param config 检测器几何配置
+ * @return 切分后新Blob数组
+ */
 [[nodiscard]] std::vector<LightBlob> resolve_merged_light_blobs(
     const std::vector<LightBlob>& blobs, const std::vector<LightPair>& pairs,
     const std::vector<LdmMeshCandidate>& mesh_candidates, const LdmDetectorConfig& config) {
     const double pair_separation_m = config.geometry.pair_center_separation_m;
     const double window_length_m   = config.geometry.window_length_m;
+    // 几何参数非法直接返回原Blob不做切分
     if (!std::isfinite(pair_separation_m) || pair_separation_m <= 0.0
         || !std::isfinite(window_length_m) || window_length_m <= 0.0
         || !std::isfinite(config.max_resolved_window_length_fraction)
@@ -315,8 +457,10 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         return blobs;
     }
 
+    // 单灯条最大允许宽度比例，超过判定为粘连合并灯条
     const float max_single_window_ratio = static_cast<float>(
         config.max_resolved_window_length_fraction * window_length_m / pair_separation_m);
+    // 预存每个Blob对应的配对竖直间距，用于判断是否粘连
     std::vector<float> candidate_pair_separations(blobs.size(), 0.0f);
     for (const auto& candidate : mesh_candidates) {
         for (const int pair_idx : candidate.pair_indices) {
@@ -339,6 +483,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     for (size_t blob_idx = 0; blob_idx < blobs.size(); ++blob_idx) {
         const auto& blob            = blobs[blob_idx];
         const float pair_separation = candidate_pair_separations[blob_idx];
+        // 不满足粘连条件，直接保留原Blob
         if (pair_separation <= 1e-3f
             || pair_separation > static_cast<float>(config.max_merged_window_pair_separation_px)
             || blob.rect.width / pair_separation <= max_single_window_ratio) {
@@ -346,13 +491,16 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
             continue;
         }
 
+        // 左右对半切分
         const float left_width  = std::floor(blob.rect.width * 0.5f);
         const float right_width = blob.rect.width - left_width;
+        // 切分后宽度过小，放弃切分保留原Blob
         if (left_width <= 1.0f || right_width <= 1.0f) {
             resolved.push_back(blob);
             continue;
         }
 
+        // 生成左半、右半两个新Blob
         for (int part = 0; part < 2; ++part) {
             LightBlob half  = blob;
             half.rect.x     = blob.rect.x + ((part == 0) ? 0.0f : left_width);
@@ -367,6 +515,12 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     return resolved;
 }
 
+/**
+ * @brief 判断窄Yaw灯条是否存在配对伙伴（竖直间距匹配另一窄灯条）
+ * @param blob 当前窄灯条
+ * @param narrow_blobs 全部窄灯条集合
+ * @return true 存在匹配配对，可保留该窄灯条
+ */
 [[nodiscard]] bool
     has_narrow_yaw_pair_mate(const LightBlob& blob, const std::vector<LightBlob>& narrow_blobs) {
     constexpr float kMaxMateDx = 10.0f;
@@ -383,6 +537,12 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     });
 }
 
+/**
+ * @brief 判断灯条周边是否存在足量常规灯条上下文，过滤孤立窄灯条噪点
+ * @param blob 待校验窄灯条
+ * @param regular_blobs 标准正常灯条集合
+ * @return true 周边存在足量灯条上下文，保留
+ */
 [[nodiscard]] bool has_full_mesh_regular_context(
     const LightBlob& blob, const std::vector<LightBlob>& regular_blobs) {
     constexpr float kContextDx            = 80.0f;
@@ -399,6 +559,13 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     return nearby_count >= kMinRegularContextBlobs;
 }
 
+/**
+ * @brief 完整灯条Blob提取流水线：颜色掩码→轮廓提取→标准/窄灯条分类过滤
+ * @param image_bgr 输入原图BGR
+ * @param config 检测器配置
+ * @param color 目标装甲颜色
+ * @return 全部合法灯条Blob数组
+ */
 [[nodiscard]] std::vector<LightBlob> detect_light_blobs(
     const cv::Mat& image_bgr, const LdmDetectorConfig& config, ArmorColor color) {
     if (image_bgr.empty()) {
@@ -408,9 +575,11 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     cv::Mat hsv;
     cv::cvtColor(image_bgr, hsv, cv::COLOR_BGR2HSV);
 
+    // 基础亮度掩码、高亮度核心掩码两套阈值
     cv::Mat mask      = threshold_target_color(image_bgr, color);
     cv::Mat core_mask = threshold_target_color(image_bgr, color, 140);
     std::vector<std::vector<cv::Point>> contours;
+    // 提取外层全部轮廓，只取最外层
     cv::findContours(mask, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
     std::vector<LightBlob> blobs;
@@ -423,6 +592,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
             continue;
         }
 
+        // 在高亮度核心掩码内提取子轮廓
         std::vector<std::vector<cv::Point>> core_contours;
         cv::Mat core_roi = core_mask(rect);
         cv::findContours(core_roi, core_contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -435,23 +605,27 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
                 core_blobs.push_back(*blob);
                 continue;
             }
+            // 标准Blob失败，尝试窄Yaw灯条
             auto narrow_blob = make_narrow_yaw_blob_from_contour(
                 core_contour, hsv, core_mask, rect.tl(), config, color);
             if (narrow_blob.has_value()) {
                 narrow_yaw_blobs.push_back(*narrow_blob);
             }
         }
+        // 核心掩码内存在>=2个标准灯条，直接加入结果
         if (core_blobs.size() >= 2u) {
             blobs.insert(blobs.end(), core_blobs.begin(), core_blobs.end());
             continue;
         }
 
+        // 核心掩码无足够灯条，使用外层完整轮廓生成标准Blob
         auto blob = make_light_blob_from_contour(contour, mask, {}, config);
         if (blob.has_value()) {
             blobs.push_back(*blob);
         }
     }
 
+    // 筛选合法窄Yaw灯条：存在配对+足量周边上下文
     for (const auto& narrow_blob : narrow_yaw_blobs) {
         if (has_narrow_yaw_pair_mate(narrow_blob, narrow_yaw_blobs)
             && has_full_mesh_regular_context(narrow_blob, blobs)) {
@@ -459,6 +633,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
         }
     }
 
+    // 按图像X坐标升序排序灯条，方便后续聚类、配对
     std::sort(blobs.begin(), blobs.end(), [](const LightBlob& a, const LightBlob& b) {
         if (a.center_px.x != b.center_px.x) {
             return a.center_px.x < b.center_px.x;
@@ -468,6 +643,7 @@ void retain_selected_candidate_support(std::vector<LdmMeshCandidate>& candidates
     return blobs;
 }
 
+// 聚类扩张常数
 constexpr float kClusterExpandXRatio      = 1.0f;
 constexpr float kClusterExpandYRatio      = 3.5f;
 constexpr size_t kPcaSeedBlobLimit        = 6;
@@ -476,10 +652,22 @@ constexpr float kMaxPairOrderDeltaRatio   = 1.5f;
 constexpr float kPairOrderScoreDeltaRatio = 2.5f;
 constexpr float kMinAxisBalance           = 0.4f;
 
+/**
+ * @brief 二维点向量点积
+ * @param lhs 点1
+ * @param rhs 点2
+ * @return 点积标量float
+ */
 [[nodiscard]] float dot(const cv::Point2f& lhs, const cv::Point2f& rhs) {
     return lhs.x * rhs.x + lhs.y * rhs.y;
 }
 
+/**
+ * @brief 标准化PCA坐标轴方向，统一向量朝向避免正负歧义
+ * @param axis 原始特征向量
+ * @param prefer_y_positive true优先Y正向；false优先绝对值最大轴正向
+ * @return 标准化后向量
+ */
 [[nodiscard]] cv::Point2f orient_axis(cv::Point2f axis, bool prefer_y_positive) {
     if (prefer_y_positive) {
         if (axis.y < 0.0f) {
@@ -498,6 +686,12 @@ constexpr float kMinAxisBalance           = 0.4f;
     return axis;
 }
 
+/**
+ * @brief 灯条矩形向外扩张生成聚类重叠判定矩形
+ * X方向小幅扩张，Y方向大幅扩张，匹配大符竖直长条分布特性
+ * @param blob 单灯条Blob
+ * @return 扩张后浮点矩形
+ */
 [[nodiscard]] cv::Rect2f expanded_rect(const LightBlob& blob) {
     const float margin_x = blob.rect.width * kClusterExpandXRatio;
     const float margin_y = std::max(blob.rect.width, blob.rect.height) * kClusterExpandYRatio;
@@ -506,6 +700,12 @@ constexpr float kMinAxisBalance           = 0.4f;
         blob.rect.height + 2.0f * margin_y);
 }
 
+/**
+ * @brief 判断两个浮点矩形是否存在重叠区域
+ * @param lhs 矩形A
+ * @param rhs 矩形B
+ * @return true 存在交集
+ */
 [[nodiscard]] bool rects_overlap(const cv::Rect2f& lhs, const cv::Rect2f& rhs) {
     const float left   = std::max(lhs.x, rhs.x);
     const float top    = std::max(lhs.y, rhs.y);
@@ -514,12 +714,18 @@ constexpr float kMinAxisBalance           = 0.4f;
     return right >= left && bottom >= top;
 }
 
+/**
+ * @brief 基于扩张矩形连通域聚类灯条，同聚类代表同一大符灯条集合
+ * @param blobs 全部灯条Blob数组，原地写入cluster_id、local_order_px、local_layer_px
+ * @return 每个聚类包含的Blob索引数组
+ */
 [[nodiscard]] std::vector<std::vector<size_t>> cluster_blob_indices(std::vector<LightBlob>& blobs) {
     std::vector<std::vector<size_t>> clusters;
     if (blobs.empty()) {
         return clusters;
     }
 
+    // 预生成每个Blob扩张矩形
     std::vector<cv::Rect2f> grown_rects;
     grown_rects.reserve(blobs.size());
     for (const auto& blob : blobs) {
@@ -527,6 +733,7 @@ constexpr float kMinAxisBalance           = 0.4f;
     }
 
     std::vector<bool> visited(blobs.size(), false);
+    // 深度优先连通域聚类
     for (size_t seed_idx = 0; seed_idx < blobs.size(); ++seed_idx) {
         if (visited[seed_idx]) {
             continue;
@@ -540,6 +747,7 @@ constexpr float kMinAxisBalance           = 0.4f;
             stack.pop_back();
             cluster.push_back(idx);
 
+            // 遍历全部未访问Blob，判断矩形重叠连通
             for (size_t other_idx = 0; other_idx < blobs.size(); ++other_idx) {
                 if (visited[other_idx]) {
                     continue;
@@ -555,6 +763,7 @@ constexpr float kMinAxisBalance           = 0.4f;
         clusters.push_back(std::move(cluster));
     }
 
+    // 聚类按整体X中心从小到大排序
     std::sort(clusters.begin(), clusters.end(), [&](const auto& lhs, const auto& rhs) {
         const auto cluster_center_x = [&](const std::vector<size_t>& cluster) {
             float sum = 0.0f;
@@ -566,6 +775,7 @@ constexpr float kMinAxisBalance           = 0.4f;
         return cluster_center_x(lhs) < cluster_center_x(rhs);
     });
 
+    // 回填每个Blob的聚类ID、局部坐标初始化0
     for (size_t cluster_id = 0; cluster_id < clusters.size(); ++cluster_id) {
         for (const size_t blob_idx : clusters[cluster_id]) {
             blobs[blob_idx].cluster_id     = static_cast<int>(cluster_id);
@@ -576,39 +786,62 @@ constexpr float kMinAxisBalance           = 0.4f;
     return clusters;
 }
 
+/**
+ * @brief PCA轴分割结果结构体，存储分层轴、排序轴、分割阈值、匹配打分
+ */
 struct AxisSplit {
-    cv::Point2f layer_axis{};
-    cv::Point2f order_axis{};
-    float split_value{0.0f};
-    float score{-1.0f};
-    int matched_pair_count{0};
-    float matched_pair_score{0.0f};
-    int best_candidate_pair_count{0};
-    float best_candidate_preliminary{0.0f};
-    float best_candidate_score{0.0f};
+    cv::Point2f layer_axis{};          // 竖直分层轴（区分上下灯条）
+    cv::Point2f order_axis{};          // 水平排序轴（区分前后灯条）
+    float split_value{0.0f};           // 分层分割阈值
+    float score{-1.0f};                // 分割方案综合打分
+    int matched_pair_count{0};         // 该分割下有效灯对数量
+    float matched_pair_score{0.0f};    // 全部配对总分和
+    int best_candidate_pair_count{0};  // 最优网格候选灯对数量
+    float best_candidate_preliminary{0.0f}; // 最优候选基础打分
+    float best_candidate_score{0.0f}; // 最优候选综合检测打分
 };
 
+/**
+ * @brief 配对匹配结果：配对总数、总分
+ */
 struct MatchResult {
     int pair_count{0};
     float score{0.0f};
 };
 
+/**
+ * @brief 选中配对局部索引、打分
+ */
 struct ProjectedPairSelection {
     size_t first_local_idx{0};
     size_t second_local_idx{0};
     float score{0.0f};
 };
 
+/**
+ * @brief 完整聚类配对匹配输出：全局最优匹配结果、选中配对列表
+ */
 struct ProjectedMatching {
     MatchResult result{};
     std::vector<ProjectedPairSelection> selected_pairs{};
 };
 
+/**
+ * @brief 匹配结果优劣比较：优先配对数量，数量相同比总分
+ * @param lhs 匹配结果A
+ * @param rhs 匹配结果B
+ * @return true A优于B
+ */
 [[nodiscard]] bool better_match(const MatchResult& lhs, const MatchResult& rhs) {
     return lhs.pair_count > rhs.pair_count
         || (lhs.pair_count == rhs.pair_count && lhs.score > rhs.score);
 }
 
+/**
+ * @brief 配对数量权重打分系数，用于综合候选打分
+ * @param pair_count 配对数量
+ * @return 权重系数float
+ */
 [[nodiscard]] float pair_count_priority(int pair_count) {
     switch (pair_count) {
     case 1: return 0.25f;
@@ -618,9 +851,21 @@ struct ProjectedMatching {
     }
 }
 
+/**
+ * @brief 单组灯对投影匹配打分，过滤非法配对并输出匹配分数
+ * @param first 上方/下方灯条1
+ * @param first_order 局部排序坐标
+ * @param first_layer 局部分层坐标
+ * @param second 配对灯条2
+ * @param second_order 局部排序坐标
+ * @param second_layer 局部分层坐标
+ * @param config 检测器配置阈值
+ * @return 合法返回分数0~1，非法nullopt
+ */
 [[nodiscard]] std::optional<float> score_projected_pair(
     const LightBlob& first, float first_order, float first_layer, const LightBlob& second,
     float second_order, float second_layer, const LdmDetectorConfig& config) {
+    // 分层必须一正一负（上下分布），同层直接丢弃
     if ((first_layer <= 0.0f) == (second_layer <= 0.0f)) {
         return std::nullopt;
     }
@@ -631,6 +876,7 @@ struct ProjectedMatching {
         return std::nullopt;
     }
 
+    // 水平坐标差阈值过滤
     const float order_delta = std::abs(first_order - second_order);
     const float size_scale  = std::max({avg_w, avg_h, 1.0f});
     const float order_limit = kMaxPairOrderDeltaRatio * size_scale;
@@ -638,6 +884,7 @@ struct ProjectedMatching {
         return std::nullopt;
     }
 
+    // 竖直分层间距上下限过滤
     const float layer_separation = std::abs(first_layer - second_layer);
     const float min_layer_sep =
         static_cast<float>(config.min_pair_center_dy_ratio) * std::max(avg_h, 1.0f);
@@ -647,6 +894,7 @@ struct ProjectedMatching {
         return std::nullopt;
     }
 
+    // 投影竖直高度比例过滤，剔除水平歪斜配对
     const cv::Point2f image_delta = second.center_px - first.center_px;
     const float image_distance =
         std::sqrt(image_delta.x * image_delta.x + image_delta.y * image_delta.y);
@@ -658,6 +906,7 @@ struct ProjectedMatching {
         return std::nullopt;
     }
 
+    // 灯条尺寸差异过滤
     const float width_delta =
         std::abs(first.rect.width - second.rect.width) / std::max(avg_w, 1.0f);
     const float height_delta =
@@ -667,6 +916,7 @@ struct ProjectedMatching {
         return std::nullopt;
     }
 
+    // 多维度加权综合打分
     const float order_score_limit = kPairOrderScoreDeltaRatio * size_scale;
     const float order_score =
         std::max(0.0f, 1.0f - order_delta / std::max(order_score_limit, 1.0f));
@@ -683,6 +933,16 @@ struct ProjectedMatching {
         0.0f, 1.0f);
 }
 
+/**
+ * @brief 动态规划搜索聚类内全局最优不重叠配对组合
+ * 状态压缩DP，掩码表示已占用Blob，递归搜索最大配对数量+最高总分
+ * @param blobs 全局灯条数组
+ * @param cluster_indices 当前聚类内Blob局部索引
+ * @param order_values 各Blob局部排序坐标
+ * @param layer_values 各Blob局部分层坐标
+ * @param config 检测器配置
+ * @return 最优匹配方案（配对数量、总分、选中配对列表）
+ */
 [[nodiscard]] ProjectedMatching best_projected_matching(
     const std::vector<LightBlob>& blobs, const std::vector<size_t>& cluster_indices,
     const std::vector<float>& order_values, const std::vector<float>& layer_values,
