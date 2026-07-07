@@ -1,38 +1,45 @@
 #pragma once
+// 头文件保护宏，防止重复包含造成重定义
 
+// 系统任务基类 SystemBase 定义
 #include "../system/system.hpp"
+// 定时器频率枚举 Frequency 常量定义
 #include "timer_constants.hpp"
+// 标准回调函数包装器 std::function
 #include <functional>
+// 独占智能指针 std::unique_ptr
 #include <memory>
+// 系统名称字符串 std::string
 #include <string>
 
 namespace talos::scheduler::rclcompat {
 
 /**
- * @brief Create a timer system (compile-time frequency dispatch)
+ * @brief 创建周期定时器系统（编译期频率分发工厂函数声明）
  *
- * Dispatches to the appropriate RclTimerSystem template specialization
- * based on the Frequency enum value.
+ * 根据传入的 Frequency 枚举值，分发实例化对应模板特化 RclTimerSystem<N>，
+ * 不同频率对应独立编译期模板实例，便于调度器静态时序优化。
  *
- * ## Supported Frequencies
+ * ## 支持频率分类
  *
- * **Low frequency monitoring:** 1, 2, 5 Hz
+ * **低频监控类:** 1, 2, 5 Hz
  *
- * **Standard control:** 10, 20, 27 Hz
+ * **常规控制周期:** 10, 20, 27 Hz
  *
- * **Common sensors/cameras:** 30, 50, 60, 100 Hz
+ * **通用相机/传感器标准帧率:** 30, 50, 60, 100 Hz
  *
- * **High-frequency sensors:** 120, 150, 200, 250, 500, 1000 Hz
+ * **高频传感器/高速控制:** 120, 150, 200, 250, 500, 1000 Hz
  *
- * ## Parameters
+ * ## 入参说明
  *
- * - `name`: System name for identification
- * - `frequency`: Timer frequency from Frequency enum
- * - `callback`: Function to call at each timer tick
+ * - `name`: 定时器系统唯一标识名称，右值引用，支持移动语义零拷贝
+ * - `frequency`: 定时器周期频率枚举，限定预定义固定Hz档位
+ * - `callback`: 每周期触发执行的回调函数对象
  *
- * ## Returns
+ * ## 返回值
  *
- * Unique pointer to the timer system (type-erased as SystemBase)
+ * 类型擦除为 SystemBase 的独占智能指针，可统一存入Node延迟系统缓存，
+ * 调度器统一管理所有类型系统多态运行。
  */
 [[nodiscard]] std::unique_ptr<system::SystemBase>
     create_timer_system(std::string&& name, Frequency frequency, std::function<void()> callback);

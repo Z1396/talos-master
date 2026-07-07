@@ -666,7 +666,7 @@ public:
     template <typename T, typename Topic = DefaultTopic>
     [[nodiscard]] auto get_spsc_reader() noexcept {
         return get<spsc<T, Topic>>();
-    }
+    }resources_resources_
     template <typename T, typename Topic = DefaultTopic>
     [[nodiscard]] auto get_spsc_writer() noexcept {
         return get<spsc_mut<T, Topic>>();
