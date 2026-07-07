@@ -59,6 +59,9 @@ class UniqueAny {
          */
         template <typename... Args>
         explicit Model(std::in_place_t, Args&&... args) noexcept(
+            /*is_nothrow_constructible_v 作用：编译期判断：用参数包 Args... 原地构造 T 会不会抛出异常。
+            true：T(std::forward<Args>(args)...) 构造全程 noexcept，不会抛异常
+            false：构造可能抛出异常*/
             std::is_nothrow_constructible_v<T, Args&&...>)
             : value(std::forward<Args>(args)...) {}
 
@@ -315,11 +318,46 @@ public:
      * @return 资源本体引用
      * 规则：同类型资源只能存在一份，重复插入报错
      */
+     /*1.2 typename... Args
+        变长模板参数包（parameter pack）
+        ... 是包展开标记；
+        Args 会捕获调用时传入的所有构造参数类型，数量不限；
+        支持 0、1、N 个参数，适配任意构造函数。
+        示例对应关系：
+        // 调用：传入两个int
+        manager.emplace<Foo>(10, 20);
+        // T = Foo，Args = [int, int]*/
     template <typename T, typename... Args>
     [[nodiscard]] T& emplace(Args&&... args) {
         using U = std::remove_cvref_t<T>; // 去除 const/引用，拿到原始类型
 
         // 尝试插入：不存在则创建，存在则返回已有迭代器
+        /*try_emplace 是 C++17 新增的容器成员函数，针对关联容器（map/unordered_map），作用：
+        尝试插入 key，key 不存在才原地构造 value；key 已存在则什么都不做。
+        返回结构化绑定 (迭代器, bool)：
+        iterator：该 key 对应的节点迭代器（不管插入成功与否）
+        bool = inserted：true 本次新建；false key 原本就存在
+        二、和 emplace /insert 的核心区别
+
+        1. emplace /insert 的坑:
+        map<TypeIndex, Storage> res;
+        // key 存在时，依然会先构造右侧 Storage 临时对象，再丢弃，白白构造+析构
+        res.emplace(key, Storage{});
+        key 重复时，value 还是会先构造，开销浪费。
+
+        2. try_emplace 优势
+        只有 key 不存在时，才会用 Args... 原地构造 value；
+        key 已存在，完全不构造 value，零多余开销。
+        非常适合你资源管理器 “类型唯一、禁止重复创建” 的场景。*/
+
+        /*3. 两个变量含义（对应 try_emplace 返回 pair）
+        it：容器迭代器
+        key 不存在：指向刚新建的空 value 节点
+        key 已存在：指向原有旧节点
+        后续用 it->second 拿到该类型对应的存储容器
+        inserted：布尔标记
+        true：本次调用新插入了 key，类型资源不存在，正常流程往下创建资源
+        false：key 原本就存在，重复注册资源，触发 panic 崩溃*/             /*try_emplace 返回类型是标准库 pair：std::pair<容器迭代器, bool>*/
         auto [it, inserted] = resources_.try_emplace(typeid(U));
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）
@@ -327,7 +365,14 @@ public:
             panic("Resource already exists: {}", talos::scheduler::detail::demangle(typeid(U).name()));
         }
 
-        // 在类型擦除容器中原位构造 Resource 包装器
+        // 在 UniqueAny 类型擦除容器中原位构造 Resource<U> 包装器
+        // 使用 .template 语法：因 it->second 依赖模板参数，需显式告知编译器 < 为模板参数列表
+        /*3. std::in_place
+        头文件 <utility>，原位构造标记。
+        作用：告诉 emplace 不要先构造临时 Resource<U> 再移动，直接使用后面一串参数，在容器分配的内存上直接构造 Resource<U>。
+        如果不写 std::in_place，编译器会误以为你要传入一个已存在的 Resource<U> 临时对象，产生额外拷贝 / 移动开销。*/
+        // std::forward<Args>(args)... 完美转发构造参数，保留值类别
+        // auto& 绑定返回的左值引用，避免拷贝并确保后续访问的是容器内实体
         auto& storage =
             it->second.template emplace<Resource<U>>(std::in_place, std::forward<Args>(args)...);
 
@@ -520,6 +565,14 @@ public:
         // 3. 保证该类型资源的存储结构已初始化
         ensure_resource_structure_mutable<U>();
         // 4. 在resources_容器中emplace构造/转发存入资源，忽略返回值
+        /*2.1 为什么要加 .template？
+        resources_ 是依赖模板参数的容器（异构容器，类似 std::any 存储、多类型哈希池），编译器在解析阶段分不清：
+        emplace 是成员模板，还是 emplace 乘号 <。
+        模板类成员调用成员模板时，必须加 .template 告诉编译器：后面的 <> 是模板参数列表，不是小于号。
+        语法固定格式：
+        对象.template 模板函数<类型>(参数);
+        resources_.template emplace<U>(args);
+        不加会编译报错，编译器语法解析歧义。*/
         static_cast<void>(resources_.template emplace<U>(std::forward<T>(resource)));
     }
 
@@ -530,6 +583,8 @@ public:
     [[nodiscard]] T& emplace_resource(Args&&... args) {
         using U = std::remove_cvref_t<T>;
         ensure_resource_structure_mutable<U>();
+        /*2. std::forward<Args>(args)... 空包展开会发生什么
+        当 Args... 为空时，std::forward<Args>(args)... 展开后完全消失，无任何代码。*/
         return resources_.template emplace<U>(std::forward<Args>(args)...);
     }
 
