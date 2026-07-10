@@ -9,17 +9,17 @@
 // 系统元数据：ChannelKey、哈希函数、默认通信标签等
 #include "system/system_meta.hpp"
 
-#include <atomic>        // 原子变量：无锁并发、状态标记、计数器
-#include <concepts>      // C++20 概念，做类型约束（本文件少量使用）
-#include <cstdint>       // 标准固定宽度整型
-#include <memory>        // 智能指针 unique_ptr / shared_ptr / weak_ptr
+#include <atomic>          // 原子变量：无锁并发、状态标记、计数器
+#include <concepts>        // C++20 概念，做类型约束（本文件少量使用）
+#include <cstdint>         // 标准固定宽度整型
+#include <memory>          // 智能指针 unique_ptr / shared_ptr / weak_ptr
 #include <spdlog/spdlog.h> // 日志库，用于模块注册、调试打印
-#include <type_traits>   // 类型特征：移动/拷贝、构造性判断、类型萃取
-#include <typeindex>     // 运行时类型索引，作为哈希表 Key
-#include <typeinfo>      // RTTI：typeid 获取运行时类型信息
-#include <unordered_map> // 哈希表，存储异构资源、通信通道
-#include <utility>       // 移动语义 std::forward、std::move
-#include <vector>        // 动态数组，存放多消费者读端
+#include <type_traits>     // 类型特征：移动/拷贝、构造性判断、类型萃取
+#include <typeindex>       // 运行时类型索引，作为哈希表 Key
+#include <typeinfo>        // RTTI：typeid 获取运行时类型信息
+#include <unordered_map>   // 哈希表，存储异构资源、通信通道
+#include <utility>         // 移动语义 std::forward、std::move
+#include <vector>          // 动态数组，存放多消费者读端
 
 // Talos 机器人框架：调度器顶层命名空间
 namespace talos::scheduler {
@@ -41,7 +41,7 @@ struct PubSlot;
 class UniqueAny {
     // 内部抽象接口基类：类型擦除统一接口
     struct Concept {
-        virtual ~Concept()                                  = default;
+        virtual ~Concept() = default;
         // 获取内部真实类型信息
         virtual const std::type_info& type() const noexcept = 0;
     };
@@ -49,7 +49,7 @@ class UniqueAny {
     // 模板实现类：承载具体业务类型，继承抽象接口
     template <typename T>
     struct Model final : Concept {
-        T value;  // 真正存储的业务对象
+        T value; // 真正存储的业务对象
 
         /**
          * @brief 原位构造内部对象
@@ -59,8 +59,8 @@ class UniqueAny {
          */
         template <typename... Args>
         explicit Model(std::in_place_t, Args&&... args) noexcept(
-            /*is_nothrow_constructible_v 作用：编译期判断：用参数包 Args... 原地构造 T 会不会抛出异常。
-            true：T(std::forward<Args>(args)...) 构造全程 noexcept，不会抛异常
+            /*is_nothrow_constructible_v 作用：编译期判断：用参数包 Args... 原地构造 T
+            会不会抛出异常。 true：T(std::forward<Args>(args)...) 构造全程 noexcept，不会抛异常
             false：构造可能抛出异常*/
             std::is_nothrow_constructible_v<T, Args&&...>)
             : value(std::forward<Args>(args)...) {}
@@ -73,8 +73,8 @@ class UniqueAny {
     std::unique_ptr<Concept> ptr_;
 
 public:
-    UniqueAny()  = default;  // 默认构造：空容器
-    ~UniqueAny() = default;  // 默认析构
+    UniqueAny()  = default; // 默认构造：空容器
+    ~UniqueAny() = default; // 默认析构
 
     // 允许移动构造、移动赋值（核心特性：仅移动）
     UniqueAny(UniqueAny&&) noexcept            = default;
@@ -162,7 +162,8 @@ public:
         if (!p) {
             panic(
                 "UniqueAny bad cast: requested {} but stored {}",
-                talos::scheduler::detail::demangle(typeid(T).name()), talos::scheduler::detail::demangle(type().name()));
+                talos::scheduler::detail::demangle(typeid(T).name()),
+                talos::scheduler::detail::demangle(type().name()));
         }
         return *p;
     }
@@ -178,7 +179,8 @@ public:
         if (!p) {
             panic(
                 "UniqueAny bad cast: requested {} but stored {}",
-                talos::scheduler::detail::demangle(typeid(T).name()), talos::scheduler::detail::demangle(type().name()));
+                talos::scheduler::detail::demangle(typeid(T).name()),
+                talos::scheduler::detail::demangle(type().name()));
         }
         return *p;
     }
@@ -240,14 +242,14 @@ struct WorldLifetimeToken {};
 template <typename T>
 struct SpscStorage {
     using Channel    = primitive::SpscChannel<T>; // 底层 SPSC 队列/通道
-    using Writer     = Channel::Writer;          // 生产者（写端）
-    using Reader     = Channel::Reader;          // 消费者（读端）
-    using value_type = T;                        // 通道传输数据类型
+    using Writer     = Channel::Writer;           // 生产者（写端）
+    using Reader     = Channel::Reader;           // 消费者（读端）
+    using value_type = T;                         // 通道传输数据类型
 
-    std::unique_ptr<Writer> writer;  // 写端智能指针
-    std::unique_ptr<Reader> reader;   // 读端智能指针
-    bool writer_claimed = false;      // 标记：写端是否已被绑定占用
-    bool reader_claimed = false;      // 标记：读端是否已被绑定占用
+    std::unique_ptr<Writer> writer;               // 写端智能指针
+    std::unique_ptr<Reader> reader;               // 读端智能指针
+    bool writer_claimed = false;                  // 标记：写端是否已被绑定占用
+    bool reader_claimed = false;                  // 标记：读端是否已被绑定占用
 
     /**
      * @brief 静态创建 SPSC 通道实例
@@ -278,8 +280,8 @@ struct SpmcStorage {
     using Reader     = Channel::Reader;           // 消费者读端
     using value_type = T;                         // 传输数据类型
 
-    std::unique_ptr<Channel> channel;                // 通道主体（唯一写端）
-    std::vector<std::unique_ptr<Reader>> readers;    // 所有克隆的读端集合
+    std::unique_ptr<Channel> channel;             // 通道主体（唯一写端）
+    std::vector<std::unique_ptr<Reader>> readers; // 所有克隆的读端集合
 
     /**
      * @brief 静态创建 SPMC 通道实例
@@ -318,15 +320,15 @@ public:
      * @return 资源本体引用
      * 规则：同类型资源只能存在一份，重复插入报错
      */
-     /*1.2 typename... Args
-        变长模板参数包（parameter pack）
-        ... 是包展开标记；
-        Args 会捕获调用时传入的所有构造参数类型，数量不限；
-        支持 0、1、N 个参数，适配任意构造函数。
-        示例对应关系：
-        // 调用：传入两个int
-        manager.emplace<Foo>(10, 20);
-        // T = Foo，Args = [int, int]*/
+    /*1.2 typename... Args
+       变长模板参数包（parameter pack）
+       ... 是包展开标记；
+       Args 会捕获调用时传入的所有构造参数类型，数量不限；
+       支持 0、1、N 个参数，适配任意构造函数。
+       示例对应关系：
+       // 调用：传入两个int
+       manager.emplace<Foo>(10, 20);
+       // T = Foo，Args = [int, int]*/
     template <typename T, typename... Args>
     [[nodiscard]] T& emplace(Args&&... args) {
         using U = std::remove_cvref_t<T>; // 去除 const/引用，拿到原始类型
@@ -362,15 +364,19 @@ public:
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）
         if (!inserted) [[unlikely]] {
-            panic("Resource already exists: {}", talos::scheduler::detail::demangle(typeid(U).name()));
+            panic(
+                "Resource already exists: {}",
+                talos::scheduler::detail::demangle(typeid(U).name()));
         }
 
         // 在 UniqueAny 类型擦除容器中原位构造 Resource<U> 包装器
         // 使用 .template 语法：因 it->second 依赖模板参数，需显式告知编译器 < 为模板参数列表
         /*3. std::in_place
         头文件 <utility>，原位构造标记。
-        作用：告诉 emplace 不要先构造临时 Resource<U> 再移动，直接使用后面一串参数，在容器分配的内存上直接构造 Resource<U>。
-        如果不写 std::in_place，编译器会误以为你要传入一个已存在的 Resource<U> 临时对象，产生额外拷贝 / 移动开销。*/
+        作用：告诉 emplace 不要先构造临时 Resource<U>
+        再移动，直接使用后面一串参数，在容器分配的内存上直接构造 Resource<U>。 如果不写
+        std::in_place，编译器会误以为你要传入一个已存在的 Resource<U> 临时对象，产生额外拷贝 /
+        移动开销。*/
         // std::forward<Args>(args)... 完美转发构造参数，保留值类别
         // auto& 绑定返回的左值引用，避免拷贝并确保后续访问的是容器内实体
         auto& storage =
@@ -498,7 +504,8 @@ public:
         // 类型校验失败，报错
         if (!ptr || !*ptr) [[unlikely]] {
             panic(
-                "Channel storage type mismatch: {}@{}", talos::scheduler::detail::demangle(typeid(T).name()),
+                "Channel storage type mismatch: {}@{}",
+                talos::scheduler::detail::demangle(typeid(T).name()),
                 talos::scheduler::detail::demangle(typeid(Topic).name()));
         }
 
@@ -566,11 +573,10 @@ public:
         ensure_resource_structure_mutable<U>();
         // 4. 在resources_容器中emplace构造/转发存入资源，忽略返回值
         /*2.1 为什么要加 .template？
-        resources_ 是依赖模板参数的容器（异构容器，类似 std::any 存储、多类型哈希池），编译器在解析阶段分不清：
-        emplace 是成员模板，还是 emplace 乘号 <。
-        模板类成员调用成员模板时，必须加 .template 告诉编译器：后面的 <> 是模板参数列表，不是小于号。
-        语法固定格式：
-        对象.template 模板函数<类型>(参数);
+        resources_ 是依赖模板参数的容器（异构容器，类似 std::any
+        存储、多类型哈希池），编译器在解析阶段分不清： emplace 是成员模板，还是 emplace 乘号 <。
+        模板类成员调用成员模板时，必须加 .template 告诉编译器：后面的 <>
+        是模板参数列表，不是小于号。 语法固定格式： 对象.template 模板函数<类型>(参数);
         resources_.template emplace<U>(args);
         不加会编译报错，编译器语法解析歧义。*/
         static_cast<void>(resources_.template emplace<U>(std::forward<T>(resource)));
@@ -666,7 +672,7 @@ public:
     template <typename T, typename Topic = DefaultTopic>
     [[nodiscard]] auto get_spsc_reader() noexcept {
         return get<spsc<T, Topic>>();
-    }resources_resources_
+    }
     template <typename T, typename Topic = DefaultTopic>
     [[nodiscard]] auto get_spsc_writer() noexcept {
         return get<spsc_mut<T, Topic>>();
@@ -754,9 +760,13 @@ private:
 
     // 资源句柄分发
     template <typename T>
-    [[nodiscard]] auto get_impl(res<T>) noexcept { return get_res<T>(); }
+    [[nodiscard]] auto get_impl(res<T>) noexcept {
+        return get_res<T>();
+    }
     template <typename T>
-    [[nodiscard]] auto get_impl(res_mut<T>) noexcept { return get_res_mut<T>(); }
+    [[nodiscard]] auto get_impl(res_mut<T>) noexcept {
+        return get_res_mut<T>();
+    }
 
     /**
      * @brief 底层接口：获取通道存储指针
@@ -767,8 +777,8 @@ private:
     }
 
 private:
-    ResourceStore resources_;                          // 全局资源管理器
-    ChannelStore channels_;                            // 通信通道管理器（CAN/内部总线）
+    ResourceStore resources_;                            // 全局资源管理器
+    ChannelStore channels_;                              // 通信通道管理器（CAN/内部总线）
     std::atomic<bool> resource_structure_frozen_{false}; // 原子标记：资源结构是否冻结
     std::shared_ptr<WorldLifetimeToken> lifetime_token_; // 生命周期令牌
 
