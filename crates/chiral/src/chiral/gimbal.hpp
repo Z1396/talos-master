@@ -55,6 +55,7 @@ struct McuData {
     // 云台俯仰角速度 rad/s
     float pitch_vel;
     // 云台滚转角速度 rad/s
+    float roll_vel;
 
     // 默认无参构造，成员默认随机内存值
     McuData() = default;
