@@ -34,6 +34,10 @@ std::atomic<bool> g_shutdown_requested{false};
  */
 void signal_handler(int /*sig*/) {
     // 内存序 release：保证本次写操作对后续读线程可见
+    // 另一边必须用 memory_order_acquire（load 加载）acquire 屏障：load 之后的代码，不能被重排到 load 前面。
+    /*Release 写：前面的不许往后跑
+    Acquire 读：后面的不许往前跑
+    Release 配 Acquire，建立线程间可见性同步*/
     g_shutdown_requested.store(true, std::memory_order_release);
 }
 

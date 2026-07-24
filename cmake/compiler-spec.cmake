@@ -1,5 +1,13 @@
 # 定义编译选项：是否启用 sccache 编译缓存，默认开启 ON
 # sccache：编译加速工具，缓存编译产物，重复编译大幅提速
+# <variable>
+# 变量名称，例如 ENABLE_SCCACHE。
+# 这个变量会存入 CMakeCache.txt，属于缓存变量。
+# <help_text>
+# 字符串，说明这个选项作用；
+# 在 ccmake / cmake-gui 图形界面作为提示文字展示。
+# [value] 初始值（可选）
+# 只能填写：ON 或 OFF
 option(ENABLE_SCCACHE "Enable compiler caching via sccache" ON)
 
 # 判断用户是否开启 sccache 功能
@@ -31,12 +39,19 @@ endif ()
 
 # 全局添加编译参数：生成位置无关代码（Position-Independent Code）
 # 作用：用于动态库 .so / 共享库编译，否则链接动态库会报错
+# -fPIC 作用：让机器码不绑定固定内存地址；
+# 唯一刚需：Linux 编译 .so 动态库必须；
+# 原理：地址全部用「相对偏移」，操作系统随便加载都不会崩；
+# 尽量不要全局 add_compile_options(-fPIC)，尽量只给动态库目标单独开启，不然强行加上只会轻微变慢、文件变大。。
 add_compile_options(-fPIC)
 
 # ====================== 通用编译优化参数（GCC / Clang 双编译器兼容） ======================
 # 注释说明：
 # -march=native / -mtune=native：针对本机CPU架构优化指令集，仅本地编译可用
 # 交叉编译场景（编译ARM/aarch64开发板固件）不能使用，否则会生成仅主机能跑的二进制，开发板无法运行
+# CMAKE_CROSSCOMPILING 是 CMake 内置只读布尔变量
+# ON = 当前正在交叉编译
+# OFF = 原生编译（本机编译器编译本机能跑的程序）
 if (CMAKE_CROSSCOMPILING)
     # CMAKE_CROSSCOMPILING 为 ON：当前是交叉编译环境，目标架构 aarch64/arm64 Cortex-A55
     if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
