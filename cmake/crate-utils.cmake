@@ -38,7 +38,9 @@ function(crate)
     # 格式：cmake_parse_arguments(前缀 无值开关列表 单值参数列表 多值参数列表 原始参数${ARGN})
     #     cmake_parse_arguments(
     #     PREFIX                     解析后所有变量的前缀，比如填 ARG，解析出的变量叫 ARG_NAME、ARG_TYPE
-    #     OPTIONS                    无值开关（布尔参数，只写关键字 = ON，不写 = OFF），分号分隔列表
+    #     OPTIONS                    无值开关（布尔参数，只写关键字 = ON，不写 = OFF,空字符串 "" → 假未定义的变量 → 假
+    #                                                                                        OFF;0;NO;FALSE;N → 假
+    #                                                                                        其余视为真），分号分隔列表
     #     ONE_VALUE_KEYWORDS         单值参数，关键字后面只能跟 1 个值
     #     MULTI_VALUE_KEYWORDS       多值参数，关键字后面可以跟一串值
     #     ARGN                       捕获当前函数调用时传入的所有原始参数
@@ -52,7 +54,7 @@ function(crate)
     )
 
     # ====================== 1. 校验必填参数 ======================
-    # 必须指定 NAME
+    # 必须指定 NAME,如果 ARG_NAME 不存在 或者 ARG_NAME 是空字符串,直接终止 CMake Configure 阶段，打印错误；构建立刻失败，不再往下执行。
     if(NOT ARG_NAME)
         message(FATAL_ERROR "crate(): NAME is required")
     endif()
@@ -85,8 +87,19 @@ function(crate)
     endif()
 
     # ====================== 5. 根据TYPE创建目标：INTERFACE库 / 可执行程序 / 普通静态/动态库 ======================
+    #STREQUAL含义：字符串相等判断函数，区分大小写。
+    #功能：对比两个字符串，完全一致返回真，不一致返回假。
     if(ARG_TYPE STREQUAL "INTERFACE")
         # 场景：纯头文件库，无编译产物，仅提供头文件、依赖传递
+        # 三种普通库对比
+        # STATIC：编译生成 .a 静态归档文件，有源文件，参与编译
+        # SHARED：编译生成 .so/.dll 动态库，有源文件
+        # INTERFACE
+        # 不会产生任何编译输出文件（没有 .a/.so）
+        # 不能绑定源文件 SOURCES
+        # 它本质只是一套属性集合：头文件路径、编译选项、依赖库
+        # 谁 target_link_libraries(xxx ${ARG_NAME})，谁自动继承这套属性
+        # 适用场景：Eigen、头文件模板库、单纯的类型定义 / 常量头文件（无 cpp 实现）。
         add_library(${ARG_NAME} INTERFACE)
         # 设置头文件目录
         target_include_directories(${ARG_NAME} INTERFACE
