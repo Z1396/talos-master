@@ -54,7 +54,6 @@ status() {
     local msg="$3"
     echo -e "${color}${symbol} ${msg}${RESET}"
 }
-
 # 普通信息日志（蓝色）
 info() {
     # 调用基础日志函数，固定前缀、颜色
@@ -124,7 +123,7 @@ command_exists() {
 # uname -s：Shell 内置命令，输出系统内核名称
 # case ... esac：Shell 多分支条件判断，等价其他语言 switch-case
 detect_os() {
-    local os
+    local os  # 局部变量：存储操作系统类型（Darwin/Linux）
     os="$(uname -s)"  # $() 命令替换：执行命令，将输出赋值给变量
     case "$os" in
         Darwin) echo "macos" ;;  # macOS 系统 uname -s 固定输出 Darwin
@@ -136,7 +135,7 @@ detect_os() {
 # 【工具函数】探测当前CPU架构
 # uname -m：输出机器硬件架构
 detect_arch() {
-    local arch
+    local arch  # 局部变量：存储CPU架构（x86_64/arm64）
     arch="$(uname -m)"
     case "$arch" in
         x86_64)         echo "x86_64" ;; # 传统64位PC架构
@@ -577,6 +576,12 @@ run_tests() {
 # 命令行参数解析：解析 ./build.sh 后跟的启动参数
 # while [[ $# -gt 0 ]]：$# 代表当前参数个数，大于0则循环解析
 # shift：参数左移，丢弃第一个参数，处理下一个
+# $#
+# 内置特殊变量：当前函数 / 脚本收到的参数总个数
+# 示例：传入 --build --asan → $# = 2
+# [[ $# -gt 0 ]]
+# -gt = greater than（数值大于）
+# 含义：参数数量 > 0，还有参数没处理完
 # -----------------------------------------------------------------------------
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -668,8 +673,6 @@ main() {
     # 加双引号 "$@"：保留参数内部空格，参数独立拆分（标准正确写法）
     # 举例子：
     # 运行脚本
-    # bash
-    # 运行
     # ./build.sh --mode release --name "my robot"
     # 此时：
     # "$@" 等价于 "--mode" "release" "--name" "my robot"
@@ -685,9 +688,21 @@ main() {
     OS="$(detect_os)"
     ARCH="$(detect_arch)"
 
-    # 校验系统/架构合法性
-    [[ "$OS"   != "unknown" ]] || die "Unsupported OS: $(uname -s)"
-    [[ "$ARCH" != "unknown" ]] || die "Unsupported architecture: $(uname -m)"
+    # 校验系统/架构合法性（[[ 条件 ]] || die ... ：条件不成立则终止）
+    # [[ ... ]] 是 Bash 内置高级条件判断（推荐，比 [ ] 更安全）
+    # 语法规则：
+    # 内部两端必须有空格：[[ 内容 ]]
+    # != 是字符串不等于比较
+    # 变量建议双引号 "$OS"，防止空变量、带空格引发语法崩坏
+    # [[ "$OS" != "unknown" ]]
+    # 语义：如果 OS 不等于 unknown → 条件成立（返回 0）
+    # 如果 OS == unknown → 条件不成立（返回非0）
+    # 命令A || 命令B
+    # 逻辑：
+    # ✅ A 执行失败（返回非 0），才会执行 B
+    # ✅ A 执行成功（返回 0），直接跳过 B，B 不会运行
+    [[ "$OS"   != "unknown" ]] || die "Unsupported OS: $(uname -s)"       # OS 探测失败 → 报错退出
+    [[ "$ARCH" != "unknown" ]] || die "Unsupported architecture: $(uname -m)" # ARCH 探测失败 → 报错退出
 
     # 强制检查 Ninja 工具
     ensure_generator
@@ -735,3 +750,15 @@ main() {
 
 # 调用主函数，将脚本所有启动参数传递给 main
 main "$@"
+
+
+
+# $0   脚本自身名称
+# $1 $2 $3 第1、2、3号参数
+# $#   参数总数量
+# "$@" 全部参数（数组形式，推荐）
+# "$*" 全部参数合并为字符串
+# $?  上一条命令的退出码（0成功）
+# $$  当前shell进程PID
+# $!  最后一个后台进程PID
+# $_  上一条命令最后一个参数
