@@ -1,0 +1,5 @@
+CompileFlags:
+  CompilationDatabase: build
+  Add:
+    - -I/home/pldx/Desktop/talos-master/build/_deps/spdlog-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/fmt-src/include
