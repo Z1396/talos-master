@@ -21,20 +21,20 @@
 #include <Eigen/Core>
 
 // C++标准库
-#include <algorithm>    // std::sort, std::max, std::clamp, std::min
-#include <array>        // 固定数组
-#include <cassert>      // 运行时断言，校验求解器创建成功
-#include <chrono>       // 高精度计时基准测试
-#include <cmath>        // 数学计算 sin/cos/pi/abs/sqrt
-#include <cstdlib>      // 基础C标准库
-#include <iomanip>      // 控制台格式化输出 精度/对齐/科学计数法
-#include <iostream>     // 标准输入输出
-#include <memory>       // std::unique_ptr 自动内存管理
-#include <numbers>      // C++20 标准数学常量 π
-#include <random>       // 随机噪声生成器（噪声参考轨迹）
-#include <string>       // 字符串
-#include <utility>      // std::move 所有权转移
-#include <vector>       // 动态数组，存储耗时采样、误差统计
+#include <algorithm> // std::sort, std::max, std::clamp, std::min
+#include <array>     // 固定数组
+#include <cassert>   // 运行时断言，校验求解器创建成功
+#include <chrono>    // 高精度计时基准测试
+#include <cmath>     // 数学计算 sin/cos/pi/abs/sqrt
+#include <cstdlib>   // 基础C标准库
+#include <iomanip>   // 控制台格式化输出 精度/对齐/科学计数法
+#include <iostream>  // 标准输入输出
+#include <memory>    // std::unique_ptr 自动内存管理
+#include <numbers>   // C++20 标准数学常量 π
+#include <random>    // 随机噪声生成器（噪声参考轨迹）
+#include <string>    // 字符串
+#include <utility>   // std::move 所有权转移
+#include <vector>    // 动态数组，存储耗时采样、误差统计
 
 // 项目命名空间：飞控L5机型
 using namespace fcs::L5;
@@ -78,7 +78,7 @@ template <typename T>
 }
 
 // 高精度稳定时钟，不受系统时钟调整影响
-using Clock     = std::chrono::steady_clock;
+using Clock = std::chrono::steady_clock;
 // 时钟时间点类型
 using TimePoint = std::chrono::time_point<Clock>;
 
@@ -96,19 +96,19 @@ using TimePoint = std::chrono::time_point<Clock>;
 // 前向预测时域长度
 static constexpr int kHorizonAhead = 50;
 // 后向历史时域长度（中心输出取该位置）
-static constexpr int kHorizonBack  = 50;
+static constexpr int kHorizonBack = 50;
 // 完整预测总时域：历史+前向+当前步
-static constexpr int kHorizon      = kHorizonAhead + kHorizonBack + 1;
+static constexpr int kHorizon = kHorizonAhead + kHorizonBack + 1;
 // 离散控制步长 10ms
-static constexpr double kDt        = 0.01;
+static constexpr double kDt = 0.01;
 // ADMM 惩罚系数 rho
-static constexpr double kRho       = 1.0;
+static constexpr double kRho = 1.0;
 // 原始/对偶残差收敛阈值
-static constexpr double kAbsTol    = 1e-3;
+static constexpr double kAbsTol = 1e-3;
 // 基准预热迭代次数，消除冷启动缓存/分支预测干扰
-static constexpr int kWarmup       = 200;
+static constexpr int kWarmup = 200;
 // 基准正式采样迭代次数，统计分布分位数
-static constexpr int kTrials       = 1000;
+static constexpr int kTrials = 1000;
 
 /**
  * @brief 单轴MPC权重与硬件约束参数结构体
@@ -121,7 +121,7 @@ struct AxisParams {
 };
 
 // 偏航轴配置参数
-static constexpr AxisParams kYaw   = {9e6, 0.0, 1.0, 50.0};
+static constexpr AxisParams kYaw = {9e6, 0.0, 1.0, 50.0};
 // 俯仰轴配置参数（带位置硬约束）
 static constexpr AxisParams kPitch = {9e6, 0.0, 1.0, 100.0};
 
@@ -161,7 +161,7 @@ using RefTrajectory = Eigen::MatrixXd;
     const double T  = static_cast<double>(std::max(N - 1, 1)) * kDt;
 
     for (int i = 0; i < N; ++i) {
-        const double tau  = static_cast<double>(i) * kDt;
+        const double tau = static_cast<double>(i) * kDt;
         // 当前瞬时频率
         const double freq = f0 + (f1 - f0) * tau / T;
         // 线性调频积分相位
@@ -254,16 +254,16 @@ private:
      * @return 自动释放智能指针TinySolverPtr
      */
     [[nodiscard]] static TinySolverPtr make(bool is_pitch) {
-        const AxisParams& p     = is_pitch ? kPitch : kYaw;
+        const AxisParams& p = is_pitch ? kPitch : kYaw;
         // 离散状态矩阵 A=[1 dt; 0 1] 积分模型
         const Eigen::Matrix2d A = (Eigen::Matrix2d{} << 1.0, kDt, 0.0, 1.0).finished();
         // 输入矩阵 B=[0; dt] 加速度输入积分速度
         const Eigen::Matrix<double, 2, 1> B =
             (Eigen::Matrix<double, 2, 1>{} << 0.0, kDt).finished();
         // 常数扰动项 0
-        const Eigen::Vector2d f             = Eigen::Vector2d::Zero();
+        const Eigen::Vector2d f = Eigen::Vector2d::Zero();
         // 状态代价对角矩阵 [q_pos, q_vel]
-        const Eigen::Matrix2d Q             = Eigen::Vector2d{p.q_pos, p.q_vel}.asDiagonal();
+        const Eigen::Matrix2d Q = Eigen::Vector2d{p.q_pos, p.q_vel}.asDiagonal();
         // 输入代价标量矩阵 R=r
         const Eigen::Matrix<double, 1, 1> R = Eigen::Matrix<double, 1, 1>::Constant(p.r);
 
@@ -272,16 +272,16 @@ private:
         tiny_setup(&raw, A, B, f, Q, R, kRho, 2, 1, kHorizon, 0);
         TinySolverPtr solver(raw);
 
-        auto* s                        = solver.get();
+        auto* s = solver.get();
         // 收敛阈值与全局常量对齐
-        s->settings->abs_pri_tol       = kAbsTol;
-        s->settings->abs_dua_tol       = kAbsTol;
+        s->settings->abs_pri_tol = kAbsTol;
+        s->settings->abs_dua_tol = kAbsTol;
         // 开启迭代终止判断
         s->settings->check_termination = 1;
         // 开启输入加速度上下限约束
-        s->settings->en_input_bound    = 1;
+        s->settings->en_input_bound = 1;
         // 俯仰轴开启位置硬约束，偏航关闭
-        s->settings->en_state_bound    = is_pitch ? 1 : 0;
+        s->settings->en_state_bound = is_pitch ? 1 : 0;
 
         // 默认状态上下限极大值（无约束）
         Eigen::MatrixXd x_min = Eigen::MatrixXd::Constant(2, kHorizon, -1e17);
@@ -340,13 +340,13 @@ struct DualSetup {
  * @brief 基准统计输出结构体，存储单次基准全部采样分布指标
  */
 struct Stats {
-    double min;         // 最小耗时微秒
-    double p50;         // 50分位数（中位数）
-    double p95;         // 95分位数（长尾性能指标）
-    double max;         // 最大耗时微秒
-    double mean;        // 算术平均耗时
-    double stddev;      // 标准差，波动程度
-    int converged_count;// 迭代收敛成功次数
+    double min;          // 最小耗时微秒
+    double p50;          // 50分位数（中位数）
+    double p95;          // 95分位数（长尾性能指标）
+    double max;          // 最大耗时微秒
+    double mean;         // 算术平均耗时
+    double stddev;       // 标准差，波动程度
+    int converged_count; // 迭代收敛成功次数
 };
 
 /**
@@ -637,20 +637,20 @@ struct CenterOutput {
  * @brief 两套求解器输出对比完整报告
  */
 struct CenterOutputReport {
-    CenterOutput tiny;       // TinyMPC输出
-    CenterOutput dual;       // Dual一体化求解器输出
-    CenterOutput abs_err;    // 各分量绝对误差
-    CenterOutput norm_err;   // 归一化工程误差（按执行量程缩放）
+    CenterOutput tiny;     // TinyMPC输出
+    CenterOutput dual;     // Dual一体化求解器输出
+    CenterOutput abs_err;  // 各分量绝对误差
+    CenterOutput norm_err; // 归一化工程误差（按执行量程缩放）
 
-    double max_abs_err;      // 全局最大绝对误差
-    double max_norm_err;     // 全局最大归一化误差
+    double max_abs_err;    // 全局最大绝对误差
+    double max_norm_err;   // 全局最大归一化误差
 
-    int center_index;        // 中心时域步索引 kHorizonBack
-    int control_index;       // 控制输入时域步索引 center_index-1
+    int center_index;      // 中心时域步索引 kHorizonBack
+    int control_index;     // 控制输入时域步索引 center_index-1
 
-    bool tiny_converged;     // Tiny双轴是否全部收敛
-    bool dual_converged;     // Dual求解器是否收敛
-    bool pass;               // 整体正确性校验是否通过
+    bool tiny_converged;   // Tiny双轴是否全部收敛
+    bool dual_converged;   // Dual求解器是否收敛
+    bool pass;             // 整体正确性校验是否通过
 };
 
 /**
@@ -875,7 +875,7 @@ struct FullHorizonDebugReport {
     const int yaw_status   = tiny_solve(yaw);
     const int pitch_status = tiny_solve(pitch);
 
-    dual.solver.set_x0(yaw_ref_d(0, 0), yaw_ref_d(1, 0), pitch_ref_d(0, 0), pitch_ref_d(1, 0));
+    dual.solver.set_x0(yaw_ref(0, 0), yaw_ref(1, 0), pitch_ref(0, 0), pitch_ref(1, 0));
     dual.solver.set_reference(yaw_ref.cast<float>(), pitch_ref.cast<float>());
     const bool dual_ok = dual.solver.solve();
 
@@ -1073,3 +1073,4 @@ int main() {
     }
 
     return 0;
+}

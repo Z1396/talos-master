@@ -20,6 +20,14 @@ include(cmake/compiler-spec.cmake)
 # 全局安装路径覆盖逻辑
 # CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT：标记用户未手动指定安装目录
 # 默认不装到系统/usr/local，强制安装至项目根目录，实现工程内自包含部署
+# 什么时候 ON？
+# 你执行 cmake 没有通过任何方式自定义安装路径
+# cmake -B build
+# CMake 一开始原生默认值就是 /usr/local
+# 👉 CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT = ON
+# 注意：哪怕你随后在 CMake 脚本里手动修改了 CMAKE_INSTALL_PREFIX（改成项目目录），
+# 这个变量依旧保持 ON！
+# 它记录的是【最一开始启动瞬间的状态】，不会跟随后续修改而变化。
 # ------------------------------------------------------------------------------
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
     # FORCE强制覆盖缓存内默认路径，CACHE PATH给GUI工具显示说明
