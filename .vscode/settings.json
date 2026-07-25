@@ -11,6 +11,10 @@
         "CC": "clang-21",
         "CXX": "clang++-21"
     },
+    "cmake.configureArgs": [
+        "-DCMAKE_C_COMPILER=/usr/bin/clang-21",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/clang++-21"
+    ],
     "editor.formatOnSave": true,
     "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
     "files.exclude": {
