@@ -52,10 +52,32 @@ concept ReadFrom = requires(T& t, const toml::table& table) {
     放到你代码里的含义：
     调用 t.read_from(table) 得到的返回值，不能是兼容、不能隐式转换，必须精准就是 std::expected<void, std::string>。*/
     { t.read_from(table) } -> std::same_as<std::expected<void, std::string>>;
+    /*这是 C++20 requires 子句内的隐式表达式约束（type constraint with ->）
+    { 表达式 } -> 类型约束;
+    表达式的返回类型满足后面的约束。*/
 };
 
 /// 约束：TOML原生标量基础类型（可直接从节点读取，无需嵌套子表）
 template <typename T>
+                        /*std::is_arithmetic_v<T>编译期常量判断：
+                        T 是否属于算术类型（整数类型 + 浮点类型）
+                        返回 true / false
+                        头文件：<type_traits>
+                        2. 哪些类型算 arithmetic ✅
+                        整型系列
+                        bool、char、signed char、unsigned char
+                        short、unsigned short
+                        int、unsigned int
+                        long、unsigned long
+                        long long、unsigned long long
+                        浮点系列
+                        float、double、long double
+                        3. 这些不属于 arithmetic ❌
+                        指针 int*
+                        引用 int&
+                        std::string、std::vector、所有自定义结构体 LaunchConfig
+                        std::size_t 本质是 unsigned long，属于算术；
+                        enum 枚举不是算术类型*/
 concept TomlScalarValue = std::is_arithmetic_v<T>          // int/float/bool
                        || std::is_same_v<T, std::string>
                        || std::is_same_v<T, std::string_view>
@@ -72,9 +94,11 @@ concept TomlScalarValue = std::is_arithmetic_v<T>          // int/float/bool
 const T → T
 volatile T → T
 const volatile T → T*/
+// 来自 common.hpp 第 75-77 行
 template <typename T>
-concept Reflectable = field_reflection::field_referenceable<std::remove_cvref_t<T>>
-                   && field_reflection::field_namable<std::remove_cvref_t<T>>;
+concept Reflectable = 
+    field_reflection::field_referenceable<std::remove_cvref_t<T>>  // 能获取字段引用
+    && field_reflection::field_namable<std::remove_cvref_t<T>>;    // 能获取字段名
 
 // ============================================================================
 // 枚举工具函数：获取全部合法枚举字符串列表，用于报错提示

@@ -85,11 +85,15 @@ template <ReflectDeserializeCandidate T>
     // 反射遍历结构体全部字段：回调传入字段名、字段引用
     field_reflection::for_each_field(out, [&](std::string_view field_name, auto&& field) {
         // 短路逻辑：已有字段解析失败，跳过后续所有字段
-        if (!result) {
+        if (!result) 
+        {
             return;
         }
         // 解析单个字段
-        if (auto field_result = parse_reflected_field(table, field_name, field); !field_result) {
+        /*##  为什么这样写？
+        ### 优势：变量作用域限制在 if 语句内*/
+        if (auto field_result = parse_reflected_field(table, field_name, field); !field_result) 
+        {
             // 捕获第一个错误，覆盖result
             result = std::unexpected(field_result.error());
         }
@@ -112,27 +116,45 @@ template <ReflectDeserializeCandidate T>
  */
 template <typename T>
 [[nodiscard]] std::expected<void, std::string>
-    parse_reflected_field(const toml::table& table, std::string_view field_name, T& field) {
+    parse_reflected_field(const toml::table& table, std::string_view field_name, T& field) 
+{
     // 剥离字段的const/引用修饰，获取原始包装/基础类型
     using field_type = std::remove_cvref_t<T>;
 
     // 分支1：flatten<T> 平铺子表，把子表的键全部提升到父表读取，无嵌套层级
-    if constexpr (is_flatten_v<field_type>) {
+    if constexpr (is_flatten_v<field_type>) 
+    {
         using flattened_type = flatten_value_t<field_type>;
-        // 编译期静态断言：flatten内部类型必须支持table解析（反射/ReadFrom）
+        // 编译期静态断言：flatten内部类型必须支持table解析（反射/ReadFrom）、
+        /*static_assert = 编译期断言
+        作用：在编译阶段执行条件判断；条件不成立 → 直接触发编译失败，打印提示信息。
+        重点区分：
+        assert()：运行期断言，程序跑起来才检查，头文件 <cassert>
+        static_assert：编译期断言，程序还没生成就检查，不需要头文件
+        第一个参数：必须是 constexpr 布尔常量表达式
+        第二个参数：编译报错时输出的字符串字面量*/
         static_assert(
             TableReadable<flattened_type>,
             "toml_helper::flatten<T> requires T to be reflective or implement read_from");
         // 直接用父table填充flatten内部对象，不查找当前field_name键
+        // 调用递归解析flatten内部对象
+        /*## field.get() 得到的是什么？
+        作用：得到 flatten<T> 内部包裹的 T 类型引用
+        field 是什么？ flatten<PresetEntry> 类型的引用 field.get() 得到什么？ 
+        PresetEntry& （内部值的引用） 为什么要用 get() ？ 
+        从包装器中取出内部值 然后用它做什么？ 
+        递归解析 PresetEntry 的字段*/
         auto result = read_object_into(table, field.get());
-        if (!result) {
+        if (!result) 
+        {
             // 错误追加字段名前缀，方便定位配置错误
             return std::unexpected(prefixed_error(field_name, result.error()));
         }
         return {};
     }
     // 分支2：required<T> 强制必填字段，配置文件缺少该键直接报错
-    else if constexpr (is_required_v<field_type>) {
+    else if constexpr (is_required_v<field_type>) 
+    {
         using required_type = required_value_t<field_type>;
         // 禁止嵌套 required<flatten<T>>
         static_assert(
@@ -154,7 +176,8 @@ template <typename T>
         return {};
     }
     // 分支3：std::optional<T> 可选字段，不存在键则置空不报错
-    else if constexpr (is_std_optional_v<field_type>) {
+    else if constexpr (is_std_optional_v<field_type>) 
+    {
         using optional_type = optional_value_t<field_type>;
         // 禁止 std::optional<flatten<T>>
         static_assert(
