@@ -3,3 +3,15 @@ CompileFlags:
   Add:
     - -I/home/pldx/Desktop/talos-master/build/_deps/spdlog-src/include
     - -I/home/pldx/Desktop/talos-master/build/_deps/fmt-src/include
+    - -I/home/pldx/Desktop/talos-master/crates/toml/src
+    - -I/home/pldx/Desktop/talos-master/crates/primitive/src
+    - -I/home/pldx/Desktop/talos-master/crates/scheduler/src
+    - -I/home/pldx/Desktop/talos-master/crates/fast_tf/src
+    - -I/home/pldx/Desktop/talos-master/crates/math/src
+    - -I/home/pldx/Desktop/talos-master/crates/log/src
+    - -I/home/pldx/Desktop/talos-master/src
+    - -I/home/pldx/Desktop/talos-master/3dparty/boost-pfr/include
+    - -I/home/pldx/Desktop/talos-master/3dparty/magic_enum
+    - -I/home/pldx/Desktop/talos-master/build/_deps/tomlplusplus-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/eigen-src/include
+    - -std=c++23

@@ -34,6 +34,15 @@ namespace field_reflection {
 /// 如果直接对非聚合类型调用PFR接口，会直接抛出致命编译错误
 /// 因此先用 std::is_aggregate_v 前置过滤，保证concept判断不会崩溃
 template <typename T>
+/*把 T 身上的 const、volatile、左值引用、右值引用全部剥离，
+判断【裸类型】是不是聚合类型（朴素聚合结构体）。
+返回 true / false（编译期常量）。*/
+// 没有手写构造函数 → 聚合类型
+/*std::remove_cvref_t<T>
+作用：剥掉类型所有修饰符
+去掉引用 & / &&
+去掉 const
+去掉 volatile*/
 concept field_referenceable = std::is_aggregate_v<std::remove_cvref_t<T>>;
 /*
 拆解逻辑：
@@ -45,6 +54,18 @@ std::is_aggregate_v<X>：编译期常量判断，X是否为C++聚合体（纯数
 /// @brief Concept：判断类型T是否支持「编译期提取成员字段名」
 /// 需要同时满足两个条件：1.是聚合体 2.Boost.PFR能取出它的字段名数组
 template <typename T>
+/*auto arr = boost::pfr::names_as_array<LaunchConfig>();
+返回一个编译期字符串数组，里面存放结构体所有成员的名字（字符串字面量）。
+举实例
+struct LaunchConfig {
+    std::string name;
+    int port;
+    bool enable_log;
+};
+调用
+auto names = boost::pfr::names_as_array<LaunchConfig>();
+得到数组等价：
+std::array<std::string_view, 3>{"name", "port", "enable_log"};*/
 concept field_namable = std::is_aggregate_v<std::remove_cvref_t<T>>
                      && requires { boost::pfr::names_as_array<std::remove_cvref_t<T>>(); };
 /*
@@ -70,9 +91,33 @@ constexpr void for_each_field_impl(T&& obj, F&& func, std::index_sequence<Is...>
     // Clean：剥离对象所有修饰符，拿到纯粹的结构体原始类型
     using Clean          = std::remove_cvref_t<T>;
     // 编译期一次性取出当前结构体全部字段名，存为 constexpr 字符串数组
+    /*boost::pfr::names_as_array<Clean>()
+    Boost.PFR 提供的编译期反射函数。
+    作用：提取聚合结构体所有成员变量的名字，返回一个 std::array<std::string_view, N>
+    N = 结构体成员数量。*/
     constexpr auto names = boost::pfr::names_as_array<Clean>();
     // C++17 折叠表达式，循环展开所有下标Is，依次执行回调
     // 对每个下标：传入对应字段名 + 通过PFR获取对应字段的引用，调用用户func
+    /*### 第 5 部分：, ...
+    作用 ：逗号表达式（忽略结果，只执行副作用）
+    // 折叠表达式：
+    (expr0, expr1, expr2, ...);
+    // 等价于：
+    (expr0, (expr1, (expr2, ...)));
+    - 从左到右执行
+    - 返回最后一个表达式的值
+    - 但这里我们不关心返回值，只关心执行过程
+    ### 第 6 部分：...（折叠展开）
+    作用 ：C++17 折叠表达式，展开参数包
+    // 假设 Is... = 0, 1, 2（3个字段）
+    // 原始代码：
+    (func(names[Is], boost::pfr::get<Is>(obj)), ...);
+    // 编译器展开为：
+    (func(names[0], boost::pfr::get<0>(obj)),
+     func(names[1], boost::pfr::get<1>(obj)),
+     func(names[2], boost::pfr::get<2>(obj))
+
+    ```*/
     (func(names[Is], boost::pfr::get<Is>(std::forward<T>(obj))), ...);
 }
 
@@ -95,6 +140,8 @@ constexpr void for_each_field(T&& obj, F&& func) {
     detail::for_each_field_impl(
         std::forward<T>(obj), std::forward<F>(func),
         // boost::pfr::tuple_size_v<Clean>：编译期获取结构体成员字段总数
+        // std::make_index_sequence<N>：生成编译期索引序列 0,1,2,...,N-1
+        // 组合效果：创建与结构体字段数量匹配的索引序列，用于后续编译期字段遍历展开
         std::make_index_sequence<boost::pfr::tuple_size_v<Clean>>{});
 }
 

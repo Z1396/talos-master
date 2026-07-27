@@ -173,6 +173,11 @@ auto load_robot_extrinsic_config(std::string_view robot)
         boost::toml::parse("字符串") 解析文本
         toml::find<类型>(root, "a", "b") 取值
         toml::save_file(root, "out.toml") 写入文件*/
+    // toml::parse_file(path)
+    // 返回值类型：toml::table
+    // toml::table 代表 TOML 顶层表（整个配置文件根节点）
+    // 本质是键值容器：std::map<std::string, toml::node> 类似结构
+    // 文件解析失败时：抛出异常 toml::parse_error
     auto entry_tbl = toml::parse_file(path);
     // 主配置文件解析失败
     if (entry_tbl.failed()) {
