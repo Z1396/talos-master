@@ -33,25 +33,25 @@ auto format_parse_error(const toml::parse_error& e) -> std::string {
     // fmt 格式化：拼接错误描述、文件、行、列
     return fmt::format(
         "{} at {}:{}:{}", e.description(), src.path->data(), src.begin.line, src.begin.column);
-        /*e.description()
-            仅输出纯粹错误原因，不带文件、行列，简短报错文本，前面单独讲过；
+    /*e.description()
+        仅输出纯粹错误原因，不带文件、行列，简短报错文本，前面单独讲过；
 
-        src.path->data() 细节重点
-            src.path 类型是 std::shared_ptr<std::string>（字符串智能指针）；
-            -> 解引用智能指针，拿到内部 std::string；
-            .data() 获取字符串底层 const char* 裸指针；
-            fmt 格式化兼容 const char* / std::string，等价写 *src.path 也可以。
-            
-        src.begin.line / src.begin.column
-            src.begin 是 toml::position 结构体，存储错误起始的行、列数字。*/
-        // 注意：src.path->data() 返回的是一个智能指针，需要解引用获取实际的字符串数据  
+    src.path->data() 细节重点
+        src.path 类型是 std::shared_ptr<std::string>（字符串智能指针）；
+        -> 解引用智能指针，拿到内部 std::string；
+        .data() 获取字符串底层 const char* 裸指针；
+        fmt 格式化兼容 const char* / std::string，等价写 *src.path 也可以。
+
+    src.begin.line / src.begin.column
+        src.begin 是 toml::position 结构体，存储错误起始的行、列数字。*/
+    // 注意：src.path 是智能指针，通过 -> 解引用后调用 data() 获取 const char*
 }
 
 /**
  * @brief 解析[preset]主机名预设配置
  * @param launch 主入口配置 LaunchConfig
  * @return 成功返回 PresetEntry 预设项；失败返回错误字符串
- * 
+ *
  * 逻辑说明：
  * 1. 获取当前机器主机名
  * 2. 在配置 [preset] 表中查找对应主机名
@@ -101,7 +101,7 @@ auto load_hardware_config(std::string_view robot) -> std::expected<HardwareConfi
     // 拼接 TOML 配置文件路径
     auto hardware_path = fmt::format("config/robot/{}.toml", robot);
     // 解析 TOML 文件
-    auto hardware_tbl  = toml::parse_file(hardware_path);
+    auto hardware_tbl = toml::parse_file(hardware_path);
     // 文件解析失败（不存在/格式错误）
     if (hardware_tbl.failed()) {
         return std::unexpected(
@@ -143,13 +143,13 @@ auto load_robot_extrinsic_config(std::string_view robot)
     return *extrinsic;
 }
 
-} // 匿名命名空间 结束
+} // namespace
 
 /**
  * @brief 对外主接口：加载整套程序运行时配置
  * @param path 入口主配置 TOML 文件路径
  * @return 成功返回完整 RuntimeConfig 运行时配置；失败返回错误字符串
- * 
+ *
  * 整体执行流程：
  * 1. 解析主入口 TOML 配置
  * 2. 根据本机主机名匹配预设 preset，确定 robot / vision / backend
@@ -158,13 +158,13 @@ auto load_robot_extrinsic_config(std::string_view robot)
  * 5. 根据 backend 后端类型，分支加载硬件/外参配置
  * 6. 统一拼装成最终 RuntimeConfig 并返回
  */
- /* template<class T, class E>
-    class expected;
-    T：成功时承载的正常业务数据类型（toml::table、自定义句柄、PnPSolver 智能指针等）
-    E：失败时承载的错误类型（字符串、自定义错误结构体、parse_error）
-    两种特殊变体
-    std::expected<void, E>：函数成功无返回值，仅区分成功 / 失败（如纯初始化函数）
-    std::unexpected<E>：用于构造失败分支，专门包装错误对象*/
+/* template<class T, class E>
+   class expected;
+   T：成功时承载的正常业务数据类型（toml::table、自定义句柄、PnPSolver 智能指针等）
+   E：失败时承载的错误类型（字符串、自定义错误结构体、parse_error）
+   两种特殊变体
+   std::expected<void, E>：函数成功无返回值，仅区分成功 / 失败（如纯初始化函数）
+   std::unexpected<E>：用于构造失败分支，专门包装错误对象*/
 [[nodiscard]] std::expected<RuntimeConfig, std::string> load_config(std::string_view path) {
     // ========== 1. 解析主入口配置文件 ==========
     /*Boost.TOML（C++17，Boost 官方库）
@@ -249,7 +249,7 @@ auto load_robot_extrinsic_config(std::string_view robot)
     case CameraOnly:
     case Direct: {
         // 是否仅使用相机模式
-        bool camera_only     = preset.backend == CameraOnly;
+        bool camera_only = preset.backend == CameraOnly;
         // 加载对应机器人硬件配置
         auto hardware_config = load_hardware_config(preset.robot.get());
         if (!hardware_config) {
@@ -259,9 +259,9 @@ auto load_robot_extrinsic_config(std::string_view robot)
         cfg = hardware::DirectConfig{
             .camera_only = camera_only,
             // 区分传输链路类型
-            .transport   = preset.backend != Chiral ? hardware::Transport::Direct
-                                                    : hardware::Transport::Chiral,
-            .hardware    = std::move(*hardware_config)};
+            .transport = preset.backend != Chiral ? hardware::Transport::Direct
+                                                  : hardware::Transport::Chiral,
+            .hardware  = std::move(*hardware_config)};
         break;
     };
     // Daedalus 后端：加载机器人视觉外参（标定、坐标转换等）
@@ -282,17 +282,18 @@ auto load_robot_extrinsic_config(std::string_view robot)
     // ========== 6. 拼装最终 RuntimeConfig 并返回 ==========
     // C++17 指定成员初始化，组装全量运行时配置
     return RuntimeConfig{
-        .backend  = std::move(cfg),                  // 硬件后端配置
-        .foxglove = std::move(launch.foxglove),     // Foxglove 可视化工具配置
-        .capturer = std::move(launch.capturer),     // 数据录制器配置
-        .vision   = std::move(*vision_config),     // 视觉整套配置
+        .backend  = std::move(cfg), // 硬件后端配置
+        .foxglove = std::move(launch.foxglove), // Foxglove 可视化工具配置
+        .capturer = std::move(launch.capturer), // 数据录制器配置
+        .vision   = std::move(*vision_config), // 视觉整套配置
         // 运行时上下文：记录当前使用的后端、机器人、视觉方案
-        .launch = runtime::CapturerLaunchContext{
+        .launch =
+            runtime::CapturerLaunchContext{
                                            .backend = preset.backend,
                                            .robot   = preset.robot.get(),
                                            .vision  = preset.vision.get(),
-        },
-        .scheduler = launch.scheduler               // 调度器配置
+                                           },
+        .scheduler = launch.scheduler  // 调度器配置
     };
 }
 

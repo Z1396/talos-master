@@ -26,7 +26,8 @@ namespace detail {
  * @return 成功返回 WebSocketServer 对象，失败返回错误字符串
  */
 [[nodiscard]] std::expected<::foxglove::WebSocketServer, std::string>
-    create_websocket_sink(const FoxgloveConfig& config, const ::foxglove::Context& context) {
+    create_websocket_sink(const FoxgloveConfig& config, const ::foxglove::Context& context) 
+{
     // 初始化 WebSocket 服务配置项
     ::foxglove::WebSocketServerOptions ws;
     ws.context      = context;        // 绑定全局上下文
@@ -270,7 +271,8 @@ void FoxgloveServer::message_sender_thread() {
  * @return 成功返回服务智能指针，失败返回错误信息
  */
 [[nodiscard]] std::expected<std::unique_ptr<FoxgloveServer>, std::string>
-    FoxgloveServerFactory::create(FoxgloveConfig config) {
+    FoxgloveServerFactory::create(FoxgloveConfig config) 
+{
     // 创建 Foxglove 全局上下文
     ::foxglove::Context context = ::foxglove::Context::create();
 
@@ -278,7 +280,8 @@ void FoxgloveServer::message_sender_thread() {
     std::optional<::foxglove::McapWriter> mcap_writer;
 
     // 根据传输类型，创建对应输出端
-    switch (config.transport) {
+    switch (config.transport) 
+    {
     case FoxgloveTransport::WebSocket: {
         // 创建实时 WebSocket 推流服务
         auto server = detail::create_websocket_sink(config, context);

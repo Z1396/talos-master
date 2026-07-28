@@ -73,20 +73,24 @@ using degree = double;
  * 描述云台、相机、炮口之间的三维坐标偏移与姿态旋转关系（标定参数）
  * 采用嵌套结构体逐级描述机械结构：偏航轴 -> 俯仰轴 -> 相机/炮口
  */
-struct RobotExtrinsicConfig {
+struct RobotExtrinsicConfig
+{
     /**
      * @brief 云台偏航轴（整体左右转动）
      */
-    struct gimbal_yaw_t {
+    struct gimbal_yaw_t 
+    {
         /**
          * @brief 云台俯仰轴（整体上下转动）
          */
-        struct gimbal_pitch_t {
+        struct gimbal_pitch_t 
+        {
             /**
              * @brief 相机连杆坐标系
              * 存储相机相对上级机构的平移、旋转姿态
              */
-            struct camera_link_t {
+            struct camera_link_t 
+            {
                 Eigen::Vector3d translation{};  // 三维平移向量 (x,y,z)
                 degree roll{};                 // 横滚角
                 degree pitch{};                // 俯仰角
@@ -97,7 +101,8 @@ struct RobotExtrinsicConfig {
                  * @return 欧拉角旋转结构体
                  * noexcept 保证无异常抛出
                  */
-                math_fuxk::Ros2EulerRotd rotation() const noexcept {
+                math_fuxk::Ros2EulerRotd rotation() const noexcept 
+                {
                     return math_fuxk::rpy(roll, pitch, yaw);
                 }
             };
@@ -106,7 +111,8 @@ struct RobotExtrinsicConfig {
              * @brief 炮口连杆坐标系
              * 描述发射口相对上级机构的位姿
              */
-            struct muzzle_link_t {
+            struct muzzle_link_t 
+            {   
                 Eigen::Vector3d translation{};  // 三维平移向量
                 degree roll{};                 // 横滚角
                 degree pitch{};                // 俯仰角
@@ -155,8 +161,8 @@ struct McuConfig {
     bool mcu_authoritative_bullet_speed{true};// true：由下位机决定实际弹丸速度
 
     double bullet_speed_default{22.0};        // 默认弹速
-    double bullet_speed_min{25.0};            // 弹速下限
-    double bullet_speed_max{15.0};            // 弹速上限
+    double bullet_speed_min{25.0};            // 弹速上限
+    double bullet_speed_max{15.0};            // 弹速下限
 };
 
 /**

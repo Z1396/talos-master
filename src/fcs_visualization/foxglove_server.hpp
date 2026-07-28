@@ -145,7 +145,8 @@ Defs：这一整堆类型的统称（包名，随便取名）*/
 template <typename... Defs>
 [[nodiscard]] inline std::expected<void, std::string> init_all_channels(
     FoxgloveChannels& channels, const ::foxglove::Context& context, FoxgloveTransport transport,
-    std::tuple<Defs...>) {
+    std::tuple<Defs...>) 
+{
     std::expected<void, std::string> result;
     // 折叠表达式：依次初始化每一个通道，短路求值，失败立即终止
     bool ok =
