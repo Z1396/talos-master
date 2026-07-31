@@ -1,3 +1,31 @@
+/**
+ * @file aimer.cpp
+ * @brief L4规划层瞄准器实现
+ *
+ * 本文件实现了Aimer类的核心瞄准算法，负责：
+ * - 目标位置预测
+ * - 装甲板选择
+ * - 弹道求解
+ * - 瞄准角度计算
+ *
+ * 核心算法：
+ * 1. 位置预测：使用目标运动模型（速度、角速度）预测未来位置
+ * 2. 装甲板选择：基于前向窗口和角度差选择最优装甲板
+ * 3. 飞行时间精化：迭代求解弹道飞行时间
+ * 4. 瞄准角度计算：考虑重力和空气阻力的弹道补偿
+ *
+ * 支持的目标类型：
+ * - RobotTargetState：机器人目标（带装甲板旋转）
+ * - OutpostTargetState：前哨站目标（固定3块装甲板）
+ * - EnergyMeterState：能量机关目标（绕轴旋转）
+ * - LdmState：LDM目标（匀速直线运动）
+ *
+ * 性能优化：
+ * - 使用模板函数避免虚函数调用
+ * - 装甲板选择使用前向窗口过滤，减少计算量
+ * - 飞行时间迭代使用early exit优化
+ */
+
 #include "L4_planning/aimer/aimer.hpp"
 #include "L3_estimation/ldm_naive/types.hpp"
 #include "core/math/normalize.hpp"
@@ -17,8 +45,22 @@ namespace {
 
 using fcs::core::math::normalize_angle;
 
+/// 能量机关固定转速（rad/s）
+/// 小能量机关固定转速 π/3
 inline constexpr double kFixedRuneSpeed = std::numbers::pi / 3.0;
 
+/**
+ * @brief 时间戳偏移计算（纳秒级）
+ *
+ * 安全地将时间戳加上偏移量，处理溢出和边界情况。
+ *
+ * @param base_ns 基准时间戳（纳秒）
+ * @param offset_s 时间偏移（秒）
+ * @return 偏移后的时间戳（纳秒）
+ *
+ * @note 使用long double避免整数溢出
+ * @note 处理负数偏移和溢出情况
+ */
 [[nodiscard]] uint64_t offset_timestamp_ns(uint64_t base_ns, double offset_s) noexcept {
     if (!std::isfinite(offset_s)) {
         return base_ns;
@@ -38,8 +80,26 @@ inline constexpr double kFixedRuneSpeed = std::numbers::pi / 3.0;
     return static_cast<uint64_t>(std::llround(shifted_ns));
 }
 
+/**
+ * @brief 计算车身中心yaw角
+ *
+ * 根据目标位置计算从相机到目标的yaw角。
+ *
+ * @param x 目标x坐标（米）
+ * @param y 目标y坐标（米）
+ * @return yaw角（弧度）
+ */
 [[nodiscard]] double center_yaw_from_xy(double x, double y) noexcept { return std::atan2(y, x); }
 
+/**
+ * @brief 清洗偏好装甲板ID
+ *
+ * 检查偏好装甲板ID是否有效（在[0, armors_num)范围内）。
+ *
+ * @param preferred 偏好装甲板ID
+ * @param armors_num 装甲板数量
+ * @return 有效时返回装甲板ID，否则返回nullopt
+ */
 [[nodiscard]] std::optional<int>
     sanitize_preferred(const std::optional<int>& preferred, int armors_num) noexcept {
     if (!preferred.has_value()) {
@@ -51,6 +111,15 @@ inline constexpr double kFixedRuneSpeed = std::numbers::pi / 3.0;
     return preferred;
 }
 
+/**
+ * @brief 选择最小角度差的装甲板
+ *
+ * 从候选列表中选择角度差最小的装甲板。
+ *
+ * @param candidates 候选装甲板ID列表
+ * @param delta_angles 角度差数组
+ * @return 最优装甲板ID
+ */
 [[nodiscard]] int pick_best_by_min_delta(
     const std::vector<int>& candidates, const std::vector<double>& delta_angles) noexcept {
     if (candidates.empty()) {
@@ -69,10 +138,28 @@ inline constexpr double kFixedRuneSpeed = std::numbers::pi / 3.0;
     return best;
 }
 
+/**
+ * @brief 获取前向窗口半径（弧度）
+ *
+ * 将配置中的前向窗口角度转换为弧度。
+ *
+ * @param config 瞄准器配置
+ * @return 前向窗口半径（弧度）
+ */
 [[nodiscard]] double front_window_rad(const AimerConfig& config) noexcept {
     return config.front_window_deg * std::numbers::pi / 180.0;
 }
 
+/**
+ * @brief 过滤前向窗口内的装甲板
+ *
+ * 选择角度差在指定窗口内的装甲板。
+ *
+ * @param candidates 候选装甲板ID列表
+ * @param delta_angles 角度差数组
+ * @param front_window 前向窗口半径（弧度）
+ * @return 过滤后的装甲板ID列表
+ */
 [[nodiscard]] std::vector<int> filter_front_window(
     const std::vector<int>& candidates, const std::vector<double>& delta_angles,
     double front_window) {
@@ -86,6 +173,16 @@ inline constexpr double kFixedRuneSpeed = std::numbers::pi / 3.0;
     return filtered;
 }
 
+/**
+ * @brief 构建装甲板角度差数组
+ *
+ * 计算每块装甲板相对于车身中心的角度差。
+ *
+ * @tparam N 装甲板数量
+ * @param armor_poses 装甲板位姿数组
+ * @param center_yaw 车身中心yaw角
+ * @return 角度差数组
+ */
 template <size_t N>
 [[nodiscard]] std::vector<double>
     build_delta_angles(const std::array<Eigen::Vector4d, N>& armor_poses, double center_yaw) {
@@ -97,6 +194,24 @@ template <size_t N>
     return deltas;
 }
 
+/**
+ * @brief 选择瞄准装甲板ID
+ *
+ * 核心算法：基于前向窗口和偏好选择装甲板。
+ *
+ * 选择策略：
+ * 1. 如果有偏好装甲板且在前向窗口内，选择偏好装甲板
+ * 2. 否则，从前向窗口内选择角度差最小的装甲板
+ * 3. 如果前向窗口内无装甲板，从所有装甲板中选择角度差最小的
+ *
+ * @tparam N 装甲板数量
+ * @param armor_poses 装甲板位姿数组
+ * @param center_yaw 车身中心yaw角
+ * @param context 瞄准上下文（包含偏好和跳跃标记）
+ * @param config 瞄准器配置
+ * @param is_outpost 是否为前哨站目标
+ * @return 选中的装甲板ID
+ */
 template <size_t N>
 [[nodiscard]] int select_armor_id(
     const std::array<Eigen::Vector4d, N>& armor_poses, double center_yaw,
@@ -129,6 +244,17 @@ template <size_t N>
     return pick_best_by_min_delta(all_ids, delta_angles);
 }
 
+/**
+ * @brief 计算中心瞄准位置
+ *
+ * 在WholeCarCenter模式下，计算车身中心代理点位置。
+ *
+ * @param center 目标中心位置
+ * @param muzzle_pos 枪口位置
+ * @param radius 目标半径
+ * @param armor_z 装甲板z坐标
+ * @return 代理瞄准位置
+ */
 [[nodiscard]] Eigen::Vector3d project_center_aim(
     const Eigen::Vector3d& center, const Eigen::Vector3d& muzzle_pos, double radius,
     double armor_z) noexcept {
@@ -145,10 +271,22 @@ template <size_t N>
     return Eigen::Vector3d{projected_xy.x(), projected_xy.y(), armor_z};
 }
 
+/**
+ * @brief 获取目标装甲板数量（机器人）
+ *
+ * @param target 机器人目标状态
+ * @return 装甲板数量（限制在[1,4]范围内）
+ */
 [[nodiscard]] int target_armors_num(const L3::RobotTargetState& target) noexcept {
     return std::clamp(target.armors_num, 1, 4);
 }
 
+/**
+ * @brief 获取目标装甲板数量（前哨站）
+ *
+ * @param target 前哨站目标状态（未使用）
+ * @return 固定3块装甲板
+ */
 [[nodiscard]] int target_armors_num(const L3::OutpostTargetState& /*target*/) noexcept {
     return L3::OutpostTargetState::armors_num;
 }
