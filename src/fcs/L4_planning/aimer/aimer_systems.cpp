@@ -1,3 +1,31 @@
+/**
+ * @file aimer_systems.cpp
+ * @brief L4规划层瞄准系统实现
+ *
+ * 本文件实现了L4规划层的核心瞄准系统，负责：
+ * - 多目标选择和评分
+ * - 轨迹构建和控制意图生成
+ * - 三种目标源的处理（装甲板、能量机关、LDM）
+ *
+ * 核心算法：
+ * 1. 目标评分：基于图像中心距离、跟踪状态、飞行时间、云台调整量、装甲板名称
+ * 2. 目标选择：无人驾驶模式（最优评分）vs 有人驾驶模式（保持当前目标+切换余量）
+ * 3. 轨迹构建：尝试构建参考轨迹，失败则降级为直接射击
+ * 4. ROI管理：为L2感知层提供回读ROI信息
+ *
+ * 设计理念：
+ * - 使用函数式风格，分离数据收集、评分、决策
+ * - 使用variant表达决策结果，避免运行时类型检查
+ * - 诊断数据与控制数据分离，支持可视化而不影响执行
+ *
+ * 性能考虑：
+ * - 系统运行频率250Hz，每帧约4ms
+ * - 目标评分是性能热点，需要优化
+ * - 弹道求解是计算密集型，使用缓存加速
+ *
+ * 线程安全：系统内部状态通过lambda捕获，保证线程安全
+ */
+
 #include "L4_planning/aimer/aimer_systems.hpp"
 #include "L3_estimation/ldm_naive/types.hpp"
 #include "L4_planning/aimer/aimer.hpp"
@@ -40,35 +68,60 @@ namespace fcs::L4 {
 
 namespace {
 
+/**
+ * @brief 目标相位状态
+ *
+ * 跟踪每个目标的瞄准阶段状态，用于实现WholeCarCenter到WholeCarArmor的平滑过渡。
+ */
 struct TargetPhaseState {
-    ArmorAimPhase phase{ArmorAimPhase::SingleArmor};
-    int overflow_count{0};
-    std::optional<int> jumped_selected_armor_id{};
+    ArmorAimPhase phase{ArmorAimPhase::SingleArmor};  ///< 当前瞄准阶段
+    int overflow_count{0};                            ///< 溢出计数（用于阶段转换）
+    std::optional<int> jumped_selected_armor_id{};    ///< 跳跃后选中的装甲板ID（记忆功能）
 };
 
+/**
+ * @brief 候选目标评估结果
+ *
+ * 包含单个候选目标的完整评估信息，用于目标选择决策。
+ */
 struct CandidateEvaluation {
-    core::TargetKey key{};
-    L3::TrackerOutput tracker{};
-    TargetPrediction prediction{};
-    TargetSelectionScores scores{};
-    TargetSelectionTraceEntry trace_entry{};
+    core::TargetKey key{};                            ///< 目标键（名称+颜色）
+    L3::TrackerOutput tracker{};                      ///< 跟踪器输出
+    TargetPrediction prediction{};                    ///< 预测结果
+    TargetSelectionScores scores{};                   ///< 评分结果
+    TargetSelectionTraceEntry trace_entry{};          ///< 诊断追踪记录
 };
 
+/**
+ * @brief 云台调整量度量
+ *
+ * 记录云台从当前位置到瞄准位置所需的调整量。
+ */
 struct GimbalEffortMetrics {
-    double yaw_delta_rad{std::numeric_limits<double>::infinity()};
-    double pitch_delta_rad{std::numeric_limits<double>::infinity()};
-    double score{0.0};
+    double yaw_delta_rad{std::numeric_limits<double>::infinity()};   ///< yaw调整量（弧度）
+    double pitch_delta_rad{std::numeric_limits<double>::infinity()}; ///< pitch调整量（弧度）
+    double score{0.0};                                               ///< 云台调整评分（0-1）
 };
 
+/**
+ * @brief 回读ROI时间戳信息
+ *
+ * 用于管理L2感知层的回读ROI缓存时间戳。
+ */
 struct ReadbackRoiTimestamps {
-    uint64_t projection_timestamp_ns{0};
-    uint64_t freshness_timestamp_ns{0};
+    uint64_t projection_timestamp_ns{0};              ///< 投影时间戳（轨迹预测时间）
+    uint64_t freshness_timestamp_ns{0};               ///< 新鲜度时间戳（最后观测时间）
 };
 
+/**
+ * @brief 装甲板候选集合
+ *
+ * 收集一轮目标选择中的所有候选目标信息。
+ */
 struct ArmorCandidateCollection {
-    std::vector<core::TargetKey> active_keys{};
-    std::vector<CandidateEvaluation> candidates{};
-    std::vector<TargetSelectionTraceEntry> rejected{};
+    std::vector<core::TargetKey> active_keys{};       ///< 活跃目标键列表
+    std::vector<CandidateEvaluation> candidates{};    ///< 有效候选目标列表
+    std::vector<TargetSelectionTraceEntry> rejected{}; ///< 被拒绝的目标列表（用于诊断）
 };
 
 [[nodiscard]] double clamp01(double value) noexcept { return std::clamp(value, 0.0, 1.0); }

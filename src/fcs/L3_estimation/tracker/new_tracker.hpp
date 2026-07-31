@@ -1,3 +1,58 @@
+/**
+ * @file new_tracker.hpp
+ * @brief 新版目标跟踪器 - 基于EKF的单目标状态估计与数据关联
+ *
+ * @details
+ * 本文件实现了Talos火控系统的核心跟踪器，负责单个目标的完整生命周期管理。
+ * 主要功能：
+ * - EKF状态估计：位置、速度、偏航角、旋转半径等
+ * - 数据关联：Mahalanobis距离匹配 + 先验约束
+ * - 状态机管理：Idle/Detecting/Tracking/TempLost
+ * - 双模型支持：机器人目标（RobotEkfMotionModel）和前哨站（OutpostEkfMotionModel）
+ *
+ * 核心算法：
+ * 1. 状态估计（EKF）：
+ *    - 状态向量：位置(xc,yc,z)、速度(vx,vy,vz)、偏航角(yaw,v_yaw)、旋转半径(log_r0,log_r1)、高度(h)
+ *    - 测量向量：装甲板方位角(yaw,pitch)、距离(log_d)、装甲板朝向(yaw_armor)
+ *    - 过程模型：匀速运动 + 匀角速度旋转
+ *    - 观测模型：装甲板球坐标系测量
+ *
+ * 2. 数据关联：
+ *    - Mahalanobis距离：d² = (z-h(x))ᵀ R⁻¹ (z-h(x))
+ *    - 先验约束：基于角速度vyaw预测装甲板ID的概率分布
+ *    - 贪婪匹配：按cost排序，优先匹配最佳候选
+ *    - commit gate：仅当观测一致性足够强时才更新last_armor_id
+ *
+ * 3. 状态机：
+ *    - Idle -> Detecting（首次观测）
+ *    - Detecting -> Tracking（连续观测超过阈值）
+ *    - Tracking -> TempLost（丢失观测）
+ *    - TempLost -> Tracking（重新观测）或 -> Idle（超时）
+ *
+ * 4. 特殊处理：
+ *    - 前哨站：三档角速度模式（±ω, 0），独立的运动模型
+ *    - 机器人目标：连续角速度，自适应旋转半径估计
+ *    - 装甲板ID跳变检测：观测到非零ID时标记target_jumped
+ *
+ * 设计模式：
+ * - Policy-based design：通过ModelT模板参数切换运动模型
+ * - RAII：EkfTargetInfo管理EKF生命周期
+ * - 状态模式：TrackerNew内部状态机
+ *
+ * @see ExtendedKalmanFilter
+ * @see RobotEkfMotionModel
+ * @see OutpostEkfMotionModel
+ * @see TrackerManager
+ *
+ * @warning 数值稳定性风险：
+ * - 协方差矩阵可能失去正定性
+ * - 大偏航角可能导致观测模型奇异
+ * - 旋转半径的对数参数化需要特殊处理（解相关）
+ *
+ * @author Chengfu Zou
+ * @copyright Apache License 2.0
+ */
+
 #pragma once
 
 #include "config.hpp"
@@ -23,41 +78,88 @@
 
 namespace fcs::L3 {
 
+/**
+ * @class EkfTargetInfo
+ * @brief EKF目标信息封装类 - 持有单个目标的EKF实例和运动模型
+ *
+ * @details
+ * 核心职责：
+ * - 封装EKF实例和运动模型
+ * - 提供简化的predict/update接口
+ * - 处理对数半径参数化的特殊情况
+ * - 管理收敛状态
+ *
+ * 设计要点：
+ * - 模板参数ModelT：运动模型类型（RobotEkfMotionModel或OutpostEkfMotionModel）
+ * - 惰性初始化：initialize()时才创建EKF实例
+ * - 对数半径解相关：避免r0和r1的虚假相关性
+ *
+ * @tparam ModelT 运动模型类型，必须提供：
+ *                 - NX: 状态维度
+ *                 - NZ: 测量维度
+ *                 - VecX, VecZ, MatXX, MatZZ: 类型别名
+ *                 - predict_state(), measure_state(), Q(), R()
+ */
 template <typename ModelT>
 class EkfTargetInfo {
 public:
-    using Model             = ModelT;
-    static constexpr int NX = Model::NX;
-    static constexpr int NZ = Model::NZ;
+    using Model             = ModelT;                            ///< 运动模型类型
+    static constexpr int NX = Model::NX;                         ///< 状态维度
+    static constexpr int NZ = Model::NZ;                         ///< 测量维度
 
-    using VecX   = typename Model::VecX;
-    using VecZ   = typename Model::VecZ;
-    using MatXX  = typename Model::MatXX;
-    using MatZZ  = typename Model::MatZZ;
-    using Params = typename Model::Params;
+    using VecX   = typename Model::VecX;                         ///< 状态向量类型
+    using VecZ   = typename Model::VecZ;                         ///< 测量向量类型
+    using MatXX  = typename Model::MatXX;                        ///< 状态协方差矩阵类型
+    using MatZZ  = typename Model::MatZZ;                        ///< 测量协方差矩阵类型
+    using Params = typename Model::Params;                       ///< 模型参数类型
 
-    using JetX        = ceres::Jet<double, NX>;
-    using PredictFunc = std::function<void(const JetX*, JetX*)>;
-    using MeasureFunc = std::function<void(const JetX*, JetX*)>;
-    using EKF         = ExtendedKalmanFilter<NX, NZ, PredictFunc, MeasureFunc>;
+    using JetX        = ceres::Jet<double, NX>;                  ///< Ceres Jet类型（自动微分）
+    using PredictFunc = std::function<void(const JetX*, JetX*)>; ///< 预测函数签名
+    using MeasureFunc = std::function<void(const JetX*, JetX*)>; ///< 测量函数签名
+    using EKF         = ExtendedKalmanFilter<NX, NZ, PredictFunc, MeasureFunc>; ///< EKF实例类型
 
     EkfTargetInfo() = default;
 
+    /**
+     * @brief 初始化EKF目标信息
+     *
+     * @details
+     * 创建EKF实例并设置初始状态。关键步骤：
+     * 1. 存储模型参数（过程噪声、测量噪声等）
+     * 2. 创建预测函数f和测量函数h（Lambda表达式，捕获this）
+     * 3. 创建噪声协方差函数q和r
+     * 4. 初始化EKF实例和状态向量
+     *
+     * 对数半径处理：
+     * - 状态向量中使用log(r0)和log(r1)（避免负值约束）
+     * - 过程噪声需要缩放：Q(log_r) /= r²（保持线性空间不确定性）
+     * - 原因：d(log r)/dt = (1/r) * dr/dt
+     *
+     * @param params 模型参数
+     * @param x0 初始状态向量
+     * @param P0 初始协方差矩阵
+     */
     void initialize(const Params& params, const VecX& x0, const MatXX& P0) noexcept {
         model_.params = params;
         dt_           = 0.0;
         armor_id_     = 0;
 
+        // 创建预测函数：Lambda捕获this，调用Model::predict_state
         auto f = [this](const JetX* x, JetX* xp) {
             Model::template predict_state<JetX>(x, JetX(dt_), xp);
         };
+
+        // 创建测量函数：Lambda捕获this，调用Model::measure_state
         auto h = [this](const JetX* x, JetX* z) {
             Model::template measure_state<JetX>(x, armor_id_, z);
         };
+
+        // 创建过程噪声协方差函数：特殊处理对数半径
         auto q = [this]() -> MatXX {
             auto Q = model_.Q(dt_);
             if constexpr (Model::kHasLogRadii) {
-                // Scale Q for log-parameterization so linear-space uncertainty matches the config
+                // 对数半径的过程噪声缩放：Q(log_r) /= r²
+                // 原因：d(log r)/dt = (1/r) * dr/dt，协方差需乘以(1/r)²
                 const double r0 = std::exp(x_[LOG_R0]);
                 const double r1 = std::exp(x_[LOG_R1]);
                 Q(LOG_R0, LOG_R0) /= (r0 * r0);
@@ -65,19 +167,29 @@ public:
             }
             return Q;
         };
+
+        // 创建测量噪声协方差函数：支持外部覆盖
         auto r = [this](const VecZ& z) -> MatZZ {
             if (update_R_override_.has_value()) {
-                return *update_R_override_;
+                return *update_R_override_; // 使用外部提供的R
             }
-            return model_.R(z);
+            return model_.R(z);             // 使用模型计算的R
         };
 
+        // 初始化EKF实例
         ekf_ = EKF(f, h, q, r, P0);
         ekf_.setState(x0);
         x_      = x0;
         active_ = true;
     }
 
+    /**
+     * @brief 预测步（时间更新）
+     *
+     * @param dt 时间间隔（秒）
+     *
+     * @note 调用EKF::predict()，内部使用自动微分计算雅可比矩阵
+     */
     void predict(double dt) noexcept {
         if (!active_) {
             return;
@@ -86,6 +198,14 @@ public:
         x_  = ekf_.predict();
     }
 
+    /**
+     * @brief 更新步（测量更新）
+     *
+     * @param z 测量向量
+     * @param armor_id 装甲板ID（用于选择观测哪个装甲板）
+     *
+     * @note 更新后自动解相关log_r0和log_r1（避免虚假相关性）
+     */
     void update(const VecZ& z, int armor_id) noexcept {
         if (!active_) {
             return;
@@ -93,12 +213,22 @@ public:
         armor_id_ = Model::clamp_armor_id(armor_id);
         x_        = ekf_.update(z);
         update_R_override_.reset();
-        // Decorrelate independent log-radius states to prevent correlation hallucination
+
+        // 解相关独立的对数半径状态（防止"关联幻觉"）
         if constexpr (Model::kHasLogRadii) {
             ekf_.decorrelate(LOG_R0, LOG_R1);
         }
     }
 
+    /**
+     * @brief 更新步（带外部测量噪声协方差）
+     *
+     * @param z 测量向量
+     * @param armor_id 装甲板ID
+     * @param R 外部测量噪声协方差矩阵（覆盖模型计算的R）
+     *
+     * @note 用于PNP协方差传递等场景
+     */
     void update(const VecZ& z, int armor_id, const MatZZ& R) noexcept {
         if (!active_) {
             return;
@@ -107,7 +237,8 @@ public:
         armor_id_          = Model::clamp_armor_id(armor_id);
         x_                 = ekf_.update(z);
         update_R_override_.reset();
-        // Decorrelate independent log-radius states to prevent correlation hallucination
+
+        // 解相关独立的对数半径状态
         if constexpr (Model::kHasLogRadii) {
             ekf_.decorrelate(LOG_R0, LOG_R1);
         }
