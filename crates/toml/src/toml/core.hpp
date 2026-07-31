@@ -206,12 +206,14 @@ template <typename Field>
 // 子表递归合并，基础值直接覆盖
 // ============================================================================
 [[nodiscard]] inline std::expected<toml::table, std::string>
-    merge_configs(const toml::table& base, const toml::table& override_table) noexcept {
+    merge_configs(const toml::table& base, const toml::table& override_table) noexcept 
+{
     // 拷贝基础配置作为结果容器
     toml::table result = base;
 
     // 遍历所有覆盖层配置项
-    for (const auto& [key, override_node] : override_table) {
+    for (const auto& [key, override_node] : override_table) 
+    {
         // 查找底层配置中同名节点
         auto* base_node               = result.get(key);
         const auto* base_subtable     = base_node ? base_node->as_table() : nullptr;
