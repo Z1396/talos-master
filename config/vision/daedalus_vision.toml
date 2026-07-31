@@ -1,14 +1,37 @@
 # Infantry Vision Configuration
 # extend from vision_base.toml
+# 步兵视觉整套配置，继承 vision_base.toml 基础公共配置
+# base 文件存放所有兵种通用视觉参数；本文件覆盖步兵独有的参数
 
 # L4 trajectory compensation overrides
+# L4规划层弹道补偿参数（覆盖基础配置）
 trajectory.type = "Ideal"
+# 弹道模型类型：Ideal = 理想质点弹道模型
+# 仅考虑重力，**不计算空气阻力**；适合近距离步兵对抗，计算速度快
 
 trajectory.diameter = 0.017
+# 弹丸直径 单位：米
+# 17mm 步兵弹丸（RoboMaster 步兵17mm弹）
+
 trajectory.mass = 0.00312
+# 弹丸质量 单位：千克
+# 3.12g 步兵标准弹
+
 trajectory.gravity = 9.81
+# 重力加速度 m/s²
 
 [traditional]
+# Traditional 传统图像处理模块（L2层灯条二值化、装甲检测）
 advanced_binary = false
+# 是否启用高级自适应二值化
+# false：使用固定阈值二值，算力占用低；光照稳定场景使用
+# true：自适应阈值，强光、逆光环境鲁棒性更强，消耗更多CPU
+
 binary_threshold = 65
+# 固定灰度二值化阈值
+# 图像灰度大于该值才保留，用于筛选灯条高光区域
+# 数值越高，保留的区域越少；越低越容易引入噪点
+
 light_max_angle = 10.0
+# 灯条最大倾斜角度阈值(°)
+# 筛选灯条轮廓：倾斜角度超过10°直接丢弃，过滤无效干扰轮廓
