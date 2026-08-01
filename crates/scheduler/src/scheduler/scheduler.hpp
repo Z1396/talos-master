@@ -526,7 +526,7 @@ private:
 // 放在头文件中（模板必须头文件实现）
 // ============================================================================
 template <typename Policy, typename F>
-auto Scheduler::add_system(std::string&& name, F&& func) -> void {
+auto Scheduler:: add_system(std::string&& name, F&& func) -> void {
     // 校验：运行中禁止新增系统
     ensure_not_running();
     // 标记拓扑失效，下次 build 必须重新生成

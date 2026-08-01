@@ -26,7 +26,8 @@ namespace talos::scheduler::detail {
  * 5. 模板内部压缩空格、逗号后多余空格，精简输出
  * 6. 首尾去空白，空字符串兜底占位
  */
-std::string demangle(const char* name) noexcept {
+std::string demangle(const char* name) noexcept 
+{
     // 空指针兜底，直接返回占位字符串
     if (!name) {
         return "<null>";

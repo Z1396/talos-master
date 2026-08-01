@@ -20,7 +20,7 @@
 // Eigen 线性代数矩阵库，状态/参考轨迹存储
 #include <Eigen/Core>
 
-// C++标准库
+// C++标准库,
 #include <algorithm> // std::sort, std::max, std::clamp, std::min
 #include <array>     // 固定数组
 #include <cassert>   // 运行时断言，校验求解器创建成功
