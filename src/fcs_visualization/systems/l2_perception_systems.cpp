@@ -395,8 +395,7 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             armors_json["armors"]            = nlohmann::json::array();
 
             // 遍历所有装甲检测结果序列化
-            for (size_t i = 0; i < batch->detections.size(); ++i) {
-                const auto& det = batch->detections[i];
+            for (const auto& det : batch->detections) {
                 nlohmann::json obj;
                 // 图像中心像素坐标
                 obj["center"]["x"] = det.center().x;

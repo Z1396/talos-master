@@ -275,7 +275,12 @@ constexpr SystemMeta extract_system_meta(std::string name) noexcept {
     using args   = traits::args_tuple;
 
     // 编译期索引序列展开，遍历所有参数，逐个提取元数据
+    /*std::index_sequence作用：编译期萃取元组第 I 个元素的类型，纯编译期计算，无运行开销。
+    I：编译期下标，从 0 开始
+    Tuple：任意 std::tuple / std::pair / std::array 等类元组类型*/
     [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+        /*std::tuple_element_t作用：编译期从类元组类型中萃取第 I 个元素的类型，无运行开销。
+        下标 I 从 0 开始，且必须是 constexpr 编译常量。*/
         (detail::extract_one_param<std::tuple_element_t<Is, args>>(meta), ...);
     }(std::make_index_sequence<traits::arity>{});
 

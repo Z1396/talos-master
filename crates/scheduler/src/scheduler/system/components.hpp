@@ -260,7 +260,7 @@ using spsc_mut =
  * @brief SPMC 读端：单写多读（支持多个任务同时读取）
  */
 template <typename T, typename Topic = DefaultTopic>
-using spmc = basic_channel<
+using  spmc = basic_channel<
     T,                                  // 参数1：消息负载类型
     Topic,                              // 参数2：话题类型
     typename primitive::SpmcChannel<T>::Reader, // 参数3：读取器实现类
