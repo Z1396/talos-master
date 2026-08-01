@@ -1,127 +1,139 @@
-// 框架核心启动引导头文件，本文件实现 fcs::boot 顶层主初始化逻辑
-// boot 函数是整个机器人火控软件唯一入口，完成资源、坐标系、分层系统全量注册
+// ==============================================
+// 文件用途：fcs框架全局唯一启动入口实现文件
+// 头文件声明boot顶层初始化函数，本.cc实现完整启动逻辑
+// 整个机器人火控程序从main最终调用fcs::boot完成全部初始化
+// ==============================================
 #include "runtime/boot.hpp"
 
-// ===================== 分层业务模块头文件（机器人标准五层软件架构：L1硬件→L2感知→L3估计→L4规划→L5武器）=====================
-// L1 硬件传感器层：底层相机、IMU、MCU硬件数据输出接口
+// ===================== L1-L5五层业务模块头文件 =====================
+// L1：硬件原始数据输出层，只负责相机、MCU、IMU硬件读写，无算法
 #include "L1_sensor/output_interface.hpp"
 
-// L2 感知层 - 装甲板识别：ROI裁剪读取、装甲检测全套ECS系统注册函数
+// L2感知-装甲识别：ROI图像裁剪逻辑、装甲检测ECS系统注册函数
 #include "L2_perception/armor/readback_roi.hpp"
 #include "L2_perception/armor/systems.hpp"
-// L2 感知层 - 大符LDM：能量机关光斑检测系统注册
+// L2感知-固定能量机关LDM：光斑检测任务系统注册
 #include "L2_perception/ldm/ldm_systems.hpp"
-// L2 感知层 - 旋转能量机关Rune：大符图像检测、光斑提取系统
+// L2感知-旋转大符Rune：动态能量机关图像检测、光斑提取系统
 #include "L2_perception/rune/rune_systems.hpp"
 
-// L3 状态估计层：滤波跟踪、能量机关角速度解算、简易LDM跟踪
+// L3状态估计层：滤波、角速度解算，消除图像噪声，输出三维目标
 #include "L3_estimation/energy_meter/energy_meter_systems.hpp"
 #include "L3_estimation/ldm_naive/ldm_naive_systems.hpp"
 #include "L3_estimation/tracker_systems.hpp"
 
-// L4 运动规划层：目标运动预测、MPC瞄准轨迹规划、补偿策略系统
+// L4运动规划层：目标轨迹预测、MPC云台角度补偿、弹道预计算
 #include "L4_planning/planning_systems.hpp"
 
-// L5 武器控制层：最终火控解算、发射逻辑、摩擦轮速度控制增强系统
+// L5武器顶层：最终火控解算、摩擦轮转速控制、发射判定逻辑
 #include "L5_weapon/enhanced/weapon_systems.hpp"
 
-// 手性采集系统：左右手机构共享内存数据采集、上报调试数据流
+// 左右手分体机器人专用共享内存调试采集系统
 #include "chiral/chiral_collector_system.hpp"
 
-// ===================== 框架核心基础头文件（ECS调度、通信、坐标系、资源、工具） =====================
-// 装甲板数据结构：单装甲、批量检测结果、角点、PnP输出定义
+// ===================== 框架底层核心通用组件头文件 =====================
+// 装甲全套数据结构：单装甲、批量检测、角点、PnP三维结果
 #include "core/armor_types.hpp"
-// 全局SPMC无锁通信通道Topic常量：所有图像/跟踪/控制数据流唯一标识
+// 全局SPMC无锁通道Topic枚举，定义所有线程间数据流标识
 #include "core/channel_topics.hpp"
-// 运行时全局上下文：启动配置、硬件后端区分、资源生命周期
+// Runtime全局上下文结构体，存储启动、硬件、视觉全部配置
 #include "core/runtime.hpp"
-// 弹道解算全局资源：弹速、重力补偿、弹道查表参数容器
+// 弹道计算资源容器：弹速、空气阻力、重力补偿、分段查表
 #include "core/trajectory/resource.hpp"
-// 全局通用基础类型：Eigen向量、位姿、枚举、状态机、能力掩码别名
+// 全局基础别名：Eigen向量/位姿、枚举、状态机、功能掩码
 #include "core/types.hpp"
-// fast_tf静态坐标系枚举定义：world/odom/gimbal/camera/muzzle等帧标识
+// fast_tf静态坐标系枚举：world/odom/gimbal/camera/muzzle所有坐标系标识
 #include "frame.hpp"
-// Quanta高速视频流编码传输组件：H.265硬件编码、WebSocket/Mcap推流
+// Quanta视频编码组件：H.265硬编码、WebSocket Foxglove实时推流
 #include "quanta/stream_transport.hpp"
-// 数据录制抓包组件：离线保存图像/跟踪/JSON调试消息
+// 离线录制组件：图像/跟踪/调试消息存入Mcap文件离线回放
 #include "runtime/capturer.hpp"
-// TOML配置文件加载、解析、校验工具
+// TOML配置文件加载、语法校验、类型转换工具
 #include "runtime/config_loader.hpp"
-// L1传感器+L2感知层统一初始化工具：相机打开、推理后端创建
+// L1相机+MCU统一初始化工具，创建图像SPMC输入通道
 #include "runtime/l1_l2_setup.hpp"
-// 图像编码通用工具：JPEG/PNG/视频流封装
+// JPEG/PNG/视频流通用图像编码工具封装
 #include "runtime/stream_encode.hpp"
-// 调度器错误格式化：将std::expected错误转为可读日志字符串
+// 将stdexpected错误码转为人类可读日志字符串工具
 #include "scheduler/error_formatter.hpp"
 
-// ===================== 标准库 & 第三方开源工具库 =====================
-// fmt格式化库：高性能字符串拼接、容器打印、数值格式化，替代std::stringstream
+// ===================== 第三方开源库 & C++标准库 =====================
+// fmt高性能格式化库，替代老旧std::stringstream，无内存碎片
 #include <fmt/core.h>
+// fmt打印容器/数组专用头
 #include <fmt/ranges.h>
-// 标准数学常量：圆周率pi
+// C++20标准数学常量，包含高精度圆周率pi
 #include <numbers>
-// primitive多态工具：std::visit 多路分支重载匹配，简化std::variant硬件分支
+// std::visit多路匹配辅助工具，简化variant多硬件分支代码
 #include <primitive/overloaded.hpp>
-// spdlog日志库：全框架统一日志输出、分级打印
+// 分级日志库：INFO/WARN/ERROR全局统一日志输出
 #include <spdlog/spdlog.h>
 
 /**
  * @namespace fcs
- * @brief 整个机器人视觉火控框架顶层根命名空间
- * 分层架构自上而下：
- * L1 硬件传感器输入 → L2 图像感知检测 → L3 目标状态滤波估计 → L4 运动瞄准规划 → L5 武器发射控制
- * 本文件核心函数 boot()：软件唯一初始化入口，按分层顺序完成：
- * 1 全局资源注入 2 TF坐标系初始化 3 硬件/视觉后端创建 4 全分层ECS系统注册 5 调度器冻结拓扑就绪
+ * 框架顶层根命名空间，隔离所有框架代码，避免第三方库命名冲突
+ * 软件分层顺序（数据流从上到下不可逆）：
+ * L1硬件原始数据 → L2图像目标检测 → L3三维滤波跟踪 → L4云台运动规划 → L5武器发射控制
+ * 核心函数boot：程序唯一初始化入口，所有资源/任务/通道在此一次性注册
+ * boot执行固定顺序：全局资源注入 → TF坐标系初始化 → 硬件初始化 → 五层ECS系统注册 → 调度拓扑冻结
  */
 namespace fcs {
 
 /**
- * @namespace 匿名命名空间（文件内私有作用域）
- * 仅当前boot.cc内部可访问的工具函数、常量，对外不可见，避免全局命名污染
+ * @namespace 匿名命名空间
+ * 仅本boot.cc文件内部可见工具函数，不会导出全局符号
+ * 作用：避免污染全局命名空间，外部其他文件无法调用这里的函数
  */
 namespace {
 
 /**
- * @brief 角度转弧度 constexpr编译期计算工具，实时系统无运行时开销
- * @param x 输入角度（单位 ° 度）
- * @return 输出弧度（rad）
- * @note noexcept 无异常抛出，硬实时系统安全
+ * @brief 角度转弧度工具函数
+ * @param x 输入角度，单位：度(°)
+ * @return 转换后弧度值(rad)
+ * inline：函数逻辑直接嵌入调用处，无函数调用开销
+ * constexpr：编译期即可完成计算，硬实时无运行计算耗时
+ * noexcept：函数绝对不会抛出异常，实时调度无异常分支开销
  */
 inline constexpr auto to_rad(double x) noexcept {
-    // 角度转弧度公式：deg / 180 * π
+    // 角度转弧度数学公式：弧度 = 角度 / 180 * π
     return (x / 180.0) * std::numbers::pi_v<double>;
 }
 
 /**
  * @brief 初始化全局fast_tf静态坐标变换树
- * @param system fast_tf坐标系管理实例，存放在ECS全局资源中
- * @param config 机器人机械外参标定配置（云台、相机、枪口安装偏移/旋转）
- * 坐标系完整链路（父→子静态固定变换）：
- * world(世界原点) → odom(里程计) → gimbal_yaw(云台偏航) → gimbal_pitch(云台俯仰)
- *  gimbal_pitch 分出两条子分支：
- *  1. camera_link(相机机械安装架) → camera_optical(相机光学成像坐标系，标准OpenCV相机系)
- *  2. muzzle_link(枪口机械坐标系，用于弹道解算发射位姿)
- * 所有变换为静态固定外参，程序启动一次性写入，运行时不再修改
+ * @param system ECS全局存储的TF坐标系实例（引用直接修改资源）
+ * @param config 机械标定外参：云台、相机、枪口安装平移旋转
+ * 静态坐标系父子层级（程序启动一次性写入，运行全程只读不修改）：
+ * world世界原点 → odom里程计 → gimbal_yaw云台偏航轴 → gimbal_pitch云台俯仰轴
+ * gimbal_pitch分出两条独立子坐标系：
+ * 1.camera_link相机机械安装架 → camera_optical标准OpenCV光学坐标系
+ * 2.muzzle_link枪口发射坐标系（弹道解算专用）
  */
 void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrinsicConfig& config) {
-    // 圆周率浮点常量
+    // 定义全局圆周率常量，编译期求值
     constexpr fp_t pi = std::numbers::pi;
 
-    // 1. world、odom、云台偏航轴：无平移无旋转，单位矩阵恒等变换
+    // ========== 1.world、odom、云台偏航轴：无平移无旋转，单位矩阵 ==========
+    // fast_tf::update<Frame> 模板萃取：编译期传入坐标系枚举，写入静态变换
     fast_tf::update<fast_tf::odom>(system, {}, 0);
     fast_tf::update<fast_tf::gimbal_yaw_fuxk_frame>(system, {}, 0);
 
-    // 2. 云台俯仰 gimbal_pitch：仅平移偏移，无旋转
+    // ========== 2.云台俯仰轴：仅存在平移偏移，无旋转角度 ==========
+    // 从标定配置读取云台俯仰机械平移向量
     auto pitch_trans = config.gimbal_yaw.gimbal_pitch.translation;
+    // 构造纯平移变换，写入TF系统
     fast_tf::update<fast_tf::gimbal_pitch_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::gimbal_pitch_fuxk_frame>::from_translation(
             pitch_trans.x(), pitch_trans.y(), pitch_trans.z()),
         0);
 
-    // 3. camera_link 相机机械安装帧：平移 + 三轴RPY旋转（标定外参）
+    // ========== 3.camera_link相机机械安装坐标系：平移+三轴RPY旋转 ==========
+    // 读取相机安装平移向量
     auto cam_trans = config.gimbal_yaw.gimbal_pitch.camera_link.translation;
+    // 读取相机安装滚转/俯仰/偏航角度（单位度）
     auto cam_rot   = config.gimbal_yaw.gimbal_pitch.camera_link.rotation();
+    // from_rpy：输入三轴角度(自动转弧度)+三维平移，生成完整坐标变换
     fast_tf::update<fast_tf::camera_link_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::camera_link_fuxk_frame>::from_rpy(
@@ -129,9 +141,10 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
             cam_trans.x(), cam_trans.y(), cam_trans.z()),
         0);
 
-    // 4. camera_optical 相机光学帧固定转换规则（行业标准OpenCV相机坐标系）
-    // 机械安装坐标系 → 成像光学坐标系：绕X轴-90°，再绕Z轴-90°，无平移
-    // 目的：统一相机Z轴指向镜头前方（光轴），Y轴向下匹配图像像素行
+    // ========== 4.camera_optical相机光学标准坐标系固定转换 ==========
+    // 行业统一标准转换规则：机械相机系 → 成像光学系
+    // 变换：先绕X轴旋转-90°，再绕Z轴旋转-90°，无平移
+    // 作用：让相机Z轴指向镜头前方光轴，Y轴匹配图像向下像素行
     fast_tf::update<fast_tf::camera_optical_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::camera_optical_fuxk_frame>::from_rpy(
@@ -139,9 +152,12 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
             0.0, 0.0, 0.0),
         0);
 
-    // 5. muzzle_link 枪口坐标系：云台俯仰到枪口的平移+旋转外参，弹道解算依赖
+    // ========== 5.muzzle_link枪口发射坐标系：弹道解算核心外参 ==========
+    // 读取云台到枪口机械平移
     auto muzzle_trans = config.gimbal_yaw.gimbal_pitch.muzzle_link.translation;
+    // 读取枪口三轴安装角度
     auto muzzle_rot   = config.gimbal_yaw.gimbal_pitch.muzzle_link.rotation();
+    // 构造枪口完整坐标变换存入TF系统
     fast_tf::update<fast_tf::muzzle_link_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::muzzle_link_fuxk_frame>::from_rpy(
@@ -150,169 +166,194 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
         0);
 }
 
-} // 匿名命名空间结束
+} // 匿名命名空间结束，内部工具仅本文件可用
 
 /**
- * @brief 框架顶层启动引导主函数，整个机器人软件唯一初始化入口
- * @param scheduler ECS全局任务调度器实例（引用传递，操作真实调度世界）
- * @param config RuntimeConfig&& 运行时全局配置，使用右值引用移动语义，转移配置所有权，避免大结构体拷贝
- * @return std::expected<void, std::string> C++23预期类型
- *        成功：返回空std::expected<void>；失败：返回std::unexpected，携带错误字符串描述
- * @ [[nodiscard]] 强制调用方接收返回值，禁止忽略启动失败，防止调度器异常运行
+ * @brief 框架顶层唯一启动函数，整个火控程序初始化总入口
+ * @param scheduler talos::Scheduler& ECS全局调度器引用
+ *        引用传递，直接操作调度器内部世界、资源、任务列表
+ * @param config RuntimeConfig&& 运行配置右值引用
+ *        使用移动语义转移配置所有权，超大TOML结构体无需深拷贝
+ * @return std::expected<void, std::string> C++23无异常错误处理类型
+ *        初始化成功：返回空expected<void>
+ *        初始化失败：std::unexpected携带可读错误字符串，无抛异常
+ * @ [[nodiscard]] 强制调用代码接收返回值，禁止忽略启动失败
+ *        防止硬件初始化失败后调度器异常运行
  *
- * 严格固定初始化执行流程（分层顺序不可颠倒，存在强数据依赖）：
- * 1. 注入Foxglove可视化全局资源，供所有调试可视化System读取配置
- * 2. 在ECS世界就地创建fast_tf坐标系系统资源，区分两种硬件后端初始化静态TF变换
- * 3. 注入视觉全局配置资源：识别颜色、功能开关掩码、ROI、跟踪缓存等
- * 4. 初始化L1底层传感器（相机、MCU硬件通信），失败直接终止启动
- * 5. 创建L2视觉推理后端、PnP位姿解算器，注册为全局资源
- * 6. 注册弹道解算参数资源，供L4规划/L5火控读取弹速补偿
- * 7. 自上而下逐层注册ECS业务System：L2感知 → L3估计 → L4规划 → L5武器
- * 8. 根据硬件手性标记，条件注册左右手共享内存采集系统
- * 9. 注册Quanta高速视频流、离线数据录制抓包系统
- * 10. 调用scheduler.build()冻结调度拓扑、资源布局，调度器进入就绪可运行状态
+ * 初始化顺序严格固定，存在强数据依赖，不可调换顺序：
+ * 1. 注入Foxglove可视化全局资源
+ * 2. 创建TF坐标系全局资源，根据硬件variant分支加载机械外参
+ * 3. 注入视觉基础全局配置（识别颜色、功能开关、ROI、状态机）
+ * 4. L1底层相机/MCU硬件初始化，失败直接终止启动
+ * 5. 创建装甲检测推理引擎、PnP三维解算器，注册全局共享资源
+ * 6. 注入弹道弹速、重力补偿全局资源
+ * 7. 自上而下注册L2→L3→L4→L5全部ECS业务任务系统
+ * 8. 手性标记开启时，注册左右手共享内存采集系统
+ * 9. 注册Quanta视频推流、离线Mcap录制系统
+ * 10. scheduler.build()解析任务依赖，构建并行拓扑、冻结调度环境
+ *        build执行后禁止新增任何资源/系统，否则运行断言崩溃
  */
 [[nodiscard]] std::expected<void, std::string>
 boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
-    // 获取调度器内置ECS世界容器：所有全局资源、组件统一存储容器
+    // 从调度器获取ECS全局World容器
+    // World是全局资源仓库，所有单例资源（TF、推理、弹道）统一存放
     auto& world = scheduler.world();
 
-    // 步骤1：注入Foxglove可视化全局配置资源，所有foxglove可视化系统依赖此资源
+    // ========== 步骤1：注入Foxglove可视化全局配置资源 ==========
+    // insert_resource：将foxglove配置存入全局资源，所有可视化任务可读取
     world.insert_resource(config.foxglove);
 
-    // 手性开关标记：区分左右向机械结构，控制共享内存采集系统是否注册
+    // 手性开关标记：bool变量记录硬件是否为左右手分体结构
+    // 用于后续判断是否注册共享内存采集系统
     bool chiral = false;
 
-    // 步骤2：就地创建fast_tf坐标系系统资源（emplace_resource原地构造，无拷贝，启动性能优化）
+    // ========== 步骤2：原地创建fast_tf坐标系全局资源 ==========
+    // emplace_resource：直接在ECS堆内存构造对象，无临时拷贝，性能优于insert
     auto& coordinate_system = world.emplace_resource<fast_tf::CoordinateSystem>();
 
-    // 步骤3：std::visit 多路分支匹配std::variant硬件后端配置
-    // overloaded工具生成多分支lambda，自动匹配Direct直连硬件 / Daedalus专用硬件两种变体
+    // ========== 步骤3：std::visit处理两种硬件variant分支 ==========
+    // config.backend是std::variant<DirectConfig, DaedalusConfig>变体类型
+    // std::visit：根据当前硬件类型自动匹配对应lambda分支
+    // overloaded{}：简化多分支lambda写法，无需手写模板重载
     std::visit(
         overloaded{
-            // 分支A：通用直连MCU硬件后端 DirectConfig
+            // 分支A：通用直连MCU硬件配置 DirectConfig
+            // &捕获外部所有需要使用的变量：坐标系统、world容器、手性标记
             [&coordinate_system, &world, &chiral](hardware::DirectConfig cfg) {
-                // 加载机械外参初始化全部静态TF坐标变换
+                // 调用本文件私有函数，加载整套机械外参写入TF树
                 init_coordinate_system(coordinate_system, cfg.hardware.extrinsic);
-                // 注入弹道弹速全局资源，取自MCU硬件默认弹速
+                // 创建弹道初速全局资源，取值来自MCU硬件默认弹速
                 world.insert_resource(
                     core::trajectory::bullet_speed_data{
                         .bullet_speed = cfg.hardware.mcu->bullet_speed_default});
-                // 读取配置手性开关
+                // 读取配置内手性开关，赋值给外层chiral变量
                 chiral = cfg.hardware.chiral;
             },
-            // 分支B：Daedalus专用一体化硬件后端
+            // 分支B：Daedalus一体化集成硬件配置
+            // 无需chiral，仅捕获坐标系统与world容器
             [&coordinate_system, &world](hardware::DaedalusConfig cfg) {
+                // 同样初始化TF静态坐标树，使用Daedalus专属外参
                 init_coordinate_system(coordinate_system, cfg.extrinsic);
-                // 注入Daedalus配置内的弹丸初速
+                // 注入一体化硬件自带弹速参数
                 world.insert_resource(
                     core::trajectory::bullet_speed_data{.bullet_speed = cfg.bullet_speed});
             }},
-        config.backend); // 传入variant变体，visit自动分发对应分支执行
+        // 传入variant变体变量，visit自动分发匹配分支
+        config.backend);
 
-    // 步骤4：注入L2视觉基础全局资源
-    // 敌方识别颜色（红/蓝）
+    // ========== 步骤4：注入视觉层全局静态配置资源 ==========
+    // 1. 敌方识别颜色（红/蓝队伍）存入全局资源
     world.insert_resource(config.vision.detect_color);
-    // 机器人功能能力掩码：控制各类视觉/跟踪功能启用/关闭
+    // 2. 功能能力掩码：控制各类视觉/跟踪算法启用关闭
+    // emplace_resource原地构造CapabilityState全局状态
     static_cast<void>(world.emplace_resource<core::CapabilityState>(
         std::span<const core::Capability>(config.vision.capabilities.get())));
-    // 目标跟随模式状态机（自瞄/能量机关优先）
+    // 3. 目标跟踪模式状态机：自瞄优先 / 能量机关优先
     static_cast<void>(world.emplace_resource<core::FollowingState>());
-    // 装甲检测感兴趣区域ROI配置
+    // 4. 装甲检测图像裁剪ROI区域配置存入全局
     world.insert_resource(config.vision.armor->readback_roi);
-    // L2视觉跟踪帧缓存资源
+    // 5. L2层检测结果缓存资源，存放单帧装甲检测数据
     world.insert_resource(L2::TrackerReadbackCache{});
 
-    // 打印视觉基础配置日志，启动阶段快速核查参数
+    // 打印启动日志，快速核对视觉基础配置是否加载正确
+    // fmt格式化打印识别颜色
     SPDLOG_INFO("detect color: {}", config.vision.detect_color);
+    // fmt::join遍历容器，打印所有启用的功能掩码
     SPDLOG_INFO("enabled capabilities: [{}]", fmt::join(*config.vision.capabilities, ", "));
 
-    // ===================== 步骤5：初始化L1底层传感器硬件 =====================
-    // runtime::setup_l1 打开相机、初始化MCU通信、创建硬件数据流SPMC通道
+    // ===================== 步骤5：初始化L1底层相机、MCU硬件 =====================
+    // runtime::setup_l1：底层硬件统一初始化函数
+    // 内部逻辑：打开相机设备、初始化MCU串口、创建图像SPMC输入无锁通道
+    // 返回stdexpected：成功携带相机配置；失败携带错误字符串
     auto setup_result = runtime::setup_l1(world, scheduler, config.backend);
-    // 初始化失败：返回错误字符串，终止整个启动流程
+    // 判断硬件初始化失败分支
     if (!setup_result) {
+        // fmt拼接错误信息，返回unexpected终止整个启动流程
         return std::unexpected(fmt::format("L1 传感器初始化失败: {}", setup_result.error()));
     }
 
-    // ===================== 步骤6：初始化L2感知层推理与几何解算后端 =====================
-    // 创建装甲目标检测推理后端（YOLO/ONNX/TensorRT等推理引擎封装）
+    // ===================== 步骤6：创建L2装甲推理后端、PnP解算器 =====================
+    // 调用工厂函数创建YOLO/ONNX/TensorRT推理引擎句柄
     auto backend_handle_result = L2::create_detector_backend_handle(config.vision.armor.get());
+    // 推理引擎创建失败，返回错误终止启动
     if (!backend_handle_result) {
         return std::unexpected(
             fmt::format("创建装甲检测推理后端失败: {}", backend_handle_result.error()));
     }
+    // 打印当前使用的推理后端名称（TensorRT/CPU ONNX）
     SPDLOG_INFO("当前装甲检测推理后端: {}", backend_handle_result->name);
 
-    // 将推理后端实例、PnP位姿解算器注册为全局共享资源，所有L2系统共用
+    // 将推理引擎所有权移动到全局资源，所有L2检测任务共享同一个推理实例
     world.insert_resource(std::move(backend_handle_result->backend));
+    // 根据相机内参创建PnP三维位姿解算器，存入全局资源
     world.insert_resource(L2::create_pnp_solver(setup_result.value().camera_config));
 
     // ===================== 步骤7：注册弹道解算全局资源 =====================
+    // 弹道配置移动传入注册函数，存入全局资源容器
     core::trajectory::register_resource(scheduler, std::move(config.vision.trajectory));
-    // 打印弹丸初速用于启动校验
+    // 读取全局弹速资源并打印，启动校验弹速参数
     SPDLOG_INFO(
         "bullet initial speed = {:.3f} m/s",
         world.get_res<core::trajectory::bullet_speed_data>()->bullet_speed);
 
-    // ===================== 步骤8：自上而下分层注册所有ECS业务系统 =====================
-    // L2 感知层系统：装甲检测、LDM大符光斑、Rune能量机关图像检测
+    // ===================== 步骤8：自上而下分层注册全部ECS业务系统 =====================
+    // L2感知层：装甲检测、LDM大符、Rune旋转能量机关图像任务
     L2::register_detection_systems(scheduler);
     L2::ldm::register_ldm_systems(
         scheduler, std::move(config.vision.ldm), setup_result.value().camera_config);
     rune::register_rune_detection_systems(scheduler, std::move(config.vision.rune_detector));
 
-    // L3 状态估计层：多目标卡尔曼跟踪、简易LDM滤波、能量机关角速度估计算法系统
+    // L3估计层：卡尔曼多目标跟踪、简易LDM滤波、能量机关角速度估计
     L3::register_tracker_systems(scheduler, std::move(config.vision.l3->tracker));
     L3::ldm::register_naive_ldm_systems(scheduler, config.vision.naive_ldm);
     energy_meter::register_energy_meter_systems(scheduler, std::move(config.vision.energy_meter));
 
-    // L4 运动规划层：目标轨迹预测、MPC瞄准补偿、最优解算系统
+    // L4规划层：目标运动预测、MPC云台角度补偿、最优瞄准轨迹计算
     L4::register_l4_planning_systems(scheduler, std::move(config.vision.l4.get()));
 
-    // L5 武器控制层：最终火控解算、摩擦轮发射速度控制、发射判定系统（依赖L4规划输出）
+    // L5武器顶层：弹道最终解算、摩擦轮调速、发射判定逻辑任务
     L5::register_enhanced_weapon_system(scheduler, std::move(config.vision.l5.get()));
 
-    // ===================== 步骤9：条件注册手性数据采集系统 =====================
-    // 手性开关开启时，注册共享内存采集系统，用于左右手机构数据调试
+    // ===================== 步骤9：手性功能条件注册 =====================
+    // chiral标记为true代表左右手分体机器人，注册共享内存采集任务
     if (chiral) {
         chiral::register_chiral_collector_system(scheduler);
         SPDLOG_INFO("手性数据采集系统已注册完成");
     }
 
-    // ===================== 步骤10：注册高速视频流、离线录制抓包系统 =====================
-    // 提取Quanta视频编码全局配置，填充图像滤波参数
+    // ===================== 步骤10：Quanta视频流、离线录制系统注册 =====================
+    // 复制视频基础配置，补充图像滤波参数
     auto quanta_cfg                  = config.vision.quanta;
     quanta_cfg.filter                = config.vision.quanta_filter;
+    // 从硬件初始化结果读取相机分辨率
     const auto& stream_camera_config = setup_result.value().camera_config;
-    // 注册H.265视频流编码、Foxglove推流ECS系统
+    // 注册H.265编码、Foxglove WebSocket推流ECS任务
     auto quanta_stream_result        = runtime::register_quanta_stream_systems(
         world, scheduler, quanta_cfg,
         static_cast<int>(stream_camera_config.width),
         static_cast<int>(stream_camera_config.height));
+    // 视频流注册失败，返回错误终止启动
     if (!quanta_stream_result) {
         return std::unexpected(
             fmt::format("注册Quanta高速数据流系统失败: {}", quanta_stream_result.error()));
     }
 
-    // 注册离线数据录制系统：抓取图像、跟踪、调试JSON消息保存至Mcap文件
+    // 注册离线Mcap录制任务：抓取图像/跟踪/调试消息离线保存
     runtime::register_runtime_capturer_system(scheduler, config.capturer, config.launch);
 
-    // ===================== 步骤11：调度器收尾构建，冻结拓扑进入就绪状态 =====================
-    /**
-     * scheduler.build() 核心行为：
-     * 1. 解析全部注册System的资源/SPMC通道读写依赖关系
-     * 2. 构建并行拓扑图：无依赖系统并行调度，存在读写依赖串行调度
-     * 3. 锁定lifecycle_原子状态为Configuring→Running，冻结资源布局、系统列表
-     * 4. 分配线程池、固定周期定时器，完成全部运行时初始化
-     * build后不可再注册任何系统、插入资源，否则触发运行时断言崩溃
-     */
+    // ===================== 步骤11：调度器构建拓扑，冻结运行环境 =====================
+    // scheduler.build()核心行为逐句注释：
+    // 1. 遍历所有注册System，分析通道读写、全局资源依赖关系
+    // 2. 自动生成并行调度拓扑：无依赖任务多线程并行，存在读写依赖串行执行
+    // 3. 标记调度器状态从配置阶段转为运行阶段，锁定资源与任务列表
+    // 4. 初始化线程池、周期定时器、无锁通道缓冲区
+    // build执行后禁止新增任何资源/任务，否则运行断言崩溃
     if (auto build_result = scheduler.build(); !build_result) {
         return std::unexpected(fmt::format("调度器构建拓扑失败: {}", build_result.error()));
     }
 
-    // 全流程初始化无错误，返回空预期，表示启动成功
+    // 所有初始化步骤无任何错误，返回空expected代表启动成功
     return {};
 }
 
-} // namespace fcs
+} // fcs顶层命名空间结束
