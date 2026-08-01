@@ -167,7 +167,8 @@ int main() {
     {
         // 错误处理
     }*/
-    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) {
+    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) 
+    {
         // 引导初始化失败，致命错误，退出程序
         SPDLOG_CRITICAL("{}", r.error());
         return 1;
@@ -188,11 +189,14 @@ int main() {
         bool shutdown_logged = false; // 保证“收到退出信号”日志只打印一次
 
         // 循环监听：调度器未结束则持续轮询
-        while (!scheduler_finished.load(std::memory_order_acquire)) {
+        while (!scheduler_finished.load(std::memory_order_acquire)) 
+        {
             // 读取全局退出标记
-            if (g_shutdown_requested.load(std::memory_order_acquire)) {
+            if (g_shutdown_requested.load(std::memory_order_acquire)) 
+            {
                 // 仅首次触发时打印日志
-                if (!shutdown_logged) {
+                if (!shutdown_logged) 
+                {
                     SPDLOG_INFO("shutdown signal received, stopping scheduler...");
                     shutdown_logged = true;
                 }

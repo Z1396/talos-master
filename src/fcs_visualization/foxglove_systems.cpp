@@ -70,7 +70,7 @@ void register_foxglove_systems(
     register_l3_estimation_systems(scheduler);
     // L4 规划控制层可视化：路径轨迹、速度指令、规划障碍物、代价地图
     register_l4_planning_systems(scheduler);
-    // 符识别专项可视化：能量机关、装甲板、Rune符文相关检测、角度预测画面
+    // 符识别专项可视化：能量机关、装甲板、Rune符文相关检测、角度预测画面m
     register_rune_systems(scheduler);
 
     // 仅开启Daedalus仿真模式时，注册Ground Truth地面真值可视化系统

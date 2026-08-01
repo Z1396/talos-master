@@ -384,9 +384,16 @@ auto Scheduler::build() -> BuildResult {
 }
 
 /// 启动调度器：创建所有定时线程，主线程阻塞执行Compute并行循环
-auto Scheduler::run() -> std::expected<void, SchedulerError> {
+auto Scheduler::run() -> std::expected<void, SchedulerError> 
+{
     // CAS原子交换生命周期：仅Built状态允许切换为Running
     auto expected = LifecycleState::Built;
+    /*CAS（Compare And Swap，比较并交换）原子操作，无锁并发编程核心原语，全程原子执行、不会被线程打断。
+    函数行为分为两步，整体不可分割：
+    1.比较：判断原子变量当前值是否等于传入的「预期值 expected」
+    2.交换
+    相等：把原子变量更新为「新值 desired」，返回 true；
+    不相等：把原子变量当前值写入 expected，返回 false。*/
     if (!lifecycle_.compare_exchange_strong(
             expected, LifecycleState::Running, std::memory_order_acq_rel,
             std::memory_order_acquire)) 
@@ -2060,6 +2067,10 @@ void Scheduler::run_compute_loop() {
 
         // 原子交换操作：取出当前待执行系统掩码，同时把全局就绪掩码置0清空
         // acq_rel复合内存序：读旧掩码带acquire、写0清空带release，同步跨线程就绪标记
+        /*exchange(new_val)：原子操作
+        取出原子变量当前旧值；
+        把原子变量直接赋值为 new_val；
+        返回刚才拿到的旧值。*/
         const auto ready = ready_systems_.exchange(0, std::memory_order_acq_rel);
 
         // ready != 0 代表存在需要执行的ECS系统任务，正常业务路径（高频分支）

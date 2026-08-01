@@ -350,6 +350,14 @@ public:
 template <typename F, typename Policy = default_policy>
 [[nodiscard]] std::unique_ptr<SystemBase> make_system(std::string name, F&& func) noexcept {
     // 退化类型、转发可调用对象，创建具体 System 实例
+    /*和 std::remove_reference_t 的区别
+    remove_reference_t：仅仅删掉 & / &&，不处理 const、数组；
+    decay_t：全套退化，行为完全等同于值传递传参时的类型转换。
+    示例对比：
+    // remove_reference 只去引用
+    std::remove_reference_t<const int&> → const int
+    // decay 去引用 + 剥const
+    std::decay_t<const int&> → int*/
     return std::make_unique<System<std::decay_t<F>, Policy>>(
         /*std::forward<F>(func) 配合 decay 完整流程
         入参 F&& func：万能引用，既能接收左值 lambda，也能接收右值临时 lambda；

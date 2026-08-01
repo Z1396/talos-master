@@ -77,6 +77,10 @@ namespace talos::primitive {
  * - 内存占用：3个shared_ptr + 原子变量缓存行对齐开销
  */
 template <typename T>
+/*std::movable<T>
+类型可移动：支持移动构造、移动赋值，可以被 std::move 转移所有权；不一定支持拷贝。
+std::copyable<T>
+类型可拷贝：既能拷贝构造、拷贝赋值，也支持移动（可拷贝必然可移动）*/
 requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
     /**
      * @brief 读写分离自旋锁，优化多读者场景
