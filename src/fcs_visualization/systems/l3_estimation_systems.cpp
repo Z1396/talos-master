@@ -1,26 +1,26 @@
-#include "L3_estimation/tracker/types.hpp"          // L3目标跟踪器输出数据结构定义
-#include "L3_estimation/tracker/vis_helpers.hpp"   // 跟踪可视化通用绘图构建工具
-#include "base.hpp"                                 // 项目基础宏、类型别名、工具函数
-#include "foxglove_types.hpp"                       // Foxglove前端消息结构体定义(SceneEntity/各类可视化消息)
-#include "scene_builder.hpp"                        // Foxglove 3D场景实体构建器EntityBuilder
+#include "L3_estimation/tracker/types.hpp" // L3目标跟踪器输出数据结构定义
+#include "base.hpp"                        // 项目基础宏、类型别名、工具函数
+#include "foxglove_types.hpp"              // Foxglove前端消息结构体定义(SceneEntity/各类可视化消息)
+#include "scene_builder.hpp"               // Foxglove 3D场景实体构建器EntityBuilder
+#include "vis_helpers.hpp"                 // 跟踪可视化通用绘图构建工具
 
-#include "L2_perception/ldm/types.hpp"              // L2层能量机关原始测量数据
-#include "L3_estimation/ldm_naive/types.hpp"        // L3层能量机关跟踪状态结构体
-#include "L3_estimation/tracker/util.hpp"           // 跟踪器工具函数（提取位置/速度）
-#include "core/channel_topics.hpp"                 // SPMC消息通道Topic常量定义
-#include "core/types.hpp"                           // 项目通用基础数据类型
+#include "L2_perception/ldm/types.hpp"     // L2层能量机关原始测量数据
+#include "L3_estimation/ldm_naive/types.hpp" // L3层能量机关跟踪状态结构体
+#include "L3_estimation/tracker/util.hpp"    // 跟踪器工具函数（提取位置/速度）
+#include "core/channel_topics.hpp"           // SPMC消息通道Topic常量定义
+#include "core/types.hpp"                    // 项目通用基础数据类型
 
-#include <Eigen/Core>                               // Eigen线性代数基础矩阵/向量
-#include <Eigen/Geometry>                           // Eigen四元数、旋转矩阵、位姿变换
-#include <cmath>                                    // 标准数学库、pi、数值判断
-#include <magic_enum.hpp>                           // 枚举值自动转可读字符串，无需手写映射表
-#include <nlohmann/json.hpp>                        // JSON序列化库，用于结构化调试数据下发
-#include <opencv2/core.hpp>                         // OpenCV基础矩阵、点、尺寸类型
-#include <opencv2/imgcodecs.hpp>                    // OpenCV图像编码（PNG/JPG内存压缩）
-#include <opencv2/imgproc.hpp>                      // OpenCV绘图、色彩映射、缩放、文字绘制
-#include <optional>                                 // std::optional 空安全包装类型
-#include <string>                                   // 标准字符串
-#include <vector>                                   // 动态数组容器
+#include <Eigen/Core>                        // Eigen线性代数基础矩阵/向量
+#include <Eigen/Geometry>                    // Eigen四元数、旋转矩阵、位姿变换
+#include <cmath>                             // 标准数学库、pi、数值判断
+#include <magic_enum.hpp>                    // 枚举值自动转可读字符串，无需手写映射表
+#include <nlohmann/json.hpp>                 // JSON序列化库，用于结构化调试数据下发
+#include <opencv2/core.hpp>                  // OpenCV基础矩阵、点、尺寸类型
+#include <opencv2/imgcodecs.hpp>             // OpenCV图像编码（PNG/JPG内存压缩）
+#include <opencv2/imgproc.hpp>               // OpenCV绘图、色彩映射、缩放、文字绘制
+#include <optional>                          // std::optional 空安全包装类型
+#include <string>                            // 标准字符串
+#include <vector>                            // 动态数组容器
 
 // 命名空间分层：项目fcs -> 可视化模块 -> Foxglove网页可视化 -> 可视化系统注册逻辑
 namespace fcs::visualization::foxglove::systems {
@@ -44,9 +44,9 @@ namespace fcs::visualization::foxglove::systems {
 [[nodiscard]] inline std::string tracker_label(const ::fcs::L3::TrackerOutput& output) {
     return fmt::format(
         "{}/{} · {}",
-        magic_enum::enum_name(output.target_color),  // 敌方颜色 Red/Blue
-        magic_enum::enum_name(output.target_name),    // 目标类型 Armor1~4/Outpost
-        magic_enum::enum_name(output.status)          // 跟踪状态 Lost/Tracking/Init等
+        magic_enum::enum_name(output.target_color), // 敌方颜色 Red/Blue
+        magic_enum::enum_name(output.target_name),  // 目标类型 Armor1~4/Outpost
+        magic_enum::enum_name(output.status)        // 跟踪状态 Lost/Tracking/Init等
     );
 }
 
@@ -186,10 +186,10 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
         "foxglove_l3_tracker_scene",
         [](
             // SPMC输入通道：批量多目标跟踪输出数组
-            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
+            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic>
+                tracker_in,
             // 全局只读资源：Foxglove服务智能指针，提供场景消息发送接口
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 前置校验：Foxglove服务已初始化、输入通道存在可读数据
             if (!detail::foxglove_ready(*server, tracker_in))
                 return;
@@ -215,7 +215,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 const auto pos_opt = get_tracker_position(output);
                 if (!pos_opt)
                     continue;
-                const auto& pos   = *pos_opt;
+                const auto& pos  = *pos_opt;
                 const auto vel   = get_tracker_velocity(output);
                 const auto v_yaw = get_tracker_v_yaw(output);
 
@@ -294,8 +294,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             talos::spmc<::fcs::L3::ldm::LdmState> ldm_in,
             // LDM原始观测测量数据流
             talos::spmc<::fcs::L2::ldm::LdmMeasurement, LdmMeasurementChannelTopic> ldm_meas_in,
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 校验服务与输入通道就绪
             if (!detail::foxglove_ready(*server, ldm_in)) {
                 return;
@@ -322,12 +321,11 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             // 帧同步最大允许时间偏移200ms，轻微不同步仍可叠加原始观测虚影
             constexpr uint64_t kMaxMeasurementSkewNs = 200'000'000;
             // 读取缓存的最新一帧LDM原始测量数据
-            const auto measurement                   = ldm_meas_in.read_current();
+            const auto measurement = ldm_meas_in.read_current();
             // 测量帧有效、位姿存在、时间戳偏差在阈值内，则绘制半透明观测立方体
             if (measurement && measurement->transform_odom.has_value()
                 && timestamp_close(
-                    measurement->timestamp_ns,
-                    state->timestamp_ns, kMaxMeasurementSkewNs)) {
+                    measurement->timestamp_ns, state->timestamp_ns, kMaxMeasurementSkewNs)) {
                 entities.push_back(make_ldm_measurement_entity(*measurement));
             }
 
@@ -342,11 +340,9 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
     // =========================================================================
     app.add_system<talos::pool_compute>(
         "foxglove_l3_association_scene",
-        [](
-            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
-            talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> meas_in,
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+        [](talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
+           talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> meas_in,
+           talos::res<std::shared_ptr<FoxgloveServer>> server) {
             if (!detail::foxglove_ready(*server, tracker_in))
                 return;
 
@@ -427,10 +423,8 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
     // =========================================================================
     app.add_system<talos::pool_compute>(
         "foxglove_l3_ekf_heatmap",
-        [](
-            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+        [](talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
+           talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 临时禁用热力图渲染，直接return退出，调试时注释此行开启
             return;
             if (!detail::foxglove_ready(*server, tracker_in))
@@ -543,7 +537,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                         cv::Point(
                             kLeftMargin - ts.width - 4,
                             kTopMargin + r * cell + cell / 2 + ts.height / 2),
-                    cv::FONT_HERSHEY_SIMPLEX, kFontScale, kLabelColor, 1, cv::LINE_AA);
+                        cv::FONT_HERSHEY_SIMPLEX, kFontScale, kLabelColor, 1, cv::LINE_AA);
                 }
 
                 // 顶部绘制列状态枚举标签（居中）
@@ -712,7 +706,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             msg.payload.frame_id  = "ekf_heatmap";
             msg.payload.format    = "png";
             // 二进制字节流转换存储
-            msg.payload.data      = std::vector<std::byte>(
+            msg.payload.data = std::vector<std::byte>(
                 reinterpret_cast<const std::byte*>(compressed.data()),
                 reinterpret_cast<const std::byte*>(compressed.data() + compressed.size()));
             // 消息入队异步发送
@@ -724,11 +718,8 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
     // 功能：序列化LDM全部跟踪参数、位姿、速度、预测坐标为JSON，前端可查看完整数值调试
     // =========================================================================
     app.add_system<talos::pool_compute>(
-        "foxglove_l3_ldm_tracker_json",
-        [](
-            talos::spmc<::fcs::L3::ldm::LdmState> ldm_in,
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+        "foxglove_l3_ldm_tracker_json", [](talos::spmc<::fcs::L3::ldm::LdmState> ldm_in,
+                                           talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 校验服务与输入通道就绪
             if (!detail::foxglove_ready(*server, ldm_in)) {
                 return;
@@ -743,17 +734,17 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             // JSON根对象
             nlohmann::json j;
             // 原始纳秒时间戳
-            j["timestamp_ns"]                  = state->timestamp_ns;
+            j["timestamp_ns"] = state->timestamp_ns;
             // 上一帧观测时间戳
             j["last_observation_timestamp_ns"] = state->last_observation_timestamp_ns;
             // 拆分sec/nsec标准时间格式
-            j["timestamp"]                     = nlohmann::json::object();
-            j["timestamp"]["sec"]              = state->timestamp_ns / 1000000000L;
-            j["timestamp"]["nsec"]             = state->timestamp_ns % 1000000000L;
+            j["timestamp"]         = nlohmann::json::object();
+            j["timestamp"]["sec"]  = state->timestamp_ns / 1000000000L;
+            j["timestamp"]["nsec"] = state->timestamp_ns % 1000000000L;
             // 跟踪状态枚举字符串
-            j["status"]                        = std::string(magic_enum::enum_name(state->status));
+            j["status"] = std::string(magic_enum::enum_name(state->status));
             // 跟踪精度标记
-            j["accurate"]                      = state->accurate;
+            j["accurate"] = state->accurate;
 
             // odom坐标系中心三维坐标
             j["position"] = {state->position().x(), state->position().y(), state->position().z()};
