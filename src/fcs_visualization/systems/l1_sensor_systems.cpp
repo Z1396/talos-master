@@ -481,7 +481,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             // 前端Foxglove依赖TF实现3D坐标、目标空间位置可视化
             (*server)->publish_tf(*tf_buffer, batch->timestamp_ns);
 
-            // 克隆原图用于叠加绘图
+            
             // clone深拷贝，避免修改原始图像帧缓存，不影响其他系统读取原图
             cv::Mat img_bgr = batch->image.clone();
 
