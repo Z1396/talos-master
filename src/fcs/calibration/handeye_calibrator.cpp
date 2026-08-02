@@ -3,6 +3,7 @@
 #include "euler.hpp"
 
 // 数学常量、三角函数、弧度角度换算
+#include <algorithm>
 #include <cmath>
 // 文件写入，存储手眼标定结果TOML
 #include <fstream>
@@ -94,8 +95,8 @@ bool HandEyeCalibrator::is_diverse_enough(
     const double min_angle_rad  = capture_config_.min_angle_diff * deg_to_rad;
     const double min_trans      = capture_config_.min_translation_diff;
 
-    // 遍历所有历史样本对比
-    for (const auto& sample : samples_) {
+    // 遍历所有历史样本对比：全部满足差异要求才允许采集
+    return std::ranges::all_of(samples_, [&](const auto& sample) {
         const Eigen::Matrix3d R_old = sample.gimbal_pose.rotation();
         const Eigen::Vector3d t_old = sample.gimbal_pose.translation();
         auto euler_old              = math_fuxk::rpy(R_old);
@@ -110,13 +111,8 @@ bool HandEyeCalibrator::is_diverse_enough(
         double trans_diff = (t_new - t_old).norm();
 
         // 角度、平移同时小于阈值 → 姿态重复，拒绝采集
-        if (angle_diff < min_angle_rad && trans_diff < min_trans) {
-            return false;
-        }
-    }
-
-    // 所有样本均满足差异要求
-    return true;
+        return !(angle_diff < min_angle_rad && trans_diff < min_trans);
+    });
 }
 
 /**

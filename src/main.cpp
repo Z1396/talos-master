@@ -4,9 +4,10 @@
 #include "fcs_visualization/foxglove_systems.hpp" // Foxglove 对应调度系统注册
 #include "runtime/build_info.hpp"                 // 编译构建信息（Git分支、提交ID、编译时间等）
 #include "runtime/config_loader.hpp"              // 配置文件加载器（解析 TOML 配置）
-#include "scheduler/error_formatter.hpp"          // 调度器错误信息格式化工具
-#include "scheduler/scheduler.hpp"                // 核心任务调度器 talos::Scheduler
-#include "spdlog_hook.hpp"                        // 日志库 spdlog 初始化、标准流重定向钩子
+// SchedulerError 的 fmt formatter 特化，隐式依赖不可移除
+#include "scheduler/error_formatter.hpp" // IWYU pragma: keep
+#include "scheduler/scheduler.hpp"       // 核心任务调度器 talos::Scheduler
+#include "spdlog_hook.hpp"               // 日志库 spdlog 初始化、标准流重定向钩子
 
 // 标准库依赖
 #include <atomic>  // 原子变量：线程安全标记，无锁跨线程通信
@@ -34,7 +35,8 @@ std::atomic<bool> g_shutdown_requested{false};
  */
 void signal_handler(int /*sig*/) {
     // 内存序 release：保证本次写操作对后续读线程可见
-    // 另一边必须用 memory_order_acquire（load 加载）acquire 屏障：load 之后的代码，不能被重排到 load 前面。
+    // 另一边必须用 memory_order_acquire（load 加载）acquire 屏障：load 之后的代码，不能被重排到
+    // load 前面。
     /*Release 写：前面的不许往后跑
     Acquire 读：后面的不许往前跑
     Release 配 Acquire，建立线程间可见性同步*/
@@ -127,11 +129,12 @@ int main() {
             /*  std::holds_alternative<T>(var)	判断当前是否存 T，返回 bool	分支判断、if 条件
                 std::get<T>(var)	取出 T 类型的值，类型不匹配抛异常	已确认类型后取值
                 std::get_if<T>(&var)	取 T 的指针，不匹配返回 nullptr	不想抛异常、安全取值
-                
+
                 2. 执行流程
-                编译阶段：编译器校验 DaedalusConfig 是否在 backend 的 variant 类型列表中，不在直接编译报错；
-                运行阶段：variant 内部维护一个类型索引下标，holds_alternative 对比下标是否对应 DaedalusConfig，无内存拷贝，性能极高；
-                返回布尔结果供 if/else 分支使用。
+                编译阶段：编译器校验 DaedalusConfig 是否在 backend 的 variant
+               类型列表中，不在直接编译报错； 运行阶段：variant
+               内部维护一个类型索引下标，holds_alternative 对比下标是否对应
+               DaedalusConfig，无内存拷贝，性能极高； 返回布尔结果供 if/else 分支使用。
             */
             fcs::visualization::register_foxglove_systems(
                 std::holds_alternative<fcs::hardware::DaedalusConfig>(config->backend), scheduler,
@@ -167,8 +170,7 @@ int main() {
     {
         // 错误处理
     }*/
-    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) 
-    {
+    if (auto r = fcs::boot(scheduler, std::move(config.value())); !r) {
         // 引导初始化失败，致命错误，退出程序
         SPDLOG_CRITICAL("{}", r.error());
         return 1;
@@ -189,15 +191,13 @@ int main() {
         bool shutdown_logged = false; // 保证“收到退出信号”日志只打印一次
 
         // 循环监听：调度器未结束则持续轮询
-        while (!scheduler_finished.load(std::memory_order_acquire)) 
-        {
+        while (!scheduler_finished.load(std::memory_order_acquire)) {
             // 读取全局退出标记
-            if (g_shutdown_requested.load(std::memory_order_acquire)) 
-            {
+            if (g_shutdown_requested.load(std::memory_order_acquire)) {
                 // 仅首次触发时打印日志
-                if (!shutdown_logged) 
-                {
-                    SPDLOG_INFO("shutdown signal received, stopping scheduler...");
+                if (!shutdown_logged) {
+                    SPDLOG_INFO( // NOLINT(bugprone-lambda-function-name)
+                        "shutdown signal received, stopping scheduler...");
                     shutdown_logged = true;
                 }
                 // 调用调度器停止接口：优雅停止所有周期任务、线程
@@ -229,4 +229,4 @@ int main() {
     return 0;
 }
 
-#endif 
+#endif

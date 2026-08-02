@@ -43,11 +43,11 @@ bool IntrinsicCalibrator::is_diverse_enough(const CornerDetection& detection) co
 
     // 粗略相机矩阵估算，用于临时PnP求解姿态做多样性校验
     cv::Mat camera_matrix          = cv::Mat::eye(3, 3, CV_64F);
-    camera_matrix.at<double>(0, 0) = 1000.0; // fx 预估焦距
-    camera_matrix.at<double>(1, 1) = 1000.0; // fy 预估焦距
-    camera_matrix.at<double>(0, 2) = 640.0;  // cx 预估图像中心X
-    camera_matrix.at<double>(1, 2) = 360.0;  // cy 预估图像中心Y
-    cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F); // 畸变全部置0临时估算
+    camera_matrix.at<double>(0, 0) = 1000.0;                       // fx 预估焦距
+    camera_matrix.at<double>(1, 1) = 1000.0;                       // fy 预估焦距
+    camera_matrix.at<double>(0, 2) = 640.0;                        // cx 预估图像中心X
+    camera_matrix.at<double>(1, 2) = 360.0;                        // cy 预估图像中心Y
+    cv::Mat dist_coeffs            = cv::Mat::zeros(5, 1, CV_64F); // 畸变全部置0临时估算
     cv::Vec3d rvec, tvec;
 
     // PnP求解当前帧标定板相对相机旋转平移
@@ -101,7 +101,7 @@ std::expected<void, std::string>
     camera_matrix.at<double>(1, 1) = 1000.0;
     camera_matrix.at<double>(0, 2) = 640.0;
     camera_matrix.at<double>(1, 2) = 360.0;
-    cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
+    cv::Mat dist_coeffs            = cv::Mat::zeros(5, 1, CV_64F);
     cv::Vec3d rvec, tvec;
 
     // 求解当前帧姿态用于后续多样性判断
@@ -146,11 +146,11 @@ std::expected<IntrinsicResult, std::string>
     cv::Mat camera_matrix          = cv::Mat::eye(3, 3, CV_64F);
     camera_matrix.at<double>(0, 2) = image_size.width / 2.0;
     camera_matrix.at<double>(1, 2) = image_size.height / 2.0;
-    cv::Mat dist_coeffs = cv::Mat::zeros(5, 1, CV_64F);
+    cv::Mat dist_coeffs            = cv::Mat::zeros(5, 1, CV_64F);
     std::vector<cv::Mat> rvecs, tvecs;
 
     // 转换配置约束为OpenCV标定flag
-    int flags  = intrinsic_config_.to_opencv_flags();
+    int flags = intrinsic_config_.to_opencv_flags();
     // 核心标定函数，返回全局重投影RMS误差
     double rms = cv::calibrateCamera(
         object_points_list, image_points_list, image_size, camera_matrix, dist_coeffs, rvecs, tvecs,
@@ -178,7 +178,7 @@ std::expected<IntrinsicResult, std::string>
  * @return 重投影二维像素点数组，求解失败返回空容器
  */
 std::vector<cv::Point2f> IntrinsicCalibrator::reproject(
-    const CornerDetection& detection, const IntrinsicResult& result) const noexcept {
+    const CornerDetection& detection, const IntrinsicResult& result) noexcept {
     std::vector<cv::Point2f> reprojected;
 
     // Eigen内参转回OpenCV矩阵

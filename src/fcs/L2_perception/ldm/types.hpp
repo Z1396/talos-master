@@ -5,7 +5,6 @@
 #include "frame.hpp"
 
 // STL容器与基础数值类型
-#include <array>
 // 固定宽度整数类型 uint8_t / uint64_t
 #include <cstdint>
 // 数值极限、NaN常量
@@ -53,7 +52,7 @@ struct ldm_frame {
     /// 坐标系唯一字符串标识
     static constexpr std::string_view frame_id = "ldm";
     /// 无父级坐标系祖先，填void
-    using ancestor                             = void;
+    using ancestor = void;
 };
 
 /**
@@ -67,7 +66,7 @@ using CameraLdmTransform = fast_tf::FrameTransform<fast_tf::camera_optical, ldm_
  * @brief 里程计odom坐标系 → 大符本体坐标系变换
  * T_odom_ldm：大符三维点转换到里程计世界坐标系
  */
-using OdomLdmTransform   = fast_tf::FrameTransform<fast_tf::odom, ldm_frame>;
+using OdomLdmTransform = fast_tf::FrameTransform<fast_tf::odom, ldm_frame>;
 
 /**
  * @brief 单组大符候选完整位姿封装

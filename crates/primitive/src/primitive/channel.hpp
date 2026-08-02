@@ -13,12 +13,12 @@
  * - `Channel<T>`：SpmcChannel<T> 的别名，用于历史代码兼容
  */
 
-#include "spmc_triple_buffer.hpp"   // 底层 SPMC 三缓冲原生实现
-#include "spsc_triple_buffer.hpp"   // 底层 SPSC 三缓冲原生实现
+#include "spmc_triple_buffer.hpp" // 底层 SPMC 三缓冲原生实现
+#include "spsc_triple_buffer.hpp" // 底层 SPSC 三缓冲原生实现
 
-#include <concepts>                 // C++20 约束/概念，区分 SPSC / SPMC 能力
-#include <optional>                 // 无值读取返回 std::optional
-#include <utility>                  // std::move 移动语义
+#include <concepts>               // C++20 约束/概念，区分 SPSC / SPMC 能力
+#include <optional>               // 无值读取返回 std::optional
+#include <utility>                // std::move 移动语义
 
 namespace talos::primitive {
 // ============================================================================
@@ -74,19 +74,19 @@ class TrackedWriter {
     Inner inner_;
 
 public:
-    using value_type  = T;         // 通道承载数据类型
-    using buffer_type = Buffer;    // 底层缓冲实现类型
+    using value_type  = T;      // 通道承载数据类型
+    using buffer_type = Buffer; // 底层缓冲实现类型
 
     // 构造：接管原生Write句柄
-    TrackedWriter(Inner w) noexcept
+    explicit TrackedWriter(Inner w) noexcept
         : inner_(std::move(w)) {}
 
     // 禁用拷贝写入器（生产者唯一，不可复制）
     TrackedWriter(const TrackedWriter&)            = delete;
     TrackedWriter& operator=(const TrackedWriter&) = delete;
     // 允许移动语义
-    TrackedWriter(TrackedWriter&&) noexcept        = default;
-    TrackedWriter& operator=(TrackedWriter&&)      = default;
+    TrackedWriter(TrackedWriter&&) noexcept   = default;
+    TrackedWriter& operator=(TrackedWriter&&) = default;
 
     /**
      * @brief 直接写入一份完整数据
@@ -155,7 +155,7 @@ public:
     using value_type  = T;
     using buffer_type = Buffer;
 
-    TrackedReader(Inner r) noexcept
+    explicit TrackedReader(Inner r) noexcept
         : inner_(std::move(r)) {}
 
     // ---------------- SPMC 缓冲：支持拷贝构造/拷贝赋值 ----------------
@@ -267,8 +267,8 @@ public:
     TrackedChannel(const TrackedChannel&)            = delete;
     TrackedChannel& operator=(const TrackedChannel&) = delete;
     // 允许移动整个通道对象
-    TrackedChannel(TrackedChannel&&) noexcept        = default;
-    TrackedChannel& operator=(TrackedChannel&&)      = default;
+    TrackedChannel(TrackedChannel&&) noexcept   = default;
+    TrackedChannel& operator=(TrackedChannel&&) = default;
 
     // ========================================================================
     // 内置写入快捷接口（也可使用split()获取独立Writer）
