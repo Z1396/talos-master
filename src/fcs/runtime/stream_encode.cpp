@@ -7,6 +7,7 @@
 #include "quanta/stream_encoder.hpp"      // Quanta视频编码器封装（H.264/H.265编码器）
 #include "quanta/stream_transport.hpp"    // Quanta传输层：数据包组装、分片协议
 #include "runtime/stream_send.hpp"        // 配套：编码后数据包网络发送系统注册函数
+#include "scheduler/scheduler.hpp"        // 调度器：Scheduler、fixed_rate、spmc 等
 
 // 标准库 & 第三方依赖
 #include <atomic>                // 无锁原子变量（序列号多线程安全自增）

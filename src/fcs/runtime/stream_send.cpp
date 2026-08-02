@@ -6,6 +6,8 @@
 #include "core/runtime.hpp"
 // Quanta传输协议定义：数据包结构、队列类型
 #include "quanta/stream_transport.hpp"
+// 调度器：Scheduler、fixed_rate、spmc 等
+#include "scheduler/scheduler.hpp"
 
 #include <algorithm>
 #include <chrono>

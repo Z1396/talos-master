@@ -96,7 +96,3 @@
 // ===== 图像处理库 =====
 #include <opencv2/core.hpp>
 #include <opencv2/core/mat.hpp>
-
-// ===== Talos调度器 =====
-#include <scheduler/error_formatter.hpp>
-#include <scheduler/scheduler.hpp>

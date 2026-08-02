@@ -2,6 +2,8 @@
 #include "L3_estimation/tracker/util.hpp"
 // Foxglove可视化系统基类
 #include "base.hpp"
+// 调度器完整定义（Scheduler、pool_compute、spmc 等）
+#include "scheduler/scheduler.hpp"
 // Foxglove标准消息结构：SceneEntity、颜色、点、线、立方体等
 #include "foxglove_types.hpp"
 // 3D场景实体构造工具封装（EntityBuilder）
@@ -304,7 +306,7 @@ inline void add_ldm_volume_edges(
 
     const auto visible_faces = ldm_volume_assigned_faces(measurement);
     // 绑定camera_optical光学坐标系
-    auto builder             = viz::EntityBuilder::create<fast_tf::camera_optical>("l2", "ldm_cam");
+    auto builder = viz::EntityBuilder::create<fast_tf::camera_optical>("l2", "ldm_cam");
     builder.timestamp(measurement.timestamp_ns)
         .lifetime(kLdmSceneLifetimeNs)
         .position(pose.translation())
@@ -332,7 +334,7 @@ inline void add_ldm_volume_edges(
  */
 [[nodiscard]] ::foxglove::schemas::SceneEntity
     make_ldm_bearing_entity(const fcs::L2::ldm::LdmMeasurement& measurement) {
-    const auto color          = ldm_scene_color(measurement);
+    const auto color = ldm_scene_color(measurement);
     // 归一化视线方向，延长至2米
     const Eigen::Vector3d end = measurement.bearing_cam.normalized() * 2.0;
 
@@ -354,7 +356,7 @@ inline void add_ldm_volume_edges(
         .build();
 }
 
-} // 内部匿名namespace结束
+} // namespace
 
 /**
  * @brief 批量注册L2感知层所有可视化调度系统
@@ -407,9 +409,9 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 }
                 obj["confidence"] = det.confidence;
                 // 枚举转字符串
-                obj["color"]      = magic_enum::enum_name(det.color);
-                obj["type"]       = magic_enum::enum_name(det.type);
-                obj["name"]       = magic_enum::enum_name(det.name);
+                obj["color"] = magic_enum::enum_name(det.color);
+                obj["type"]  = magic_enum::enum_name(det.type);
+                obj["name"]  = magic_enum::enum_name(det.name);
                 armors_json["armors"].push_back(obj);
             }
 
@@ -535,11 +537,11 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             j["color"]             = std::string(magic_enum::enum_name(det->color));
             j["accurate"]          = det->accurate;
             // 图像ROI矩形
-            j["rect"]              = nlohmann::json::object();
-            j["rect"]["x"]         = det->rect.x;
-            j["rect"]["y"]         = det->rect.y;
-            j["rect"]["w"]         = det->rect.width;
-            j["rect"]["h"]         = det->rect.height;
+            j["rect"]      = nlohmann::json::object();
+            j["rect"]["x"] = det->rect.x;
+            j["rect"]["y"] = det->rect.y;
+            j["rect"]["w"] = det->rect.width;
+            j["rect"]["h"] = det->rect.height;
 
             // 图像中心像素
             if (det->center_image_px.has_value()) {
@@ -610,7 +612,7 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             j["center_image_px"]["x"] = meas->center_image_px.x;
             j["center_image_px"]["y"] = meas->center_image_px.y;
             // 相机归一化视线向量
-            j["bearing_cam"]          = {
+            j["bearing_cam"] = {
                 meas->bearing_cam.x(), meas->bearing_cam.y(), meas->bearing_cam.z()};
             j["depth_quality"]   = std::string(magic_enum::enum_name(meas->depth_quality));
             j["confidence"]      = meas->confidence;
@@ -673,26 +675,26 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 *tf_system, batch->timestamp_ns);
 
             for (const auto& m : batch->measurements) {
-                const auto t   = m.transform.translation();
-                const auto q   = m.transform.quaternion();
+                const auto t = m.transform.translation();
+                const auto q = m.transform.quaternion();
                 // 分解RPY欧拉角
                 auto [r, p, y] = m.transform.euler_rot().rpy();
 
                 nlohmann::json mj;
-                mj["timestamp_ns"]          = m.timestamp_ns;
-                mj["timestamp"]             = nlohmann::json::object();
-                mj["timestamp"]["sec"]      = m.timestamp_ns / 1000000000L;
-                mj["timestamp"]["nsec"]     = m.timestamp_ns % 1000000000L;
-                mj["name"]                  = std::string(magic_enum::enum_name(m.name));
-                mj["type"]                  = std::string(magic_enum::enum_name(m.type));
-                mj["color"]                 = std::string(magic_enum::enum_name(m.color));
-                mj["confidence"]            = m.confidence;
-                mj["position"]              = {t.x(), t.y(), t.z()};
-                mj["orientation"]           = {q.x(), q.y(), q.z(), q.w()};
-                mj["euler"]["roll"]         = r;
-                mj["euler"]["pitch"]        = p;
-                mj["euler"]["yaw"]          = y;
-                mj["distance"]              = t.norm();
+                mj["timestamp_ns"]      = m.timestamp_ns;
+                mj["timestamp"]         = nlohmann::json::object();
+                mj["timestamp"]["sec"]  = m.timestamp_ns / 1000000000L;
+                mj["timestamp"]["nsec"] = m.timestamp_ns % 1000000000L;
+                mj["name"]              = std::string(magic_enum::enum_name(m.name));
+                mj["type"]              = std::string(magic_enum::enum_name(m.type));
+                mj["color"]             = std::string(magic_enum::enum_name(m.color));
+                mj["confidence"]        = m.confidence;
+                mj["position"]          = {t.x(), t.y(), t.z()};
+                mj["orientation"]       = {q.x(), q.y(), q.z(), q.w()};
+                mj["euler"]["roll"]     = r;
+                mj["euler"]["pitch"]    = p;
+                mj["euler"]["yaw"]      = y;
+                mj["distance"]          = t.norm();
                 // PnP协方差维度说明：方位偏航、俯仰、对数距离、装甲偏航
                 mj["pnp_geometry"]["order"] = {
                     "bearing_yaw", "bearing_pitch", "log_distance", "armor_yaw"};
