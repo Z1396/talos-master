@@ -19,3 +19,8 @@ CompileFlags:
     - -I/home/pldx/Desktop/talos-master/build/_deps/foxglove-src/include/foxglove
     - -I/home/pldx/Desktop/talos-master/build/include_foxglove
     - -std=c++2b
+
+Diagnostics:
+  ClangTidy:
+    Remove:
+      - misc-include-cleaner
