@@ -59,7 +59,7 @@ namespace talos::primitive {
 template <typename T>
 requires(std::movable<T>) class SpscTripleBuffer {
     // 状态标记位：最高位标记存在新数据
-    static constexpr uint8_t FLAG_NEW   = 0x80;
+    static constexpr uint8_t FLAG_NEW = 0x80;
     // 下标掩码：低2位存储槽位索引 0/1/2
     static constexpr uint8_t INDEX_MASK = 0x03;
 
@@ -93,8 +93,8 @@ public:
     class Write {
     public:
         // 禁用拷贝构造、拷贝赋值
-        Write(const Write&)                = delete;
-        Write& operator=(const Write&)     = delete;
+        Write(const Write&)            = delete;
+        Write& operator=(const Write&) = delete;
         // 允许移动构造、移动赋值
         Write(Write&&) noexcept            = default;
         Write& operator=(Write&&) noexcept = default;

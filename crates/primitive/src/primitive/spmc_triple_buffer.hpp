@@ -97,7 +97,7 @@ requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
      */
     class RWSpinLock {
         // 最高位：写者占用标记
-        static constexpr std::uint32_t WRITER_BIT  = 0x80000000u;
+        static constexpr std::uint32_t WRITER_BIT = 0x80000000u;
         // 低31位：读者计数掩码
         static constexpr std::uint32_t READER_MASK = 0x7FFFFFFFu;
         // 锁状态原子变量

@@ -10,8 +10,12 @@ CompileFlags:
     - -I/home/pldx/Desktop/talos-master/crates/math/src
     - -I/home/pldx/Desktop/talos-master/crates/log/src
     - -I/home/pldx/Desktop/talos-master/src
+    - -I/home/pldx/Desktop/talos-master/src/fcs_visualization
     - -I/home/pldx/Desktop/talos-master/3dparty/boost-pfr/include
     - -I/home/pldx/Desktop/talos-master/3dparty/magic_enum
     - -I/home/pldx/Desktop/talos-master/build/_deps/tomlplusplus-src/include
     - -I/home/pldx/Desktop/talos-master/build/_deps/eigen-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/foxglove-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/foxglove-src/include/foxglove
+    - -I/home/pldx/Desktop/talos-master/build/include_foxglove
     - -std=c++2b
