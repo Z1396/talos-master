@@ -7,12 +7,9 @@
 #include "frame.hpp"
 
 // 标准库
-#include <array>         // 固定大小数组
-#include <cstdint>       // 固定宽度整型（uint64_t 等）
-#include <string>        // 字符串
-#include <string_view>   // 轻量只读字符串视图
-#include <type_traits>   // 类型特征、编译期类型判断
-#include <vector>        // 动态数组
+#include <array>   // 固定大小数组
+#include <cstdint> // 固定宽度整型（uint64_t 等）
+#include <vector>  // 动态数组
 
 // 线性代数/几何库：姿态、矩阵、向量运算
 #include <Eigen/Core>
@@ -48,9 +45,9 @@ using armor_frame = armor_frame_tag;
  *        视觉流水线最上游数据：相机原图 + 时间戳 + 帧编号
  */
 struct ImageFrame {
-    cv::Mat image;               // OpenCV 图像数据
-    uint64_t timestamp_ns = 0;   // 时间戳，单位：纳秒
-    uint64_t frame_id     = 0;   // 图像帧全局唯一编号
+    cv::Mat image;             // OpenCV 图像数据
+    uint64_t timestamp_ns = 0; // 时间戳，单位：纳秒
+    uint64_t frame_id     = 0; // 图像帧全局唯一编号
 
     // 默认构造
     ImageFrame() = default;
@@ -62,7 +59,7 @@ struct ImageFrame {
      * @param fid 帧编号
      */
     ImageFrame(cv::Mat img, uint64_t ts, uint64_t fid)
-        : image(std::move(img))  // 移动图像，提升性能
+        : image(std::move(img)) // 移动图像，提升性能
         , timestamp_ns(ts)
         , frame_id(fid) {}
 };
@@ -75,12 +72,12 @@ struct ImageFrame {
 struct ArmorDetection {
     /// 四个角点：顺序 左上(TL)、右上(TR)、右下(BR)、左下(BL)
     std::array<cv::Point2f, 4> corners{};
-    cv::Rect2f rect{};                // 装甲外接矩形
-    ArmorName name   = ArmorName::Invalid;    // 装甲编号（枚举，默认无效）
-    ArmorColor color = ArmorColor::Neutral;   // 装甲颜色（红/蓝/中立，默认中立）
-    ArmorType type   = ArmorType::Invalid;    // 装甲类型（大装甲/小装甲，默认无效）
-    float confidence = 0.0f;          // 检测置信度 [0, 1]
-    int area         = 0;             // 装甲区域像素面积
+    cv::Rect2f rect{};                      // 装甲外接矩形
+    ArmorName name   = ArmorName::Invalid;  // 装甲编号（枚举，默认无效）
+    ArmorColor color = ArmorColor::Neutral; // 装甲颜色（红/蓝/中立，默认中立）
+    ArmorType type   = ArmorType::Invalid;  // 装甲类型（大装甲/小装甲，默认无效）
+    float confidence = 0.0f;                // 检测置信度 [0, 1]
+    int area         = 0;                   // 装甲区域像素面积
 
     // 默认构造，成员自动零初始化
     ArmorDetection() = default;
@@ -121,12 +118,12 @@ struct ArmorDetection {
  *        一张图可能检出多块装甲，该结构体打包所有检测结果+原图+附加信息
  */
 struct ArmorDetectionBatch {
-    std::vector<ArmorDetection> detections;  // 多张装甲检测结果列表
-    cv::Mat image;                           // 原始图像（用于可视化、后处理）
-    bool has_detector_roi = false;           // 是否启用检测感兴趣区域(ROI)
-    cv::Rect detector_roi{};                 // 检测器ROI区域
-    uint64_t timestamp_ns = 0;               // 帧纳秒时间戳
-    uint64_t frame_id     = 0;               // 帧编号
+    std::vector<ArmorDetection> detections; // 多张装甲检测结果列表
+    cv::Mat image;                          // 原始图像（用于可视化、后处理）
+    bool has_detector_roi = false;          // 是否启用检测感兴趣区域(ROI)
+    cv::Rect detector_roi{};                // 检测器ROI区域
+    uint64_t timestamp_ns = 0;              // 帧纳秒时间戳
+    uint64_t frame_id     = 0;              // 帧编号
 
     // 默认构造
     ArmorDetectionBatch() = default;
@@ -178,11 +175,11 @@ struct ArmorMeasurementT {
     /// 位姿变换矩阵：从当前Frame 到 装甲坐标系(armor_frame) 的变换矩阵
     using Transform = fast_tf::TransformMatrixd<Frame, armor_frame>;
 
-    Transform transform{};                          // 坐标变换矩阵（位姿：旋转+平移）
-    ArmorName name                 = ArmorName::Invalid;    // 装甲编号
-    ArmorColor color               = ArmorColor::Neutral;   // 装甲颜色
-    ArmorType type                 = ArmorType::Small;        // 装甲类型（默认小装甲）
-    float confidence               = 0.0f;                  // 检测置信度
+    Transform transform{};                  // 坐标变换矩阵（位姿：旋转+平移）
+    ArmorName name   = ArmorName::Invalid;  // 装甲编号
+    ArmorColor color = ArmorColor::Neutral; // 装甲颜色
+    ArmorType type   = ArmorType::Small;    // 装甲类型（默认小装甲）
+    float confidence = 0.0f;                // 检测置信度
     /// 装甲中心到图像中心的像素距离（用于筛选、权重计算）
     float distance_to_image_center = 0.0f;
 
@@ -199,7 +196,7 @@ struct ArmorMeasurementT {
      */
     double pnp_condition_number = 1e6;
 
-    uint64_t timestamp_ns       = 0;  // 测量结果对应的纳秒时间戳
+    uint64_t timestamp_ns = 0; // 测量结果对应的纳秒时间戳
 
     // 默认构造，成员自动初始化
     ArmorMeasurementT() = default;
@@ -241,7 +238,7 @@ struct ArmorMeasurementT {
         reframe(const fast_tf::FrameTransform<ToFrame, Frame>& frame_transform) const {
         ArmorMeasurementT<ToFrame> reframed;
         // 矩阵左乘，完成坐标系转换
-        reframed.transform                = frame_transform * transform;
+        reframed.transform = frame_transform * transform;
         // 纯数据字段直接拷贝
         reframed.name                     = name;
         reframed.color                    = color;
@@ -256,7 +253,7 @@ struct ArmorMeasurementT {
 };
 
 // 类型别名：里程计坐标系下的装甲3D测量结果（业务主使用类型）
-using ArmorMeasurement       = ArmorMeasurementT<fast_tf::odom>;
+using ArmorMeasurement = ArmorMeasurementT<fast_tf::odom>;
 // 类型别名：相机光心坐标系下的装甲3D测量结果
 using CameraArmorMeasurement = ArmorMeasurementT<fast_tf::camera_optical>;
 
@@ -268,7 +265,7 @@ using CameraArmorMeasurement = ArmorMeasurementT<fast_tf::camera_optical>;
  */
 template <fast_tf::frame Frame>
 struct ArmorMeasurementBatchT {
-    std::vector<ArmorMeasurementT<Frame>> measurements;  // 多块装甲测量结果列表
+    std::vector<ArmorMeasurementT<Frame>> measurements; // 多块装甲测量结果列表
     uint64_t timestamp_ns = 0;                          // 帧纳秒时间戳
     uint64_t frame_id     = 0;                          // 帧编号
 

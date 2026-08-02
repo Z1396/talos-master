@@ -16,7 +16,8 @@ namespace fcs::calibration {
 /**
  * @brief 相机单目内参标定器
  * 功能：采集棋盘格角点样本、筛选有效多样样本、求解相机内参矩阵+畸变系数、重投影误差计算、结果导出
- * 完整流程：add_sample 采集角点样本 → is_diverse_enough 筛选有效样本 → calibrate 执行标定求解 → save_intrinsic_result 存文件
+ * 完整流程：add_sample 采集角点样本 → is_diverse_enough 筛选有效样本 → calibrate 执行标定求解 →
+ * save_intrinsic_result 存文件
  */
 class IntrinsicCalibrator {
 public:
@@ -67,11 +68,11 @@ public:
      * @param detection 单帧原始棋盘格角点检测数据（含3D世界坐标）
      * @param result 已求解完成的相机内参标定结果
      * @return std::vector<cv::Point2f> 投影后的2D图像像素坐标
-     * @const 不修改类成员
+     * @static 静态方法，不依赖实例状态
      * @noexcept 无异常抛出
      */
-    [[nodiscard]] std::vector<cv::Point2f>
-        reproject(const CornerDetection& detection, const IntrinsicResult& result) const noexcept;
+    [[nodiscard]] static std::vector<cv::Point2f>
+        reproject(const CornerDetection& detection, const IntrinsicResult& result) noexcept;
 
     /**
      * @brief 获取当前已存入标定器的有效样本帧数

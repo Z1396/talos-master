@@ -36,11 +36,13 @@ bool inRect(const cv::Point2f& p, const cv::Rect2f& rect) {
 
 void resetRoi(cv::Rect2f& rect, int rows, int cols) {
     // 调整左上角点的坐标
-    rect.x = rect.x < 0 ? 0 : rect.x >= cols ? cols - 1 : rect.x;
-    rect.y = rect.y < 0 ? 0 : rect.y >= rows ? rows - 1 : rect.y;
+    rect.x = rect.x < 0 ? 0.0f : rect.x >= static_cast<float>(cols) ? static_cast<float>(cols - 1) : rect.x;
+    rect.y = rect.y < 0 ? 0.0f : rect.y >= static_cast<float>(rows) ? static_cast<float>(rows - 1) : rect.y;
     // 调整长宽
-    rect.width  = rect.x + rect.width >= cols ? cols - rect.x - 1 : rect.width;
-    rect.height = rect.y + rect.height >= rows ? rows - rect.y - 1 : rect.height;
+    rect.width =
+        rect.x + rect.width >= static_cast<float>(cols) ? static_cast<float>(cols) - rect.x - 1.0f : rect.width;
+    rect.height =
+        rect.y + rect.height >= static_cast<float>(rows) ? static_cast<float>(rows) - rect.y - 1.0f : rect.height;
     // 此时可能出现 width 或 height 小于 0 的情况，因此需要将其置为 0
     if (rect.width < 0) {
         rect.width = 0;
@@ -137,7 +139,7 @@ Light::Light(const std::vector<cv::Point>& cnt, const cv::Rect2f& localRoi)
     center    = rotated.center;
     angle     = rotated.angle;
     area      = rotated.size.width * rotated.size.height;
-    float len = cv::arcLength(contour, true);
+    float len = static_cast<float>(cv::arcLength(contour, true));
     roundness = (4 * CV_PI * contourArea) / (len * len);
 
     center += localRoi.tl();
@@ -150,20 +152,18 @@ void RuneDetector::setLocalRoi() {
     std::vector<cv::Rect2f> rawUpROIs;
     std::vector<cv::Rect2f> rawDownROIs;
 
-    for (size_t idx = 0; idx < arrows.size(); idx++) {
-        auto arrow = arrows[idx];
-
+    for (const auto& arrow : arrows) {
         double distance{arrow.size.width * params_.local_roi_distance_ratio};
         float width{static_cast<float>(params_.local_roi_width)};
 
-        float x = distance * std::cos(arrow.angle * CV_PI / 180.0f);
-        float y = distance * std::sin(arrow.angle * CV_PI / 180.0f);
+        float x = static_cast<float>(distance * std::cos(arrow.angle * CV_PI / 180.0f));
+        float y = static_cast<float>(distance * std::sin(arrow.angle * CV_PI / 180.0f));
 
         cv::Point2f centerUp{arrow.center.x + x, arrow.center.y + y};
         cv::Point2f centerDown{arrow.center.x - x, arrow.center.y - y};
 
-        cv::RotatedRect rectUp{centerUp, cv::Size(width, width), (float)arrow.angle};
-        cv::RotatedRect rectDown{centerDown, cv::Size(width, width), (float)arrow.angle};
+        cv::RotatedRect rectUp{centerUp, cv::Size2f(width, width), (float)arrow.angle};
+        cv::RotatedRect rectDown{centerDown, cv::Size2f(width, width), (float)arrow.angle};
 
         std::array<std::array<cv::Point2f, 4>, 2> roiPoints;
         rectUp.points(roiPoints.at(0).begin());
@@ -187,7 +187,7 @@ void RuneDetector::setLocalRoi() {
         rawDownROIs.emplace_back(rcenterRoi);
     }
 
-    int N = arrows.size();
+    const int N = static_cast<int>(arrows.size());
 
     if (N == 1) {
         cv::Rect2f upROI   = rawUpROIs[0];
@@ -564,7 +564,8 @@ void addReferRuneCenter(const cv::Point2f& rc, Points& target, bool debug_mode =
     int best_idx    = 0;
     float best_diff = std::numeric_limits<float>::max();
     for (int i = 0; i < (int)arr.size(); ++i) {
-        float d = std::fabs(angles::shortest_angular_distance(angle, arr[i].ang));
+        float d =
+            static_cast<float>(std::fabs(angles::shortest_angular_distance(angle, arr[i].ang)));
         if (d < best_diff) {
             best_diff = d;
             best_idx  = i;
@@ -677,10 +678,10 @@ inline bool markRuneTarget(
         }
 
         // 质心
-        cv::Point2f center(m.m10 / m.m00, m.m01 / m.m00);
+        cv::Point2f center(static_cast<float>(m.m10 / m.m00), static_cast<float>(m.m01 / m.m00));
         points.corners.emplace_back(center);
     }
-    points.center = std::move(target);
+    points.center = target;
 
     if (points.corners.size() < 4) {
         SPDLOG_ERROR("points.corners.size() < 4, cannot assign key points");
@@ -755,7 +756,8 @@ void RuneDetector::setKeyPoints() {
             cv::Point2f offset = targetROIs[i].tl();
             for (auto& pnt : out_cnt) {
                 pnt = cv::Point(
-                    static_cast<int>(pnt.x + offset.x), static_cast<int>(pnt.y + offset.y));
+                    static_cast<int>(static_cast<float>(pnt.x) + offset.x),
+                    static_cast<int>(static_cast<float>(pnt.y) + offset.y));
             }
 
             // 计算 4 个中点
@@ -805,7 +807,7 @@ void RuneDetector::setKeyPoints() {
                 }
                 if (!found) {
                     targets[0].other = false;
-                    return cv::Point2f(-1, -1);
+                    return {-1, -1};
                 }
 
                 return best_pt;
@@ -860,9 +862,8 @@ bool findTargetLights(
         }
         return false;
     }
-    for (size_t i = 0; i < contours.size(); i++) {
-
-        Light light(contours[i], localRoi);
+    for (const auto& contour : contours) {
+        Light light(contour, localRoi);
 
         if ((light.roundness >= params.min_roundness && light.roundness <= params.max_roundness)
             == false) {
@@ -1023,10 +1024,10 @@ RESTART:
     }
 
     // Calculate angles
-    for (size_t i = 0; i < targets.size(); i++) {
-        auto vec         = targets[i].center - rcenter.center;
-        double angle     = std::atan2(vec.y, vec.x);
-        targets[i].angle = angle;
+    for (auto& target : targets) {
+        auto vec     = target.center - rcenter.center;
+        double angle = std::atan2(vec.y, vec.x);
+        target.angle = angle;
     }
 
     status = Status::SUCCESS;
@@ -1086,7 +1087,7 @@ void addOther(
     float a2 = std::atan2(l2.y, l2.x);
 
     float d = a1 - a2;
-    d       = normalizeAngle0to2pi(d);
+    d       = static_cast<float>(normalizeAngle0to2pi(d));
 
     int id         = 0;
     double min_err = 1e9;
@@ -1094,7 +1095,7 @@ void addOther(
         double err = std::abs(angle_diffs[i] - d);
         if (err < min_err) {
             min_err = err;
-            id      = i;
+            id      = static_cast<int>(i);
         }
     }
 

@@ -14,4 +14,4 @@ CompileFlags:
     - -I/home/pldx/Desktop/talos-master/3dparty/magic_enum
     - -I/home/pldx/Desktop/talos-master/build/_deps/tomlplusplus-src/include
     - -I/home/pldx/Desktop/talos-master/build/_deps/eigen-src/include
-    - -std=c++23
+    - -std=c++2b
