@@ -80,16 +80,11 @@
 #include <NvInfer.h>
 #include <NvOnnxParser.h>
 #include <algorithm>
-#include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <ranges>
-#include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include <cuda_runtime.h>
@@ -402,9 +397,16 @@ struct TrtBackend::Impl {
     /// 数量与contexts_相同，一一对应
     std::vector<cudaStream_t> streams_;
 
-    /// 设备端输入缓冲区指针
+    /// 设备端输入缓冲区指针（float格式，预处理后）
     /// 大小：640 * 640 * 3 * sizeof(float) = 4.9 MB
     void* device_input_{nullptr};
+
+    /// 设备端原始图像缓冲区（uchar格式，CUDA预处理用）
+    /// 大小：动态分配，按原图分辨率
+    void* device_input_uchar_{nullptr};
+
+    /// 设备端原始图像缓冲区容量（字节）
+    size_t device_input_uchar_capacity_{0};
 
     /// 设备端输出缓冲区指针
     /// 大小：max_det * 14 * sizeof(float) (如max_det=100，约5.6 KB)
@@ -421,9 +423,6 @@ struct TrtBackend::Impl {
     // =========================================================================
     // 并发控制
     // =========================================================================
-
-    /// 上下文池互斥锁（保留，当前使用原子变量）
-    std::mutex context_mutex_;
 
     /// 下一个分配的上下文索引（原子变量）
     /// 使用fetch_add实现无锁round-robin调度
@@ -528,6 +527,11 @@ struct TrtBackend::Impl {
         if (device_input_) {
             cudaFree(device_input_);
             device_input_ = nullptr;
+        }
+        if (device_input_uchar_) {
+            cudaFree(device_input_uchar_);
+            device_input_uchar_          = nullptr;
+            device_input_uchar_capacity_ = 0;
         }
         if (device_output_) {
             cudaFree(device_output_);
@@ -984,9 +988,7 @@ std::expected<TrtBackend, std::string> TrtBackend::create(Config config) noexcep
         std::unique_ptr<nvinfer1::IRuntime>(nvinfer1::createInferRuntime(g_trt_logger));
     if (!backend.impl_->runtime_) {
         SPDLOG_ERROR("Failed to create TensorRT runtime");
-        return std::unexpected(
-            "TensorRT: failed to set CUDA device " + std::to_string(backend.config_.device_id)
-            + ": " + cudaGetErrorString(cuda_err));
+        return std::unexpected("TensorRT: failed to create runtime");
     }
 
     // 3. 加载或构建引擎
@@ -1055,8 +1057,8 @@ std::expected<TrtBackend, std::string> TrtBackend::create(Config config) noexcep
     if (cuda_err != cudaSuccess) {
         SPDLOG_ERROR("Failed to allocate device input buffer: {}", cudaGetErrorString(cuda_err));
         return std::unexpected(
-            "TensorRT: failed to set CUDA device " + std::to_string(backend.config_.device_id)
-            + ": " + cudaGetErrorString(cuda_err));
+            "TensorRT: failed to allocate device input buffer: "
+            + std::string(cudaGetErrorString(cuda_err)));
     }
 
     // 5. 分配设备内存（输出缓冲区）
@@ -1064,8 +1066,8 @@ std::expected<TrtBackend, std::string> TrtBackend::create(Config config) noexcep
     if (cuda_err != cudaSuccess) {
         SPDLOG_ERROR("Failed to allocate device output buffer: {}", cudaGetErrorString(cuda_err));
         return std::unexpected(
-            "TensorRT: failed to set CUDA device " + std::to_string(backend.config_.device_id)
-            + ": " + cudaGetErrorString(cuda_err));
+            "TensorRT: failed to allocate device output buffer: "
+            + std::string(cudaGetErrorString(cuda_err)));
     }
 
     // 6. 调整Host缓冲区大小
@@ -1083,8 +1085,7 @@ std::expected<TrtBackend, std::string> TrtBackend::create(Config config) noexcep
         if (!ctx) {
             SPDLOG_ERROR("Failed to create execution context {}", i);
             return std::unexpected(
-                "TensorRT: failed to set CUDA device " + std::to_string(backend.config_.device_id)
-                + ": " + cudaGetErrorString(cuda_err));
+                "TensorRT: failed to create execution context " + std::to_string(i));
         }
         backend.impl_->contexts_.emplace_back(ctx);
 
@@ -1094,8 +1095,8 @@ std::expected<TrtBackend, std::string> TrtBackend::create(Config config) noexcep
         if (cuda_err != cudaSuccess) {
             SPDLOG_ERROR("Failed to create CUDA stream {}: {}", i, cudaGetErrorString(cuda_err));
             return std::unexpected(
-                "TensorRT: failed to set CUDA device " + std::to_string(backend.config_.device_id)
-                + ": " + cudaGetErrorString(cuda_err));
+                "TensorRT: failed to create CUDA stream " + std::to_string(i) + ": "
+                + std::string(cudaGetErrorString(cuda_err)));
         }
         backend.impl_->streams_.push_back(stream);
     }
@@ -1203,11 +1204,11 @@ TrtBackend::DetectionResult
 
     // ==================== 3. 图像格式处理 ====================
     // AT模型期望BGR输入（swap_rb=false）
-    cv::Mat rgb_image;
+    cv::Mat bgr_image;
     if (image.channels() == 3) {
-        rgb_image = image; // 保持BGR格式
+        bgr_image = image; // 保持BGR格式
     } else if (image.channels() == 1) {
-        cv::cvtColor(image, rgb_image, cv::COLOR_GRAY2BGR);
+        cv::cvtColor(image, bgr_image, cv::COLOR_GRAY2BGR);
     } else {
         return std::unexpected("TensorRT backend received image with unsupported channel count");
     }
@@ -1215,32 +1216,49 @@ TrtBackend::DetectionResult
 #if TALOS_HAS_CUDA_RUNTIME
     // ==================== 4. CUDA预处理（如果可用） ====================
     // 检查图像是否连续存储
-    bool is_contiguous = (rgb_image.step == rgb_image.cols * rgb_image.elemSize());
+    bool is_contiguous = (bgr_image.step == bgr_image.cols * bgr_image.elemSize());
+
+    // 4.1 按需扩容原始图像缓冲区（避免大图越界写入 device_input_）
+    const size_t image_bytes = bgr_image.total() * bgr_image.elemSize();
+    if (impl_->device_input_uchar_capacity_ < image_bytes) {
+        if (impl_->device_input_uchar_) {
+            cudaFree(impl_->device_input_uchar_);
+        }
+        cudaError_t alloc_err = cudaMalloc(&impl_->device_input_uchar_, image_bytes);
+        if (alloc_err != cudaSuccess) {
+            SPDLOG_ERROR(
+                "Failed to (re)allocate device_input_uchar: {}", cudaGetErrorString(alloc_err));
+            return std::unexpected(
+                "TensorRT: failed to allocate device_input_uchar: "
+                + std::string(cudaGetErrorString(alloc_err)));
+        }
+        impl_->device_input_uchar_capacity_ = image_bytes;
+    }
 
     if (is_contiguous) {
-        // 连续内存：直接异步上传
+        // 连续内存：直接异步上传到独立的 uchar 缓冲区
         cudaMemcpyAsync(
-            impl_->device_input_, rgb_image.ptr<unsigned char>(),
-            rgb_image.total() * rgb_image.elemSize(), cudaMemcpyHostToDevice, stream);
+            impl_->device_input_uchar_, bgr_image.ptr<unsigned char>(), image_bytes,
+            cudaMemcpyHostToDevice, stream);
 
-        // 启动letterbox CUDA kernel
+        // 启动letterbox CUDA kernel：uchar 缓冲区 → float 缓冲区
         constexpr float NORM   = 1.0f / 255.0f;
         constexpr bool SWAP_RB = false; // AT模型期望BGR
         launch_letterbox_shared(
-            static_cast<unsigned char*>(impl_->device_input_), src_w, src_h,
+            static_cast<unsigned char*>(impl_->device_input_uchar_), src_w, src_h,
             static_cast<float*>(impl_->device_input_), INPUT_W, INPUT_H, scale, pad_t, pad_l, NORM,
             SWAP_RB, stream);
     } else {
         // 非连续内存（如ROI）：使用pitch上传
-        size_t pitch = rgb_image.step;
+        size_t pitch = bgr_image.step;
         cudaMemcpyAsync(
-            impl_->device_input_, rgb_image.ptr<unsigned char>(), rgb_image.rows * pitch,
+            impl_->device_input_uchar_, bgr_image.ptr<unsigned char>(), bgr_image.rows * pitch,
             cudaMemcpyHostToDevice, stream);
 
         constexpr float NORM   = 1.0f / 255.0f;
         constexpr bool SWAP_RB = false;
         launch_letterbox_pitched(
-            static_cast<unsigned char*>(impl_->device_input_), pitch, src_w, src_h,
+            static_cast<unsigned char*>(impl_->device_input_uchar_), pitch, src_w, src_h,
             static_cast<float*>(impl_->device_input_), INPUT_W, INPUT_H, scale, pad_t, pad_l, NORM,
             SWAP_RB, stream);
     }

@@ -212,7 +212,10 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 const std::string target_key =
                     fmt::format("{}_{}", output.target_color, output.target_name);
                 // 提取跟踪器输出的世界坐标、平移速度、偏航角速度
-                const auto pos   = get_tracker_position(output);
+                const auto pos_opt = get_tracker_position(output);
+                if (!pos_opt)
+                    continue;
+                const auto& pos   = *pos_opt;
                 const auto vel   = get_tracker_velocity(output);
                 const auto v_yaw = get_tracker_v_yaw(output);
 
