@@ -1,5 +1,6 @@
 #include "L3_estimation/tracker/types.hpp" // L3目标跟踪器输出数据结构定义
 #include "base.hpp"                        // 项目基础宏、类型别名、工具函数
+#include "scheduler/scheduler.hpp"         // 调度器完整定义（Scheduler、pool_compute、spmc 等）
 #include "foxglove_types.hpp"              // Foxglove前端消息结构体定义(SceneEntity/各类可视化消息)
 #include "scene_builder.hpp"               // Foxglove 3D场景实体构建器EntityBuilder
 #include "vis_helpers.hpp"                 // 跟踪可视化通用绘图构建工具

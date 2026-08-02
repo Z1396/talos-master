@@ -4,6 +4,8 @@
 #include "L2_perception/ldm/types.hpp"
 // Foxglove可视化系统基类
 #include "base.hpp"
+// 调度器完整定义（Scheduler、fixed_rate、spmc 等）
+#include "scheduler/scheduler.hpp"
 // 调度器运行时核心
 #include "core/runtime.hpp"
 // Foxglove服务全局配置
@@ -288,7 +290,7 @@ inline void log_quanta_error_once(QuantaPublisherState& state, std::string messa
     // 清空待编码帧缓存队列，旧帧分辨率不匹配直接丢弃
     state.pending_frames.clear();
     // 重置PTS（显示时间戳）计数器，从0重新计数
-    state.next_pts   = 0;
+    state.next_pts = 0;
     // 更新状态里记录的当前图像分辨率、帧率
     state.src_width  = src_width;
     state.src_height = src_height;
@@ -436,8 +438,10 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
     app.add_system<talos::pool_compute>(
         "foxglove_l1_image_pub",
         // 系统持久状态捕获：lambda每次执行复用这两个状态，不会重复创建编码器/缓存
-        // mutable 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
-        /*    video_state H.265 视频编码器状态（避免每帧重建编码器）                           ldm_state LDM（能量机关）数据缓存（保留上一帧数据用于叠加）*/
+        // mutable
+        // 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
+        /*    video_state H.265 视频编码器状态（避免每帧重建编码器） ldm_state
+           LDM（能量机关）数据缓存（保留上一帧数据用于叠加）*/
         [video_state = detail::QuantaPublisherState{}, ldm_state = detail::LdmOverlayState{}](
             // 输入通道1：装甲板神经网络检测批量帧（原图+所有装甲检测结果）
             talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> det_in,
@@ -463,7 +467,6 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             2. mutable 作用
             解除捕获变量的 const 限制，允许在函数体内修改捕获的对象。*/
             talos::res<L2::ldm::LdmDetectorConfig> ldm_config) mutable {
-
             // 前置统一校验：Foxglove服务已初始化、输入通道存在可读数据
             // foxglove_ready：封装逻辑：服务非空+通道有数据，无数据直接跳过本轮渲染
             if (!foxglove_ready(*server, det_in)) {
@@ -481,7 +484,6 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             // 前端Foxglove依赖TF实现3D坐标、目标空间位置可视化
             (*server)->publish_tf(*tf_buffer, batch->timestamp_ns);
 
-            
             // clone深拷贝，避免修改原始图像帧缓存，不影响其他系统读取原图
             cv::Mat img_bgr = batch->image.clone();
 
@@ -519,7 +521,8 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     auto pp1 = det.corners[j];
                     auto pp2 = det.corners[(j + 1) % 4];
                     // 绘制角点小圆点
-                    cv::circle(img_bgr, pp1, 2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
+                    cv::circle(
+                        img_bgr, pp1, 2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
                     // 带箭头边线，箭头大小随线段长度自适应
                     cv::arrowedLine(
                         img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
@@ -586,10 +589,12 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                         img_bgr, pair.top_center_px, pair.bottom_center_px, pair_color,
                         tac::Image::LINE_MEDIUM, cv::LINE_AA);
                     // 上端点圆点
-                    cv::circle(img_bgr, pair.top_center_px, 4, corner_colors[0], tac::Image::LINE_MEDIUM);
+                    cv::circle(
+                        img_bgr, pair.top_center_px, 4, corner_colors[0], tac::Image::LINE_MEDIUM);
                     // 下端点圆点
                     cv::circle(
-                        img_bgr, pair.bottom_center_px, 4, corner_colors[2], tac::Image::LINE_MEDIUM);
+                        img_bgr, pair.bottom_center_px, 4, corner_colors[2],
+                        tac::Image::LINE_MEDIUM);
                     // 配对中点实心圆
                     cv::circle(img_bgr, pair.midpoint_px, 3, center_color, -1);
                     // 配对编号文字
@@ -718,20 +723,21 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             std::array<double, 9> camera_matrix_arr;
 
             // std::copy_n：从源地址复制指定数量的数据到目标容器
-            // 参数1：cam->camera_matrix.data() 源指针，OpenCV Mat/矩阵的数据首地址，指向9个内参浮点数
-            // 参数2：9 需要复制的元素总个数（3*3相机矩阵固定9个值）
-            // 参数3：camera_matrix_arr.begin() 目标数组起始迭代器，写入到std::array中
+            // 参数1：cam->camera_matrix.data() 源指针，OpenCV
+            // Mat/矩阵的数据首地址，指向9个内参浮点数 参数2：9
+            // 需要复制的元素总个数（3*3相机矩阵固定9个值） 参数3：camera_matrix_arr.begin()
+            // 目标数组起始迭代器，写入到std::array中
             std::copy_n(cam->camera_matrix.data(), 9, camera_matrix_arr.begin());
 
             // 构建畸变系数std::vector<double>动态数组
             // vector构造函数重载：传入【起始迭代器/数据指针】、【末尾数据指针】，自动拷贝区间内所有元素
             // cam->distort_coefficient.data()：畸变系数数组首地址
-            // cam->distort_coefficient.data() + cam->distort_coefficient.size()：畸变系数尾部边界（不包含）
+            // cam->distort_coefficient.data() +
+            // cam->distort_coefficient.size()：畸变系数尾部边界（不包含）
             // 自动适配任意长度畸变系数（k1,k2,p1,p2,k3等，长度不固定）
             std::vector<double> dist_coeffs(
                 cam->distort_coefficient.data(),
-                cam->distort_coefficient.data() + cam->distort_coefficient.size()
-            );
+                cam->distort_coefficient.data() + cam->distort_coefficient.size());
 
             // 发送CameraCalibration消息，前端可完成图像去畸变、3D点云投影
             (*server)->publish_camera_calibration(

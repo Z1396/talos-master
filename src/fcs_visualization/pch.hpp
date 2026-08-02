@@ -6,8 +6,6 @@
 #include <string>
 #include <variant>
 
-#include "scheduler/scheduler.hpp"
-
 #include <spdlog/common.h>
 #include <spdlog/spdlog.h>
 

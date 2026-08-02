@@ -9,17 +9,18 @@
 #include "core/trajectory/resource.hpp"
 #include "foxglove_types.hpp"
 #include "scene_builder.hpp"
+#include "scheduler/scheduler.hpp"
 // L4控制意图、通道话题定义、帧结构
 #include "L4_planning/control_intent.hpp"
 #include "core/channel_topics.hpp"
 #include "frame.hpp"
 
 // 第三方工具库
-#include <fmt/format.h>          // 高性能字符串格式化，替代sprintf
-#include <magic_enum.hpp>        // C++17无宏枚举反射，枚举<->字符串互转
-#include <nlohmann/json.hpp>     // JSON序列化/反序列化
-#include <system_helpers.hpp>    // 系统底层工具
-#include <tactical_palette.hpp>  // 战术可视化配色、尺寸常量（目标球体大小、线宽、颜色）
+#include <fmt/format.h>         // 高性能字符串格式化，替代sprintf
+#include <magic_enum.hpp>       // C++17无宏枚举反射，枚举<->字符串互转
+#include <nlohmann/json.hpp>    // JSON序列化/反序列化
+#include <system_helpers.hpp>   // 系统底层工具
+#include <tactical_palette.hpp> // 战术可视化配色、尺寸常量（目标球体大小、线宽、颜色）
 
 // STL标准库
 #include <algorithm>
@@ -35,10 +36,10 @@ namespace l4_detail {
 
 /// 结构体：未来装甲预测快照（预留，用于目标装甲未来位姿可视化）
 struct FutureArmorSnapshot {
-    Eigen::Vector3d center{Eigen::Vector3d::Zero()};           // 装甲中心世界坐标
-    Eigen::Vector3d linear_velocity{Eigen::Vector3d::Zero()};  // 装甲线速度
-    double angular_velocity{0.0};                              // 装甲角速度
-    std::vector<Eigen::Vector4d> armors;                       // 多装甲位姿数组 (x,y,z,yaw)
+    Eigen::Vector3d center{Eigen::Vector3d::Zero()};          // 装甲中心世界坐标
+    Eigen::Vector3d linear_velocity{Eigen::Vector3d::Zero()}; // 装甲线速度
+    double angular_velocity{0.0};                             // 装甲角速度
+    std::vector<Eigen::Vector4d> armors;                      // 多装甲位姿数组 (x,y,z,yaw)
 };
 
 /// 工具函数：布尔值转 YES/NO 字符串，用于可视化元数据展示
@@ -49,9 +50,9 @@ struct FutureArmorSnapshot {
 /// 入参：L3追踪输出结构体
 [[nodiscard]] inline std::string tracker_identity(const ::fcs::L3::TrackerOutput& target) {
     return fmt::format(
-        "{}/{}", 
+        "{}/{}",
         magic_enum::enum_name(target.target_color), // 枚举转字符串：RED/BLUE
-        magic_enum::enum_name(target.target_name));  // 枚举转字符串：ARMOR1/BASE
+        magic_enum::enum_name(target.target_name)); // 枚举转字符串：ARMOR1/BASE
 }
 
 /// 工具函数：拼接候选目标标识（目标选择日志专用）
@@ -74,8 +75,7 @@ struct FutureArmorSnapshot {
 [[nodiscard]] inline std::string
     selection_trace_entity_id(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
     return fmt::format(
-        "selection_candidate_{}_{}", 
-        magic_enum::enum_name(entry.target_color),
+        "selection_candidate_{}_{}", magic_enum::enum_name(entry.target_color),
         magic_enum::enum_name(entry.target_name));
 }
 
@@ -89,14 +89,18 @@ struct FutureArmorSnapshot {
 inline void append_selection_trace_metadata(
     viz::EntityBuilder& builder, const ::fcs::L4::TargetSelectionTrace& trace,
     const ::fcs::L4::TargetSelectionTraceEntry& entry) {
-    builder.metadata("target_selection.identity", selection_identity(entry))        // 目标身份 RED/ARMOR
-        .metadata("target_selection.rank", std::to_string(entry.rank))              // 候选排名 1/2/3...
-        .metadata("target_selection.selected", yes_no(entry.selected))               // 是否被选中最优目标
-        .metadata("target_selection.runner_up", yes_no(entry.runner_up))            // 是否次优备选
-        .metadata("target_selection.was_previously_selected", yes_no(entry.was_previously_selected)) // 上一帧是否选中
-        .metadata("target_selection.aim_valid", yes_no(entry.aim_valid))              // 瞄准解是否有效
+    builder
+        .metadata("target_selection.identity", selection_identity(entry)) // 目标身份 RED/ARMOR
+        .metadata("target_selection.rank", std::to_string(entry.rank))    // 候选排名 1/2/3...
+        .metadata("target_selection.selected", yes_no(entry.selected))    // 是否被选中最优目标
+        .metadata("target_selection.runner_up", yes_no(entry.runner_up))  // 是否次优备选
         .metadata(
-            "target_selection.track_status", std::string(magic_enum::enum_name(entry.track_status))) // 跟踪状态枚举
+            "target_selection.was_previously_selected",
+            yes_no(entry.was_previously_selected))                        // 上一帧是否选中
+        .metadata("target_selection.aim_valid", yes_no(entry.aim_valid))  // 瞄准解是否有效
+        .metadata(
+            "target_selection.track_status",
+            std::string(magic_enum::enum_name(entry.track_status)))       // 跟踪状态枚举
         // 原始单项得分
         .metadata("target_selection.total_score", format_score(entry.total_score))
         .metadata("target_selection.image_center_score", format_score(entry.image_center_score))
@@ -112,13 +116,14 @@ inline void append_selection_trace_metadata(
         .metadata(
             "target_selection.gimbal_effort_weighted", format_score(entry.gimbal_effort_weighted))
         .metadata("target_selection.armor_name_weighted", format_score(entry.armor_name_weighted))
-        .metadata("target_selection.weighted_sum", format_score(entry.weighted_sum))   // 加权总分
-        .metadata("target_selection.total_weight", format_score(entry.total_weight))    // 总权重系数
+        .metadata("target_selection.weighted_sum", format_score(entry.weighted_sum)) // 加权总分
+        .metadata("target_selection.total_weight", format_score(entry.total_weight)) // 总权重系数
         // 图像像素距离
         .metadata(
             "target_selection.image_center_distance_px",
             format_image_center_px(entry.image_center_distance_px))
-        .metadata("target_selection.optical_age_s", format_score(entry.optical_age_s)) // 视觉观测时延
+        .metadata(
+            "target_selection.optical_age_s", format_score(entry.optical_age_s)) // 视觉观测时延
         // 飞行时间、距离（空值输出n/a）
         .metadata(
             "target_selection.tof_s",
@@ -134,16 +139,21 @@ inline void append_selection_trace_metadata(
             "target_selection.pitch_effort_deg",
             std::isfinite(entry.pitch_effort_deg) ? format_score(entry.pitch_effort_deg) : "n/a")
         // 全局选择日志帧信息
-        .metadata("target_selection.kept_current_target", yes_no(trace.kept_current_target)) // 是否保持上帧目标不切换
-        .metadata("target_selection.switch_margin", format_score(trace.switch_margin))      // 切换目标阈值余量
+        .metadata(
+            "target_selection.kept_current_target",
+            yes_no(trace.kept_current_target)) // 是否保持上帧目标不切换
+        .metadata(
+            "target_selection.switch_margin", format_score(trace.switch_margin)) // 切换目标阈值余量
         .metadata(
             "target_selection.previous_target",
             trace.had_previous_target
                 ? fmt::format(
                       "{}/{}", magic_enum::enum_name(trace.previous_target_color),
                       magic_enum::enum_name(trace.previous_target_name))
-                : "none") // 上一帧选中目标，无则填none
-        .metadata("target_selection.aim_error", entry.aim_error.empty() ? "none" : entry.aim_error); // 瞄准失败原因
+                : "none")                                        // 上一帧选中目标，无则填none
+        .metadata(
+            "target_selection.aim_error",
+            entry.aim_error.empty() ? "none" : entry.aim_error); // 瞄准失败原因
 
     // 存在目标世界坐标时追加三维坐标元数据
     if (entry.target_center) {
@@ -187,17 +197,15 @@ inline void append_selection_trace_metadata(
 [[nodiscard]] inline nlohmann::json
     json_filter_convergence(const ::fcs::L3::FilterConvergenceState& state) {
     return {
-        {"status", std::string(magic_enum::enum_name(state.status))}, // 收敛/发散/未初始化状态
-        {"normalized_innovation_squared", 
-            std::isfinite(state.normalized_innovation_squared)
-                ? nlohmann::json(state.normalized_innovation_squared)
-                : nlohmann::json(nullptr)}, // 归一化新息平方
-        {"max_covariance_diag", 
-            std::isfinite(state.max_covariance_diag)
-                ? nlohmann::json(state.max_covariance_diag)
-                : nlohmann::json(nullptr)}, // 协方差矩阵最大对角线（不确定性）
-        {"consecutive_converged_updates", state.consecutive_converged_updates}, // 连续收敛帧数
-        {"consecutive_diverged_updates", state.consecutive_diverged_updates},   // 连续发散帧数
+        {                       "status",                       std::string(magic_enum::enum_name(state.status))}, // 收敛/发散/未初始化状态
+        {"normalized_innovation_squared", std::isfinite(state.normalized_innovation_squared)
+ ? nlohmann::json(state.normalized_innovation_squared)
+ : nlohmann::json(nullptr)                                             }, // 归一化新息平方
+        {          "max_covariance_diag",           std::isfinite(state.max_covariance_diag)
+           ? nlohmann::json(state.max_covariance_diag)
+           : nlohmann::json(nullptr)                                   }, // 协方差矩阵最大对角线（不确定性）
+        {"consecutive_converged_updates",                                    state.consecutive_converged_updates}, // 连续收敛帧数
+        { "consecutive_diverged_updates",                                     state.consecutive_diverged_updates}, // 连续发散帧数
     };
 }
 
@@ -208,26 +216,26 @@ inline void append_selection_trace_metadata(
  */
 [[nodiscard]] inline nlohmann::json json_robot_state(const ::fcs::L3::RobotTargetState& state) {
     nlohmann::json state_json = {
-        {"type", "robot"},
-        {"position", json_vec3(state.position)},                // 底盘中心坐标
-        {"distance", state.position.norm()},                    // 相对我方距离
-        {"velocity", json_vec3(state.velocity)},                // 底盘三维速度
-        {"yaw", state.yaw},                                     // 底盘偏航角
-        {"v_yaw", state.v_yaw},                                 // 底盘旋转角速度
-        {"radius", {state.radius0, state.radius1}},             // 机器人长宽半径
-        {"z1", state.z1},                                       // 底盘高度偏移
-        {"armors_num", state.armors_num},                       // 装甲总数量
+        {       "type",                                    "robot"},
+        {   "position",                  json_vec3(state.position)}, // 底盘中心坐标
+        {   "distance",                      state.position.norm()}, // 相对我方距离
+        {   "velocity",                  json_vec3(state.velocity)}, // 底盘三维速度
+        {        "yaw",                                  state.yaw}, // 底盘偏航角
+        {      "v_yaw",                                state.v_yaw}, // 底盘旋转角速度
+        {     "radius",             {state.radius0, state.radius1}}, // 机器人长宽半径
+        {         "z1",                                   state.z1}, // 底盘高度偏移
+        { "armors_num",                           state.armors_num}, // 装甲总数量
         {"convergence", json_filter_convergence(state.convergence)}, // 滤波收敛状态
-        {"armor_poses", nlohmann::json::array()},               // 装甲点位数组
+        {"armor_poses",                    nlohmann::json::array()}, // 装甲点位数组
     };
 
     // 遍历所有装甲，写入装甲ID、三维坐标、偏航角
     const auto armors = state.armor_poses();
     for (size_t i = 0; i < armors.size(); ++i) {
         state_json["armor_poses"].push_back({
-            {"id", static_cast<int>(i)},
+            {      "id",                        static_cast<int>(i)},
             {"position", {armors[i][0], armors[i][1], armors[i][2]}},
-            {"yaw", armors[i][3]},
+            {     "yaw",                               armors[i][3]},
         });
     }
 
@@ -241,25 +249,25 @@ inline void append_selection_trace_metadata(
  */
 [[nodiscard]] inline nlohmann::json json_outpost_state(const ::fcs::L3::OutpostTargetState& state) {
     nlohmann::json state_json = {
-        {"type", "outpost"},
-        {"position", {state.position.x(), state.position.y()}},
-        {"distance", state.position.norm()},
-        {"velocity", json_vec3(state.velocity)},
-        {"yaw", state.yaw},
-        {"v_yaw", state.v_yaw},
-        {"z", {state.z[0], state.z[1], state.z[2]}},
-        {"radius", ::fcs::L3::OutpostTargetState::radius},
-        {"armors_num", ::fcs::L3::OutpostTargetState::armors_num},
+        {       "type",                                  "outpost"},
+        {   "position",   {state.position.x(), state.position.y()}},
+        {   "distance",                      state.position.norm()},
+        {   "velocity",                  json_vec3(state.velocity)},
+        {        "yaw",                                  state.yaw},
+        {      "v_yaw",                                state.v_yaw},
+        {          "z",       {state.z[0], state.z[1], state.z[2]}},
+        {     "radius",      ::fcs::L3::OutpostTargetState::radius},
+        { "armors_num",  ::fcs::L3::OutpostTargetState::armors_num},
         {"convergence", json_filter_convergence(state.convergence)},
-        {"armor_poses", nlohmann::json::array()},
+        {"armor_poses",                    nlohmann::json::array()},
     };
 
     const auto armors = state.armor_poses();
     for (size_t i = 0; i < armors.size(); ++i) {
         state_json["armor_poses"].push_back({
-            {"id", static_cast<int>(i)},
+            {      "id",                        static_cast<int>(i)},
             {"position", {armors[i][0], armors[i][1], armors[i][2]}},
-            {"yaw", armors[i][3]},
+            {     "yaw",                               armors[i][3]},
         });
     }
 
@@ -273,19 +281,18 @@ inline void append_selection_trace_metadata(
  */
 [[nodiscard]] inline nlohmann::json json_tracker_output(const ::fcs::L3::TrackerOutput& output) {
     nlohmann::json target_json = {
-        {"timestamp_ns", output.timestamp_ns},
-        {"status", std::string(magic_enum::enum_name(output.status))},
-        {"target_name", std::string(magic_enum::enum_name(output.target_name))},
-        {"target_color", std::string(magic_enum::enum_name(output.target_color))},
-        {"target_jumped", output.target_jumped}, // 目标跳变（跟踪丢失重捕获）
-        {"last_armor_id",
-            output.last_armor_id ? nlohmann::json(*output.last_armor_id) : nlohmann::json(nullptr)},
-        {"last_image_center_distance_px", 
-            std::isfinite(output.last_image_center_distance_px)
-                ? nlohmann::json(output.last_image_center_distance_px)
-                : nlohmann::json(nullptr)},
-        {"last_observation_timestamp_ns", output.last_observation_timestamp_ns},
-        {"state_kind", "empty"}, // 标记目标类型 robot/outpost/空
+        {                 "timestamp_ns",           output.timestamp_ns                                         },
+        {                       "status",                      std::string(magic_enum::enum_name(output.status))},
+        {                  "target_name",                 std::string(magic_enum::enum_name(output.target_name))},
+        {                 "target_color",                std::string(magic_enum::enum_name(output.target_color))},
+        {                "target_jumped",                                                   output.target_jumped}, // 目标跳变（跟踪丢失重捕获）
+        {                "last_armor_id",
+         output.last_armor_id ? nlohmann::json(*output.last_armor_id) : nlohmann::json(nullptr)                 },
+        {"last_image_center_distance_px", std::isfinite(output.last_image_center_distance_px)
+ ? nlohmann::json(output.last_image_center_distance_px)
+ : nlohmann::json(nullptr)                                             },
+        {"last_observation_timestamp_ns",                                   output.last_observation_timestamp_ns},
+        {                   "state_kind",                                                                "empty"}, // 标记目标类型 robot/outpost/空
     };
 
     // 多态分支：判断当前跟踪的是机器人还是前哨站，注入对应状态JSON
@@ -310,46 +317,44 @@ inline void append_selection_trace_metadata(
 [[nodiscard]] inline nlohmann::json
     json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
     return nlohmann::json{
-        {"rank", entry.rank},
-        {"target_name", std::string(magic_enum::enum_name(entry.target_name))},
-        {"target_color", std::string(magic_enum::enum_name(entry.target_color))},
-        {"track_status", std::string(magic_enum::enum_name(entry.track_status))},
-        {"aim_valid", entry.aim_valid},
-        {"was_previously_selected", entry.was_previously_selected},
-        {"selected", entry.selected},
-        {"runner_up", entry.runner_up},
-        {"aim_error", entry.aim_error},
-        {"target_center", 
-            entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
-                                : nlohmann::json(nullptr)},
-        {"image_center_distance_px", 
-            std::isfinite(entry.image_center_distance_px)
-                ? nlohmann::json(entry.image_center_distance_px)
-                : nlohmann::json(nullptr)},
-        {"optical_age_s", entry.optical_age_s},
-        {"tof_s",
-            std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s) : nlohmann::json(nullptr)},
-        {"distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
-                                                      : nlohmann::json(nullptr)},
-        {"yaw_effort_deg", std::isfinite(entry.yaw_effort_deg)
-                               ? nlohmann::json(entry.yaw_effort_deg)
-                               : nlohmann::json(nullptr)},
-        {"pitch_effort_deg", std::isfinite(entry.pitch_effort_deg)
-                                 ? nlohmann::json(entry.pitch_effort_deg)
-                                 : nlohmann::json(nullptr)},
-        {"image_center_score", entry.image_center_score},
-        {"track_state_score", entry.track_state_score},
-        {"tof_score", entry.tof_score},
-        {"gimbal_effort_score", entry.gimbal_effort_score},
-        {"armor_name_score", entry.armor_name_score},
-        {"image_center_weighted", entry.image_center_weighted},
-        {"track_state_weighted", entry.track_state_weighted},
-        {"tof_weighted", entry.tof_weighted},
-        {"gimbal_effort_weighted", entry.gimbal_effort_weighted},
-        {"armor_name_weighted", entry.armor_name_weighted},
-        {"weighted_sum", entry.weighted_sum},
-        {"total_weight", entry.total_weight},
-        {"total_score", entry.total_score},
+        {                    "rank",                                  entry.rank                                    },
+        {             "target_name",                           std::string(magic_enum::enum_name(entry.target_name))},
+        {            "target_color",                          std::string(magic_enum::enum_name(entry.target_color))},
+        {            "track_status",                          std::string(magic_enum::enum_name(entry.track_status))},
+        {               "aim_valid",                                                                 entry.aim_valid},
+        { "was_previously_selected",                                                   entry.was_previously_selected},
+        {                "selected",                                                                  entry.selected},
+        {               "runner_up",                                                                 entry.runner_up},
+        {               "aim_error",                                                                 entry.aim_error},
+        {           "target_center",          entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
+          : nlohmann::json(nullptr)                                             },
+        {"image_center_distance_px",               std::isfinite(entry.image_center_distance_px)
+               ? nlohmann::json(entry.image_center_distance_px)
+               : nlohmann::json(nullptr)                                        },
+        {           "optical_age_s",                                                             entry.optical_age_s},
+        {                   "tof_s",
+         std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s) : nlohmann::json(nullptr)                         },
+        {              "distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
+ : nlohmann::json(nullptr)                                                      },
+        {          "yaw_effort_deg",                         std::isfinite(entry.yaw_effort_deg)
+                         ? nlohmann::json(entry.yaw_effort_deg)
+                         : nlohmann::json(nullptr)                              },
+        {        "pitch_effort_deg",                       std::isfinite(entry.pitch_effort_deg)
+                       ? nlohmann::json(entry.pitch_effort_deg)
+                       : nlohmann::json(nullptr)                                },
+        {      "image_center_score",                                                        entry.image_center_score},
+        {       "track_state_score",                                                         entry.track_state_score},
+        {               "tof_score",                                                                 entry.tof_score},
+        {     "gimbal_effort_score",                                                       entry.gimbal_effort_score},
+        {        "armor_name_score",                                                          entry.armor_name_score},
+        {   "image_center_weighted",                                                     entry.image_center_weighted},
+        {    "track_state_weighted",                                                      entry.track_state_weighted},
+        {            "tof_weighted",                                                              entry.tof_weighted},
+        {  "gimbal_effort_weighted",                                                    entry.gimbal_effort_weighted},
+        {     "armor_name_weighted",                                                       entry.armor_name_weighted},
+        {            "weighted_sum",                                                              entry.weighted_sum},
+        {            "total_weight",                                                              entry.total_weight},
+        {             "total_score",                                                               entry.total_score},
     };
 }
 
@@ -367,13 +372,13 @@ inline void append_selection_trace_metadata(
     }
 
     return nlohmann::json{
-        {"timestamp_ns", trace.timestamp_ns},
-        {"had_previous_target", trace.had_previous_target},
-        {"previous_target_name", std::string(magic_enum::enum_name(trace.previous_target_name))},
+        {         "timestamp_ns",                                              trace.timestamp_ns},
+        {  "had_previous_target",                                       trace.had_previous_target},
+        { "previous_target_name",  std::string(magic_enum::enum_name(trace.previous_target_name))},
         {"previous_target_color", std::string(magic_enum::enum_name(trace.previous_target_color))},
-        {"kept_current_target", trace.kept_current_target},
-        {"switch_margin", trace.switch_margin},
-        {"candidates", std::move(candidates)},
+        {  "kept_current_target",                                       trace.kept_current_target},
+        {        "switch_margin",                                             trace.switch_margin},
+        {           "candidates",                                           std::move(candidates)},
     };
 }
 
@@ -388,7 +393,7 @@ inline void append_selection_trace_metadata(
     // 访问variant，编译期匹配内部存储的指令类型
     std::visit(
         [&](const auto& cmd) {
-            using T = std::decay_t<decltype(cmd)>; // 获取variant内部真实类型
+            using T                = std::decay_t<decltype(cmd)>; // 获取variant内部真实类型
             result["timestamp_ns"] = cmd.timestamp_ns;
             if constexpr (std::is_same_v<T, ::fcs::L4::TrackCommand>) {
                 // 跟踪模式：输出MPC控制时域、发射时域长度
@@ -421,21 +426,21 @@ inline void append_selection_trace_metadata(
 [[nodiscard]] inline nlohmann::json
     json_solver_target(const ::fcs::L4::SelectedTargetSnapshot& snapshot) {
     // 复用L3跟踪序列化基础字段
-    nlohmann::json target_json             = json_tracker_output(snapshot.tracker);
+    nlohmann::json target_json = json_tracker_output(snapshot.tracker);
     // 追加L4规划层专属字段
-    target_json["timestamp_ns"]            = snapshot.timestamp_ns;
-    target_json["timestamp"]               = nlohmann::json::object();
-    target_json["timestamp"]["sec"]        = snapshot.timestamp_ns / 1000000000L; // 纳秒转秒
-    target_json["timestamp"]["nsec"]       = snapshot.timestamp_ns % 1000000000L;  // 剩余纳秒
-    target_json["tracking"]                = snapshot.tracker.is_tracking();       // 是否稳定跟踪
-    target_json["valid"]                   = snapshot.has_target();                 // 是否存在有效目标
-    target_json["optimal_target"]          = target_json["valid"];
-    target_json["source"]                  = std::string(magic_enum::enum_name(snapshot.source)); // 目标来源枚举
-    target_json["plan_distance"]           = snapshot.distance;                    // 规划瞄准距离
-    target_json["predicted_future_ns"]     = snapshot.predicted_future_ns;        // 向前预测时长
-    target_json["aim_phase"]               = std::string(magic_enum::enum_name(snapshot.aim_phase)); // 瞄准阶段
-    target_json["selected_armor_id"]       = snapshot.selected_armor_id;          // 当前最优装甲ID
-    target_json["rough_selected_armor_id"] = snapshot.rough_selected_armor_id;     // 粗选装甲ID
+    target_json["timestamp_ns"]      = snapshot.timestamp_ns;
+    target_json["timestamp"]         = nlohmann::json::object();
+    target_json["timestamp"]["sec"]  = snapshot.timestamp_ns / 1000000000L;      // 纳秒转秒
+    target_json["timestamp"]["nsec"] = snapshot.timestamp_ns % 1000000000L;      // 剩余纳秒
+    target_json["tracking"]          = snapshot.tracker.is_tracking();           // 是否稳定跟踪
+    target_json["valid"]             = snapshot.has_target();                    // 是否存在有效目标
+    target_json["optimal_target"]    = target_json["valid"];
+    target_json["source"] = std::string(magic_enum::enum_name(snapshot.source)); // 目标来源枚举
+    target_json["plan_distance"]       = snapshot.distance;                      // 规划瞄准距离
+    target_json["predicted_future_ns"] = snapshot.predicted_future_ns;           // 向前预测时长
+    target_json["aim_phase"] = std::string(magic_enum::enum_name(snapshot.aim_phase)); // 瞄准阶段
+    target_json["selected_armor_id"]       = snapshot.selected_armor_id;       // 当前最优装甲ID
+    target_json["rough_selected_armor_id"] = snapshot.rough_selected_armor_id; // 粗选装甲ID
 
     return target_json;
 }
@@ -584,15 +589,15 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             cmd_json["timestamp"]["sec"]  = cmd->timestamp_ns / 1000000000L;
             cmd_json["timestamp"]["nsec"] = cmd->timestamp_ns % 1000000000L;
             // 规划前原始目标角度
-            cmd_json["pre_plan"]          = {
-                {"yaw",      cmd->plan_yaw},
-                {"pitch",    cmd->plan_pitch},
+            cmd_json["pre_plan"] = {
+                {     "yaw",      cmd->plan_yaw},
+                {   "pitch",    cmd->plan_pitch},
                 {"distance", cmd->plan_distance},
             };
             // MPC优化后输出云台指令（带开火建议）
             cmd_json["post_plan"] = {
-                {"yaw",   cmd->yaw},
-                {"pitch", cmd->pitch},
+                {        "yaw",   cmd->yaw},
+                {      "pitch", cmd->pitch},
                 {"fire_advice",  cmd->fire},
             };
             // 云台运动状态：角度、角速度、角加速度
@@ -618,10 +623,10 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             // MPC调试信息：参考/优化轨迹长度、中心索引
             if (cmd->viz_debug) {
                 cmd_json["mpc"] = {
-                    {"center_index",          cmd->viz_debug->center_index},
+                    {   "center_index",          cmd->viz_debug->center_index},
                     {"lookahead_index",       cmd->viz_debug->lookahead_index},
-                    {"reference_size", cmd->viz_debug->reference_plan.size()},
-                    {"optimized_size", cmd->viz_debug->optimized_plan.size()},
+                    { "reference_size", cmd->viz_debug->reference_plan.size()},
+                    { "optimized_size", cmd->viz_debug->optimized_plan.size()},
                 };
             }
             // 匹配到对应L4规划意图时注入控制模式JSON
@@ -667,24 +672,24 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             for (int i = 0; i < static_cast<int>(cmd->viz_debug->reference_plan.size()); ++i) {
                 const auto& reference = cmd->viz_debug->reference_plan[i];
                 traj_json["reference"].push_back({
-                    {"index", i},
+                    {          "index",                                i},
                     {"temporal_offset", i - cmd->viz_debug->center_index}, // 相对当前帧时域偏移
-                    {"yaw", reference.yaw},
-                    {"pitch", reference.pitch},
-                    {"distance", reference.distance},
-                    {"tof", reference.tof},
+                    {            "yaw",                    reference.yaw},
+                    {          "pitch",                  reference.pitch},
+                    {       "distance",               reference.distance},
+                    {            "tof",                    reference.tof},
                 });
             }
             // 填充MPC优化后平滑轨迹
             for (int i = 0; i < static_cast<int>(cmd->viz_debug->optimized_plan.size()); ++i) {
                 const auto& optimized = cmd->viz_debug->optimized_plan[i];
                 traj_json["optimized"].push_back({
-                    {"index", i},
+                    {          "index",                                i},
                     {"temporal_offset", i - cmd->viz_debug->center_index},
-                    {"yaw", optimized.yaw},
-                    {"pitch", optimized.pitch},
-                    {"distance", optimized.distance},
-                    {"tof", optimized.tof},
+                    {            "yaw",                    optimized.yaw},
+                    {          "pitch",                  optimized.pitch},
+                    {       "distance",               optimized.distance},
+                    {            "tof",                    optimized.tof},
                 });
             }
             // 附加L4控制意图信息
@@ -733,9 +738,9 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
                         continue;
                     }
                     // 根据排名分级：最优选中 / 次优备选 / 淘汰候选
-                    const auto tier  = candidate.selected  ? tac::SelectionTier::Selected
-                                     : candidate.runner_up ? tac::SelectionTier::RunnerUp
-                                                           : tac::SelectionTier::Eliminated;
+                    const auto tier = candidate.selected  ? tac::SelectionTier::Selected
+                                    : candidate.runner_up ? tac::SelectionTier::RunnerUp
+                                                          : tac::SelectionTier::Eliminated;
                     // 获取对应层级配色、球体缩放、透明度、标签显示开关
                     const auto style = tac::selection_style(tier);
 
@@ -773,8 +778,8 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
         "foxglove_l4_mpc_prediction_scene",
         [](talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
            talos::res<std::shared_ptr<FoxgloveServer>> server,
-           core::trajectory::trajectory_solver solver, // 弹道求解器资源
-           talos::res<fast_tf::CoordinateSystem> coord, // TF坐标变换资源
+           core::trajectory::trajectory_solver solver,    // 弹道求解器资源
+           talos::res<fast_tf::CoordinateSystem> coord,   // TF坐标变换资源
            core::trajectory::bullet_speed bullet_speed) { // 子弹初速资源
             if (!detail::foxglove_ready(*server, cmd_in)) {
                 return;

@@ -1,5 +1,7 @@
 // 项目基础通用宏、类型、工具函数
 #include "base.hpp"
+// 调度器完整定义（Scheduler、pool_compute、spmc 等）
+#include "scheduler/scheduler.hpp"
 // Foxglove可视化消息结构体定义：3D场景、JSON消息封装类型
 #include "foxglove_types.hpp"
 // 3D场景实体构造器：快速构建球体、文字标签等SceneEntity

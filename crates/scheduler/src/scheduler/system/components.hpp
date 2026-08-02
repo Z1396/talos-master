@@ -242,7 +242,10 @@ struct local {
  */
 template <typename T, typename Topic = DefaultTopic>
 using spsc = basic_channel<
-    T, Topic, typename primitive::SpscChannel<T>::Reader, channel_kind::spsc_reader,
+    T, 
+    Topic, 
+    typename primitive::SpscChannel<T>::Reader, 
+    channel_kind::spsc_reader,
     false  // SPSC 不需要 has_new() 接口
 >;
 
@@ -250,8 +253,11 @@ using spsc = basic_channel<
  * @brief SPSC 写端
  */
 template <typename T, typename Topic = DefaultTopic>
-using spsc_mut =
-    basic_writer<T, Topic, typename primitive::SpscChannel<T>::Writer, channel_kind::spsc_writer>;
+using spsc_mut = basic_writer<
+    T, 
+    Topic, 
+    typename primitive::SpscChannel<T>::Writer, 
+    channel_kind::spsc_writer>;
 
 // ------------------------------
 // SPMC 单生产者多消费者队列
@@ -260,7 +266,7 @@ using spsc_mut =
  * @brief SPMC 读端：单写多读（支持多个任务同时读取）
  */
 template <typename T, typename Topic = DefaultTopic>
-using  spmc = basic_channel<
+using spmc = basic_channel<
     T,                                  // 参数1：消息负载类型
     Topic,                              // 参数2：话题类型
     typename primitive::SpmcChannel<T>::Reader, // 参数3：读取器实现类
