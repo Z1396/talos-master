@@ -230,3 +230,36 @@ int main() {
 }
 
 #endif
+
+/*┌──────────────────────────────────────────────────────────────────────┐
+│                       启动期调用链                                    │
+└──────────────────────────────────────────────────────────────────────┘
+
+main.cpp
+  ├─ load_config() ───────────────────> RuntimeConfig
+  ├─ Scheduler scheduler(cfg) ─────────> Scheduler + World
+  ├─ create_foxglove_server() ─────────> FoxgloveServer
+  ├─ world.insert_resource(server) ────> World 持有
+  ├─ fcs::boot(scheduler, config)
+  │     ├─ world.emplace_resource<CoordinateSystem>()
+  │     ├─ std::visit(backend) ─────────> init_coordinate_system + 弹道资源
+  │     ├─ setup_l1() ─────────────────> HIK 相机 + camera_reader 系统
+  │     ├─ create_detector_backend_handle() ─> ONNX/TensorRT 后端
+  │     ├─ register_detection_systems() ─> L2 系统 × 3
+  │     ├─ register_tracker_systems() ──> L3 系统 × 3
+  │     ├─ register_l4_planning_systems() ─> L4 系统 × 2
+  │     ├─ register_enhanced_weapon_system() ─> L5 系统
+  │     ├─ register_quanta_stream_systems() ─> H.265 视频流
+  │     └─ scheduler.build() ──────────> 拓扑分析 + 线程池 + 冻结
+  │
+  └─ scheduler.run() ─────────────────> 阻塞启动所有线程
+        ├─ fixed_rate 线程组
+        │     └─ camera_reader: camera->recv() → cam_out.write()
+        │                                    ↓
+        └─ compute 线程池（TBB）
+              ├─ armor_detection: img_in.read() → detector->infer() → det_out.write()
+              ├─ armor_tracker:   det_in.read() → tracker->update() → trk_out.write()
+              ├─ aimer:           trk_in.read() → aimer->aim()      → ctrl_out.write()
+              └─ fire_control:    ctrl_in.read() → fc->decide()     → wpn_out.write()
+                                                                          ↓
+                                                                     云台/电调/开火*/

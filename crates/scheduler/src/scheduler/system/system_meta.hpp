@@ -41,6 +41,8 @@ namespace talos::scheduler::system {
  * @brief 唯一标识一个通信频道：(数据类型type, 话题标签topic)
  *
  * 用于全局追踪系统间频道占用、重复发布冲突检测、所有权注册表匹配。
+ *设计妙处 ：同一数据类型可以用 Topic 区分不同业务流，
+ 比如 spmc<ImageFrame, ImageChannelTopic> 和 spmc<ImageFrame, DebugImageTopic> 互不干扰。
  */
 struct ChannelKey {
     // 消息载荷类型 type_index

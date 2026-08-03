@@ -99,7 +99,6 @@ using namespace system;
  * 统一管理 定频任务(fixed_rate) + 池化计算任务(compute)，基于数据流依赖自动调度
  *
  * ## 使用示例
- * ```cpp
  * World world;
  * Scheduler scheduler(world);
  *
