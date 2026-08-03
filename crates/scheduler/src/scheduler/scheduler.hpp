@@ -564,9 +564,9 @@ auto Scheduler:: add_system(std::string&& name, F&& func) -> void {
     没写的成员会执行值初始化（内置类型零初始化、类默认构造）；
     最后一行末尾允许带逗号 ,，编译器兼容，方便批量增删代码。*/
     SystemEntry entry{
-        .system = std::move(system),
-        .policy = policy,
-        .bound  = false,
+        .system = std::move(system),// 系统实例
+        .policy = policy,           // 系统执行策略
+        .bound  = false,            // 初始未绑定到线程
     };
 
     // 编译期分支判断：根据策略类型分到不同系统数组

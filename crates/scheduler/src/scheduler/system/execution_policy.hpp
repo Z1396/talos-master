@@ -264,7 +264,8 @@ struct PolicyInfo {
 template <typename Policy>
 [[nodiscard]] constexpr auto make_policy_info() noexcept -> PolicyInfo {
     // 匹配固定频率类策略
-    if constexpr (is_fixed_rate_policy_v<Policy>) {
+    if constexpr (is_fixed_rate_policy_v<Policy>) 
+    {
         return PolicyInfo{
             .kind            = PolicyKind::FixedRate,
             .frequency_hz    = Policy::frequency_hz,
@@ -274,11 +275,13 @@ template <typename Policy>
         };
     }
     // 匹配普通线程池策略
-    if constexpr (is_pool_policy_v<Policy>) {
+    if constexpr (is_pool_policy_v<Policy>) 
+    {
         return PolicyInfo{.kind = PolicyKind::PoolCompute};
     }
     // 匹配可视化线程池策略
-    if constexpr (is_visualization_policy_v<Policy>) {
+    if constexpr (is_visualization_policy_v<Policy>) 
+    {
         return PolicyInfo{.kind = PolicyKind::PoolVisualization};
     }
     // 理论上不会执行到此处，标记代码不可达
