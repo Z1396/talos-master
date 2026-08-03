@@ -37,6 +37,13 @@ struct PubSlot;
 // 1. 存放 unique_ptr、通信通道、硬件资源等【不可拷贝对象】
 // 2. 异构容器统一存储，不需要业务类继承虚基类，降低侵入性
 // 业务背景：机器狗电调、传感器、CAN通道、驱动资源大多不可拷贝，非常适配
+// 为什么禁拷贝？机器人硬件资源（CAN 句柄、相机句柄）天然独占，强制不可拷贝防止误用。
+/*UniqueAny::make<T>(args...)      静态工厂：创建并填充 
+emplace<T>(args...)                原位构造对象 
+has_value()                        是否非空 
+type()                             返回 type_info 
+get<T>()                           安全转换，失败返回 nullptr 
+as<T>()                            强制转换，失败 panic*/
 // ============================================================================
 class UniqueAny {
     // 内部抽象接口基类：类型擦除统一接口
@@ -191,6 +198,18 @@ public:
 // 作用：对任意硬件/业务资源做一层统一包裹，统一异构存储格式
 // 场景：机器狗传感器、IMU、相机、电调参数、底盘配置等全局资源
 // ============================================================================
+/*给任意业务对象套一层统一外壳，方便 ResourceStore 统一存储。
+
+```
+template <typename T>
+struct Resource {
+    T value;                    // 真实资源
+    Resource() requires std::default_initializable<T> = default;
+    template <typename... Args>
+    explicit Resource(std::in_place_t, Args&&... args);  // 原位构造
+};
+```
+就是个带 value 字段的薄壳，没有逻辑。*/
 template <typename T>
 struct Resource {
     T value; // 被包装的真实资源
@@ -238,6 +257,7 @@ struct WorldLifetimeToken {};
 // 单生产者、单消费者通道：一对一通信
 // 机器狗场景：主控 ↔ 单个电调、主控 ↔ 单个传感器
 // 特点：读写端拆分，一旦被占用就不可二次绑定，保证一对一语义
+// 核心约束 ：读写端各只能被绑定一次（ claimed 标记防止重复绑定）。 split() 把底层通道拆成独立读写端。
 // ============================================================================
 template <typename T>
 struct SpscStorage {
@@ -273,6 +293,7 @@ struct SpscStorage {
 // 1. IMU 数据广播给姿态解算、自瞄、可视化
 // 2. 主控指令广播给多个腿关节电调（CAN 总线多节点）
 // 特点：写端唯一，读端可无限克隆，天然适配 CAN 总线多从机
+// 核心约束 ：写端唯一，读端可无限克隆（对应 CAN 广播：主控发，多电调收）。
 // ============================================================================
 template <typename T>
 struct SpmcStorage {
@@ -310,6 +331,13 @@ struct SpmcStorage {
 // 按「类型」全局管理所有机器人硬件/业务资源
 // 底层：type_index → UniqueAny 哈希表，异构存储
 // 约束：同类型资源全局唯一，重复创建直接 panic
+/*emplace<T>(args...)   原位创建资源，重复插入 panic 
+contains<T>()           查询资源是否存在 
+get_storage<T>()        返回 const Resource<T>* ，不存在返回 nullptr 
+get_storage_mut<T>()    返回可写 Resource<T>* 
+get<T>()                只读获取资源本体，不存在 panic 
+get_mut<T>()            可写获取，不存在 panic*/
+//关键设计 ：用 try_emplace 保证 key 已存在时不构造 value（避免无谓构造开销），重复插入直接 panic（资源单例约束）。
 // ============================================================================
 class ResourceStore {
 public:
@@ -451,8 +479,10 @@ private:
 // 【通道存储器 ChannelStore】
 // 统一管理 SPSC / SPMC 通信通道（对应机器人 CAN、内部消息总线）
 // 核心机制：**通道绑定阶段锁**
-// 规则：通道读写端只能在调度器指定的「绑定阶段」创建/获取，运行时禁止修改
-// 目的：保证机器狗运行时通道拓扑稳定，避免动态改拓扑导致通信异常
+/*为什么需要锁 ：调度器 build() 时会调用每个系统的 bind() ，此时批量创建通道；
+运行时禁止创建通道（防止动态改拓扑导致崩溃）。 ensure_binding_open() 在运行时非法创建通道时直接 panic。
+get_storage<Storage, Topic>()       获取通道存储，不存在自动创建 
+select_storage_map<Storage>()       编译期分发到 spsc/smpc 哈希表*/
 // ============================================================================
 class ChannelStore {
 public:
@@ -555,6 +585,41 @@ private:
 using namespace system;
 using namespace talos::scheduler::detail;
 
+/*作用 ：组合 ResourceStore + ChannelStore，对外提供统一接口。是调度器、系统、资源、通道的交汇点。
+
+insert_resource(T&&)                移入资源 冻结前可用 
+emplace_resource<T>(args...)        原位构造 冻结前可用 
+unsafe_insert_resource(T&&)         跳过冻结检查 任何时候（逃生口） 
+freeze_resource_structure()         冻结资源结构 build() 时调用 
+has_resource<T>()                   查询存在 任何时候 
+get_res<T>()                        返回只读句柄 res<T> 任何时候 
+get_res_mut<T>()                    返回可写句柄 res_mut<T> 任何时候
+
+调度器 build() 完成后调用 freeze_resource_structure() ，之后任何 insert_resource 都 panic，保证运行时拓扑稳定*/
+/*World 在系统生命周期中的角色
+┌─ boot 阶段 ──────────────────────────────────────────────┐
+│ 1. world.insert_resource(cam_cfg)        注册资源        │
+│ 2. world.emplace_resource<Coord>()       原位构造        │
+│ 3. setup_l1 调 world.get<spmc_mut<...>>() 创建通道       │
+│    └─ 此时 channel_binding_open = true                  │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─ build 阶段 ─────────────────────────────────────────────┐
+│ 1. scheduler.build() 调用每个 system.bind(world)         │
+│ 2. bind() 内 world.get<spmc<...>>() 缓存句柄             │
+│    └─ channel_binding_open = true                        │
+│ 3. build 结束 → close_binding + freeze_resource_structure│
+│    └─ 之后 insert_resource 会 panic                      │
+└──────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─ run 阶段 ───────────────────────────────────────────────┐
+│ 1. system.run() 调用缓存句柄的 read()/write()            │
+│ 2. 通道绑定已关闭，禁止新增通道                           │
+│ 3. 资源结构已冻结，禁止新增资源                           │
+│ 4. lifetime_token_ 防野指针                              │
+└──────────────────────────────────────────────────────────┘*/
 class World {
 public:
     // ==================== 资源操作接口 ====================
