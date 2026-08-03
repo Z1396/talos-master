@@ -9,11 +9,8 @@
 // 调度器：Scheduler、fixed_rate、spmc 等
 #include "scheduler/scheduler.hpp"
 
-#include <algorithm>
-#include <chrono>
 #include <memory>
 #include <spdlog/spdlog.h>
-#include <thread>
 #include <utility> // std::move
 
 namespace fcs::runtime {
@@ -36,8 +33,7 @@ void register_quanta_stream_send_system(talos::Scheduler& scheduler) {
             // res：只读资源；底层通信输出接口（unique_ptr持有）
             talos::res<std::unique_ptr<fcs::L1::OutputInterface>> output,
             // 运行时能力标志位，全局功能开关
-            core::capabilities cap)
-        {
+            core::capabilities cap) {
             // ===== 前置条件判断，不满足直接跳过本轮发送 =====
             // 1. 全局未开启Quanta流媒体能力
             // 2. 底层通信接口未初始化（空unique_ptr）
@@ -63,8 +59,7 @@ void register_quanta_stream_send_system(talos::Scheduler& scheduler) {
                 "Quanta packet sent: frag={}/{}, packets_left={}, frames_left={}",
                 static_cast<unsigned int>(dequeued->packet.fragment_index) + 1U,
                 static_cast<unsigned int>(dequeued->packet.fragment_count),
-                dequeued->remaining_packets,
-                dequeued->remaining_frames);
+                dequeued->remaining_packets, dequeued->remaining_frames);
         });
 }
 

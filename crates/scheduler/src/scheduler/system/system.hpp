@@ -252,6 +252,28 @@ auto make_args_sequenced(
  * 3. run 阶段直接调用函数，零重复查询开销
  * 4. 自动标记「是否写入输出组件」
  */
+ /*function_traits<F>                                              [system_meta.hpp:134]
+   └─ decltype(&F::operator()) → R(C::*)(Args...) const  (lambda 是 mutable，去掉 const)
+       └─ 继承 function_traits<R(*)(Args...)>                    [system_meta.hpp:97]
+           └─ args_tuple = std::tuple<
+                  spmc<ArmorDetectionBatch, DetectionChannelTopic>,    // [0]
+                  spmc<LdmDetection, LdmDetectionChannelTopic>,        // [1]
+                  spmc<LdmMeasurement, LdmMeasurementChannelTopic>,    // [2]
+                  res<std::shared_ptr<FoxgloveServer>>,                // [3]
+                  res<CameraConfig>,                                    // [4]
+                  res<FoxgloveConfig>,                                  // [5]
+                  detecting_color,                                      // [6] 非组件，被丢弃
+                  res<fast_tf::CoordinateSystem>,                       // [7]
+                  res<LdmDetectorConfig>                                // [8]
+              >
+
+extract_system_meta 展开 (折叠表达式)                              [system_meta.hpp:296]
+   for I in 0..8:
+       extract_one_param<tuple_element_t<I, args>>(meta)          [system_meta.hpp:244]
+           │
+           ├─ [0,1,2] is_spmc_reader → meta.spmc_channels.emplace_back({typeid(T), typeid(Topic), spmc_reader})
+           ├─ [3,4,5,7,8] is_res_type → meta.reads.emplace_back(typeid(T))
+           └─ [6] 非 component_kind → 静默跳过（裸 enum）*/
 template <typename F, typename Policy = default_policy>
 class System : public SystemBase {
     // 函数特征萃取：解析 F 的参数列表、参数个数

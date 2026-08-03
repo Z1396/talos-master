@@ -93,6 +93,8 @@ struct function_traits;
  * 提取返回值类型、参数元组、参数个数
  */
 template <typename R, typename... Args>
+/*R      (*)        (Args...)
+返回值 指针标记   参数列表*/
 struct function_traits<R (*)(Args...)> {
     using return_type                  = R;
     using args_tuple                   = std::tuple<Args...>;
@@ -117,6 +119,19 @@ struct function_traits<R (C::*)(Args...) const> : function_traits<R (*)(Args...)
  * @brief Lambda/自定义仿函数 通用萃取
  * 取仿函数的 operator() 重载，转发到上面成员函数特化分支
  */
+ /*template<typename F> struct function_traits 本身是模板结构体；
+它自身是空的，不去自己解析函数类型，而是通过继承：
+function_traits< decltype(&F::operator()) >
+把「解析成员函数指针的那个特化版本」当成父类；
+子类空空如也，父特化里面已经写好了 return_type、参数数量、参数类型这些类型别名，子类继承之后，就天然拥有了父类全部的类型成员。
+举具象替换例子:
+假设 F 是某个 lambda，decltype(&F::operator()) 得到成员函数指针类型 R(Class::*)(Args...) const。
+那么：
+function_traits<Lambda类型>
+    : public function_traits< R(Class::*)(Args...) const >
+{};
+function_traits<R(Class::*)(Args...) const> 会命中你写的成员指针偏特化版本，这个特化结构体内部定义好了返回类型、参数信息。
+子类什么都不写，直接把父特化里所有类型 “继承过来”。*/
 template <typename F>
 struct function_traits : function_traits<decltype(&F::operator())> {};
 
@@ -282,6 +297,7 @@ constexpr SystemMeta extract_system_meta(std::string name) noexcept {
         /*std::tuple_element_t作用：编译期从类元组类型中萃取第 I 个元素的类型，无运行开销。
         下标 I 从 0 开始，且必须是 constexpr 编译常量。*/
         (detail::extract_one_param<std::tuple_element_t<Is, args>>(meta), ...);
+        // 下面这一段，是 **立刻调用这个 lambda**，展开所有参数，逐个提取元数据
     }(std::make_index_sequence<traits::arity>{});
 
     return meta;

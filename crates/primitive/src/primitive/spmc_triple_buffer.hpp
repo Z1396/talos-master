@@ -173,6 +173,10 @@ requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
      */
     struct State {
         // 读写锁，缓存行对齐，防止与generation产生伪共享
+        /*alignas(std::hardware_destructive_interference_size)
+        std::hardware_destructive_interference_size 标准常量 = CPU 缓存行大小（主流 CPU 64 字节）。
+        alignas(64) 强制让 lock 独占一整条 CPU 缓存行。*/
+        //alignas(常量表达式) 类型 变量名;作用：强制指定这个变量在内存中的对齐字节数。
         alignas(std::hardware_destructive_interference_size) RWSpinLock lock{};
         // 当前对外暴露的最新数据智能指针，多线程共享
         std::shared_ptr<const T> current{nullptr};

@@ -2005,7 +2005,8 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
 // Compute 主线程主循环（调度器主线程阻塞在此函数）
 // 负责轮询就绪系统、自适应空闲退避、支持热更暂停、定时打印性能统计
 // ============================================================================
-void Scheduler::run_compute_loop() {
+void Scheduler::run_compute_loop() 
+{
     // 自适应空闲退避三级策略：自旋 → 让出CPU → 短休眠
     // 设计目标：高负载有任务时零延迟、低负载无任务时降低CPU空转占用
     // 阶段1：短时自旋，CPU空跑，不放弃时间片，唤醒后立刻执行业务，延迟最低
