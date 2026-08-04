@@ -1943,7 +1943,7 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
         // 1. 系统本身不是输出型系统(write_mode=false)，每次执行都算有效计算
         // 2. 输出型系统，本次执行成功产出数据(written=true)
         if (!write_mode || written) {
-            // 有效执行计数自增
+            // 有效执行计数自增 数据产出次数 +1   
             stats.record_count.fetch_add(1, std::memory_order_relaxed);
             // 将本次执行耗时存入延迟直方图，用于统计平均/最大/分位延迟
             stats.latency_hist.record(elapsed);
@@ -1955,6 +1955,7 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
         // [[likely]] 编译器提示：该分支是高频正常路径，优化分支预测
         if (written && ctx.policy.notifies) [[likely]] {
             // 调度器通知接口：将当前系统对应的就绪掩码置1，下游计算循环会检测并执行
+            // notify 的作用 ： ready_systems_.fetch_or(1ULL << system_index) ，置位就绪位掩码，compute 线程池检测到后执行下游系统计算
             ctx.scheduler->notify(ctx.system_index);
         }
     };
@@ -2019,7 +2020,7 @@ void Scheduler::run_compute_loop() {
     // 阶段3：短时间休眠，内核收回CPU，彻底降低整机CPU使用率
     constexpr std::size_t SPIN_LIMIT  = 100;  // 第一阶段自旋最大累计空闲次数
     constexpr std::size_t YIELD_LIMIT = 1000; // 第二阶段yield让出CPU最大累计空闲次数
-    constexpr auto SLEEP_DURATION     = std::chrono::microseconds(10); // 第三阶段休眠时长 10微秒
+    constexpr auto SLEEP_DURATION= std::chrono::microseconds(10); // 第三阶段休眠时长 10微秒
     std::size_t idle_count            = 0; // 连续无任务空闲计数，用于切换三级退避策略
 
     // 读取配置：是否定时打印性能统计日志

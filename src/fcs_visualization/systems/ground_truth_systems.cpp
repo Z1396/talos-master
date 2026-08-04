@@ -43,16 +43,16 @@ namespace fcs::visualization::foxglove::systems {
 namespace {
 
 // 大符渲染球体颜色：激活态主题色，0.62透明度半透明
-constexpr auto kRuneColor  = tac::with_alpha(tac::Semantic::STATUS_ACTIVE, 0.62);
+constexpr auto kRuneColor = tac::with_alpha(tac::Semantic::STATUS_ACTIVE, 0.62);
 // 3D文字标签基础白色
 constexpr auto kLabelColor = tac::Text::PRIMARY;
 
 // 大符真值球体渲染半径(m)
 constexpr double kRuneSphereRadius = 0.15;
 // 文字标签在目标球体上方抬高距离，避免文字覆盖球体
-constexpr double kLabelOffsetZ     = 0.18;
+constexpr double kLabelOffsetZ = 0.18;
 // 3D标签字体尺寸(米单位，Foxglove场景空间尺寸)
-constexpr double kLabelFontSize    = 0.08;
+constexpr double kLabelFontSize = 0.08;
 
 /**
  * @brief 装甲数字标签 → 可读名称字符串
@@ -62,8 +62,8 @@ constexpr double kLabelFontSize    = 0.08;
  */
 [[nodiscard]] const char* armor_label_name(uint8_t label) noexcept {
     switch (label) {
-    case 1: return "Hero";       // 英雄机甲
-    case 2: return "Engineer";   // 工程机甲
+    case 1: return "Hero";      // 英雄机甲
+    case 2: return "Engineer";  // 工程机甲
     case 3: return "Infantry3"; // 三号步兵
     case 4: return "Infantry4"; // 四号步兵
     case 5: return "Infantry5"; // 五号步兵
@@ -78,9 +78,7 @@ constexpr double kLabelFontSize    = 0.08;
  * @param team 0红方 / 1蓝方
  * @return Red / Blue
  */
-[[nodiscard]] const char* team_name(uint8_t team) noexcept {
-    return team == 0 ? "Red" : "Blue";
-}
+[[nodiscard]] const char* team_name(uint8_t team) noexcept { return team == 0 ? "Red" : "Blue"; }
 
 /**
  * @brief 大符激活状态数字 → 状态文字
@@ -103,7 +101,7 @@ constexpr double kLabelFontSize    = 0.08;
     return mode == 0 ? "Small" : "Large";
 }
 
-} // 匿名命名空间结束
+} // namespace
 
 /**
  * @brief 注册仿真真值GroundTruth可视化并行系统（仅仿真Daedalus模式启用）
@@ -130,8 +128,7 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
             // 只读SPMC通道：仿真输出批量真值结构体
             talos::spmc<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_in,
             // 全局只读共享资源：Foxglove服务指针，提供消息发送接口
-            talos::res<std::shared_ptr<FoxgloveServer>> server
-        ) {
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 前置校验1：Foxglove服务未初始化就绪，直接跳过本轮
             if (!detail::foxglove_ready(*server, gt_in)) {
                 return;
@@ -160,7 +157,7 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                 auto entity =
                     viz::EntityBuilder::create<fast_tf::world>(
                         "gt", fmt::format("rune_{}", i) // 命名空间gt，实体唯一ID rune_0/rune_1
-                    )
+                        )
                         .position(center)               // 球体中心坐标
                         .size(kRuneSphereRadius)        // 球体半径
                         .color(kRuneColor)              // 半透明激活主题色
@@ -171,16 +168,12 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                 // 构造大符上方文字标签实体
                 // 标签文本格式：阵营/大符尺寸 [激活状态]
                 const std::string label = fmt::format(
-                    "{}/Rune {} [{}]",
-                    team_name(rune.team),
-                    rune_mode_name(rune.rune_mode),
-                    mechanism_state_name(rune.mechanism_state)
-                );
+                    "{}/Rune {} [{}]", team_name(rune.team), rune_mode_name(rune.rune_mode),
+                    mechanism_state_name(rune.mechanism_state));
 
                 auto label_entity =
                     viz::EntityBuilder::create<fast_tf::world>(
-                        "gt", fmt::format("rune_label_{}", i)
-                    )
+                        "gt", fmt::format("rune_label_{}", i))
                         .position(center)
                         .color(kLabelColor)
                         // 文字向上偏移Z，字体尺寸配置
@@ -201,7 +194,8 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                 (*server)->enqueue_message(std::move(msg));
             }
 
-            // ===================== 2. 序列化完整真值为JSON，发布结构化数值消息 =====================
+            // ===================== 2. 序列化完整真值为JSON，发布结构化数值消息
+            // =====================
             {
                 nlohmann::json gt_json;
                 // 帧序列号、时序戳顶层字段
@@ -214,42 +208,43 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                     const auto& tgt = batch->targets[i];
                     // 单装甲JSON结构：阵营、类型、是否前哨、三维位置、偏航角/角速度
                     gt_json["targets"].push_back({
-                        {       "team",         team_name(tgt.team)       },
-                        {"armor_label", armor_label_name(tgt.armor_label)},
-                        { "is_outpost",               tgt.is_outpost      },
+                        {       "team",                                 team_name(tgt.team)},
+                        {"armor_label",                   armor_label_name(tgt.armor_label)},
+                        { "is_outpost",                                      tgt.is_outpost},
                         {   "position", {tgt.position[0], tgt.position[1], tgt.position[2]}},
-                        {       "vyaw",               tgt.vyaw            },
-                        {        "yaw",                tgt.yaw             },
+                        {       "vyaw",                                            tgt.vyaw},
+                        {        "yaw",                                             tgt.yaw},
                     });
                 }
 
                 // 大符对象容器，区分Small/Large两类大符
                 auto runes_obj = nlohmann::json::object();
                 for (uint32_t i = 0; i < batch->rune_count; ++i) {
-                    const auto& r           = batch->runes[i];
-                    const char* mode        = rune_mode_name(r.rune_mode);
+                    const auto& r    = batch->runes[i];
+                    const char* mode = rune_mode_name(r.rune_mode);
                     // 单个大符完整运动学JSON
                     nlohmann::json rune_obj = {
-                        {           "team", team_name(r.team) },
-                        {"mechanism_state", mechanism_state_name(r.mechanism_state)},
-                        {  "r_center_odom", {r.r_center_odom[0], r.r_center_odom[1], r.r_center_odom[2]}},
-                        {         "radius",               r.radius},
-                        {  "current_angle",        r.current_angle},
-                        {         "v_roll",             r.v_roll},
-                        {      "direction",          r.direction},
-                        {  "sin_amplitude",      r.sin_amplitude},
-                        {      "sin_omega",          r.sin_omega},
-                        {      "sin_phase",          r.sin_phase},
-                        {     "sin_offset",          r.sin_offset},
-                        {  "relative_time",      r.relative_time},
-                        {       "blade_id",            r.blade_id},
+                        {           "team",team_name(r.team)                                           },
+                        {"mechanism_state",   mechanism_state_name(r.mechanism_state)},
+                        {  "r_center_odom",
+                         {r.r_center_odom[0], r.r_center_odom[1], r.r_center_odom[2]}},
+                        {         "radius",                                  r.radius},
+                        {  "current_angle",                           r.current_angle},
+                        {         "v_roll",                                  r.v_roll},
+                        {      "direction",                               r.direction},
+                        {  "sin_amplitude",                           r.sin_amplitude},
+                        {      "sin_omega",                               r.sin_omega},
+                        {      "sin_phase",                               r.sin_phase},
+                        {     "sin_offset",                              r.sin_offset},
+                        {  "relative_time",                           r.relative_time},
+                        {       "blade_id",                                r.blade_id},
                     };
                     // 5个装甲激活状态数组转为vector存入JSON
                     std::vector<uint8_t> activations(
                         r.target_activations, r.target_activations + 5);
                     rune_obj["target_activations"] = activations;
                     // 按大小符分类存入runes根对象
-                    runes_obj[mode]                = std::move(rune_obj);
+                    runes_obj[mode] = std::move(rune_obj);
                 }
                 gt_json["runes"] = std::move(runes_obj);
 

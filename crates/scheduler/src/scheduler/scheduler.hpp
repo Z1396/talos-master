@@ -502,21 +502,21 @@ private:
     std::atomic<std::uint64_t> ready_systems_{0};      // 当前已就绪、待执行的计算系统掩码
 
     // 全局统计
-    std::atomic<std::uint64_t> compute_cycles_{0};
-    std::atomic<std::uint64_t> compute_total_time_ns_{0};
-    std::atomic<std::uint64_t> compute_last_time_ns_{0};
-    std::vector<FixedRateStats> fixed_rate_stats_;
-    std::vector<ComputeStats> compute_stats_;
-    TimePoint stats_start_time_;
+    std::atomic<std::uint64_t> compute_cycles_{0};        // 调度总运行次数(总帧数)，原子无锁多线程累加
+    std::atomic<std::uint64_t> compute_total_time_ns_{0}; // 全部调度周期累计耗时(ns)
+    std::atomic<std::uint64_t> compute_last_time_ns_{0}; // 上一轮调度结束时间戳，用于计算帧间隔dt
+    std::vector<FixedRateStats> fixed_rate_stats_;        // 定频任务(100Hz/50Hz等)周期抖动、耗时统计
+    std::vector<ComputeStats> compute_stats_;              // 线程池异步系统的耗时、超时统计
+    TimePoint stats_start_time_;                           // 性能统计模块启动时刻
 
     // 热更新：计算循环暂停控制
-    std::atomic<bool> pause_requested_{false};
-    std::atomic<bool> paused_{false};
-    std::condition_variable pause_cv_;
-    std::mutex pause_mutex_;
+    std::atomic<bool> pause_requested_{false};            // 外部发起暂停请求标记
+    std::atomic<bool> paused_{false};                     // 调度器真正完成暂停的状态标记
+    std::condition_variable pause_cv_;                    // 暂停阻塞、恢复唤醒条件变量
+    std::mutex pause_mutex_;                              // 配合条件变量的互斥锁
 
     // 关机回调钩子列表
-    std::vector<std::function<void()>> shutdown_hooks_;
+    std::vector<std::function<void()>> shutdown_hooks_;   // 程序退出时顺序执行的资源释放回调
 };
 
 // ============================================================================
