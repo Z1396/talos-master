@@ -12,16 +12,16 @@
 #include "primitive/thread_affinity.hpp"
 
 // C++标准库
-#include <algorithm>       // std::any_of、std::sort、std::unique 通用算法
-#include <bit>             // C++20 位运算工具：std::popcount、std::countr_zero
-#include <cinttypes>       // PRIu64 格式化uint64_t打印宏定义
-#include <cstdio>          // printf 控制台打印Mermaid图、系统信息
-#include <functional>      // std::function 可调用对象、闭包存储
-#include <limits>          // 数值极值模板类
-#include <map>             // 有序关联容器，构建类型/通道名称映射
-#include <nlohmann/json.hpp>// JSON序列化库，导出性能指标
-#include <spdlog/spdlog.h> // 日志库，输出警告/错误日志
-#include <unordered_map>   // 哈希表，加速话题计数查找
+#include <algorithm>         // std::any_of、std::sort、std::unique 通用算法
+#include <bit>               // C++20 位运算工具：std::popcount、std::countr_zero
+#include <cinttypes>         // PRIu64 格式化uint64_t打印宏定义
+#include <cstdio>            // printf 控制台打印Mermaid图、系统信息
+#include <functional>        // std::function 可调用对象、闭包存储
+#include <limits>            // 数值极值模板类
+#include <map>               // 有序关联容器，构建类型/通道名称映射
+#include <nlohmann/json.hpp> // JSON序列化库，导出性能指标
+#include <spdlog/spdlog.h>   // 日志库，输出警告/错误日志
+#include <unordered_map>     // 哈希表，加速话题计数查找
 
 namespace talos::scheduler {
 
@@ -47,7 +47,7 @@ static void print_wake_chains(
         // 获取当前源系统的业务名称
         const auto& src_name = source_systems[i].system->meta().name;
         // 越界保护：下标超出掩码数组长度则置0，表示无下游依赖
-        const auto affects   = i < affects_mask.size() ? affects_mask[i] : 0U;
+        const auto affects = i < affects_mask.size() ? affects_mask[i] : 0U;
 
         printf("  [%s] -> ", src_name.c_str());
         // 掩码为0：没有任何下游依赖系统
@@ -72,8 +72,8 @@ static void print_wake_chains(
 
 /// 通道IO统计结构体：记录单个系统的读写通道数量
 struct ChannelIoCounts {
-    std::size_t inputs  = 0;  // 读通道总数（spsc_reader / spmc_reader）
-    std::size_t outputs = 0;  // 写通道总数（spsc_writer / spmc_writer）
+    std::size_t inputs  = 0; // 读通道总数（spsc_reader / spmc_reader）
+    std::size_t outputs = 0; // 写通道总数（spsc_writer / spmc_writer）
 };
 
 /// 累加一组通道的读写数量，写入counts（noexcept 保证无异常抛出）
@@ -157,15 +157,15 @@ static void collect_channel_label_names(
     for (const auto& entry : systems) {
         const auto& meta = entry.system->meta();
         // 内部复用闭包，统一处理SPSC/SPMC两类通道
-        auto collect     = [&](const auto& channels) {
+        auto collect = [&](const auto& channels) {
             for (const auto& channel : channels) {
                 // 通道唯一键：数据类型 + 话题类型
                 const ChannelKey key{channel.type, channel.topic};
                 // 插入通道名称信息，key重复会覆盖旧值
                 channel_names.try_emplace(
                     key, ChannelLabelNames{
-                                 .topic_name = talos::scheduler::detail::demangle(channel.topic.name()),
-                                 .type_name  = talos::scheduler::detail::demangle(channel.type.name()),
+                             .topic_name = talos::scheduler::detail::demangle(channel.topic.name()),
+                             .type_name  = talos::scheduler::detail::demangle(channel.type.name()),
                          });
             }
         };
@@ -280,7 +280,8 @@ void Scheduler::mark_topology_dirty() noexcept {
     std::memory_order_release 释放内存序
     核心规则：
     当前线程中，本句 store 之前的所有读写操作，不会被编译器 / CPU 重排到 store 之后；
-    其他线程使用 memory_order_acquire 读取这个原子变量时，可以完整看到本线程在 store 之前完成的所有数据修改。*/
+    其他线程使用 memory_order_acquire 读取这个原子变量时，可以完整看到本线程在 store
+    之前完成的所有数据修改。*/
     lifecycle_.store(LifecycleState::Configuring, std::memory_order_release);
 }
 
@@ -308,7 +309,7 @@ auto Scheduler::add_system(std::unique_ptr<SystemBase> system)
     SystemEntry entry{
         .system = std::move(system), // 转移系统所有权
         .policy = policy,
-        .bound  = false, // 标记通道是否完成绑定初始化
+        .bound  = false,             // 标记通道是否完成绑定初始化
     };
 
     // 定时周期系统存入fixed数组
@@ -384,11 +385,11 @@ auto Scheduler::build() -> BuildResult {
 }
 
 /// 启动调度器：创建所有定时线程，主线程阻塞执行Compute并行循环
-auto Scheduler::run() -> std::expected<void, SchedulerError> 
-{
+auto Scheduler::run() -> std::expected<void, SchedulerError> {
     // CAS原子交换生命周期：仅Built状态允许切换为Running
     auto expected = LifecycleState::Built;
-    /*CAS（Compare And Swap，比较并交换）原子操作，无锁并发编程核心原语，全程原子执行、不会被线程打断。
+    /*CAS（Compare And
+    Swap，比较并交换）原子操作，无锁并发编程核心原语，全程原子执行、不会被线程打断。
     函数行为分为两步，整体不可分割：
     1.比较：判断原子变量当前值是否等于传入的「预期值 expected」
     2.交换
@@ -396,11 +397,9 @@ auto Scheduler::run() -> std::expected<void, SchedulerError>
     不相等：把原子变量当前值写入 expected，返回 false。*/
     if (!lifecycle_.compare_exchange_strong(
             expected, LifecycleState::Running, std::memory_order_acq_rel,
-            std::memory_order_acquire)) 
-    {
+            std::memory_order_acquire)) {
         // CAS交换失败，判断当前实际状态
-        if (expected == LifecycleState::Running) 
-        {
+        if (expected == LifecycleState::Running) {
             return std::unexpected(SchedulerError::AlreadyRunning);
         }
         // 未执行build，拓扑未初始化，禁止启动
@@ -408,8 +407,7 @@ auto Scheduler::run() -> std::expected<void, SchedulerError>
     }
 
     // 批量创建所有FixedRate定时后台线程
-    for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) 
-    {
+    for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) {
         auto& entry = fixed_rate_systems_[i];
         // 线程运行上下文，保存系统、调度器、生命周期等指针
         FixedRateContext ctx{
@@ -446,7 +444,7 @@ bool compare_exchange_strong(
     std::memory_order success,  // CAS 修改成功时的内存序
     std::memory_order failure  // CAS 修改失败时的内存序
 ) noexcept;*/
- /*最简小例子
+/*最简小例子
 std::atomic<int> num = 5;
 int exp = 5;
 // 预期5，想改成10
@@ -825,8 +823,8 @@ void Scheduler::print_mermaid_wake_chains() const {
 
     // 判断是否存在仅提供数据、不触发下游的静默定时系统
     bool has_silent_fixed_rate = false;
-    for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) {
-        if (!fixed_rate_systems_[i].policy.notifies) {
+    for (const auto& sys : fixed_rate_systems_) {
+        if (!sys.policy.notifies) {
             has_silent_fixed_rate = true;
             break;
         }
@@ -1038,17 +1036,17 @@ void Scheduler::print_mermaid_data_flow() const {
 
     // 通道端点：标记一个读写端点属于哪个系统、是定时系统还是计算系统
     struct ChannelEndpoint {
-        std::size_t system_idx;  // 系统在数组中的下标
-        bool is_fixed_rate;      // true=FixedRate定时系统；false=Compute计算系统
+        std::size_t system_idx; // 系统在数组中的下标
+        bool is_fixed_rate;     // true=FixedRate定时系统；false=Compute计算系统
     };
 
     // 单条通道完整连接关系：同一个(type+topic)下所有写者、读者
     struct ChannelConnection {
         std::vector<ChannelEndpoint> writers; // 该通道所有发布/写者
-        std::vector<ChannelEndpoint> readers;  // 该通道所有订阅/读者
-        std::type_index type;                  // 通道承载数据类型
-        std::type_index topic;                 // 通道话题标识类型
-        channel_kind kind;                     // 通道类型：SPSC/SPMC Reader/Writer
+        std::vector<ChannelEndpoint> readers; // 该通道所有订阅/读者
+        std::type_index type;                 // 通道承载数据类型
+        std::type_index topic;                // 通道话题标识类型
+        channel_kind kind;                    // 通道类型：SPSC/SPMC Reader/Writer
     };
 
     // 哈希表：ChannelKey(数据类型+话题) → 完整通道连接信息，存储全部Pub/Sub通道
@@ -1056,15 +1054,15 @@ void Scheduler::print_mermaid_data_flow() const {
 
     // 共享资源访问结构：全局资源被哪些系统读、哪些系统修改
     struct ResourceAccess {
-        std::vector<ChannelEndpoint> readers;   // 只读该资源的系统
-        std::vector<ChannelEndpoint> mutators;  // 读写/修改该资源的系统
+        std::vector<ChannelEndpoint> readers;  // 只读该资源的系统
+        std::vector<ChannelEndpoint> mutators; // 读写/修改该资源的系统
     };
     // 有序Map：资源type_index → 读写访问记录
     std::map<std::type_index, ResourceAccess> resource_graph;
 
     // 获取两类系统总数
-    const std::size_t fixed_count      = fixed_rate_systems_.size();
-    const std::size_t compute_count    = compute_systems_.size();
+    const std::size_t fixed_count   = fixed_rate_systems_.size();
+    const std::size_t compute_count = compute_systems_.size();
 
     // 构建资源类型 -> 可读名称映射（消繁模板类型名）
     const auto fixed_resource_labels   = build_resource_label_map(fixed_rate_systems_);
@@ -1156,7 +1154,7 @@ void Scheduler::print_mermaid_data_flow() const {
             return "external";
         }
 
-        const auto& meta   = compute_systems_[idx].system->meta();
+        const auto& meta = compute_systems_[idx].system->meta();
         // has_pub：是否存在输出通道 或 修改共享资源（产生数据输出）
         const bool has_pub = std::any_of(
                                  meta.spsc_channels.begin(), meta.spsc_channels.end(),
@@ -1217,8 +1215,8 @@ void Scheduler::print_mermaid_data_flow() const {
 
     // 工具函数：打印单个系统Mermaid节点
     auto print_system_node = [&](std::size_t idx, bool is_fixed, const char* style) {
-        const auto& meta   = is_fixed ? fixed_rate_systems_[idx].system->meta()
-                                      : compute_systems_[idx].system->meta();
+        const auto& meta = is_fixed ? fixed_rate_systems_[idx].system->meta()
+                                    : compute_systems_[idx].system->meta();
         // E前缀=FixedRate定时系统；C前缀=Compute计算系统
         const char* prefix = is_fixed ? "E" : "C";
         if (is_fixed) {
@@ -1589,20 +1587,19 @@ void Scheduler::print_mermaid_execution_levels() const {
         printf("        direction TB\n");
 
         // 打印层级内所有并行系统，附带输入/输出通道计数
-        for (std::size_t i = 0; i < level.size(); ++i) {
-            const auto sys_idx   = level[i];
-            const auto& name     = compute_systems_[sys_idx].system->meta().name;
-            const auto& meta     = compute_systems_[sys_idx].system->meta();
+        for (const auto sys_idx : level) {
+            const auto& name = compute_systems_[sys_idx].system->meta().name;
+            const auto& meta = compute_systems_[sys_idx].system->meta();
             // 统计该系统读写通道总数
             const auto io_counts = count_channel_io(meta);
 
-            const auto* sys_type    = classify_by_edges(sys_idx);
+            const auto* sys_type = classify_by_edges(sys_idx);
             // 分配绘图样式
             const char* style_class = (strcmp(sys_type, "external") == 0) ? "inputStyle"
                                     : (strcmp(sys_type, "sink") == 0)     ? "outputStyle"
                                                                           : "pipelineStyle";
             // 外部系统额外标记文字
-            const char* extra       = (strcmp(sys_type, "external") == 0) ? " [external]" : "";
+            const char* extra = (strcmp(sys_type, "external") == 0) ? " [external]" : "";
 
             // 节点文本：系统名 + (输入通道数,输出通道数)
             printf(
@@ -1694,39 +1691,47 @@ void Scheduler::print_mermaid_execution_levels() const {
 // 控制台打印完整调度器性能统计（人类可读文本）
 void Scheduler::print_stats() const {
     // 获取当前系统时钟时间戳
-    const auto now            = Clock::now();
+    const auto now = Clock::now();
     // 计算自调度器启动以来总运行秒数
-    const auto elapsed_sec    = std::chrono::duration<double>(now - stats_start_time_).count();
+    const auto elapsed_sec = std::chrono::duration<double>(now - stats_start_time_).count();
     // 原子读取计算循环总执行次数（宽松内存序，仅统计，无需强同步）
     const auto compute_cycles = compute_cycles_.load(std::memory_order_relaxed);
     // 所有计算循环总耗时（纳秒）
-    const auto compute_total  = compute_total_time_ns_.load(std::memory_order_relaxed);
+    const auto compute_total = compute_total_time_ns_.load(std::memory_order_relaxed);
     // 上一轮计算循环单次耗时（纳秒）
-    const auto compute_last   = compute_last_time_ns_.load(std::memory_order_relaxed);
+    const auto compute_last = compute_last_time_ns_.load(std::memory_order_relaxed);
     // 汇总所有定时系统触发下游唤醒总次数
-    const auto notify_total   = sum_notify_counts();
+    const auto notify_total = sum_notify_counts();
 
     printf("\n");
     printf("=== Scheduler Performance (%.1fs) ===\n", elapsed_sec);
 
     // 全局计算循环汇总指标
-    printf("Loop: %-4" PRIu64 " cycles (%.1f Hz)", compute_cycles, compute_cycles / elapsed_sec);
+    printf(
+        "Loop: %-4" PRIu64 " cycles (%.1f Hz)", compute_cycles,
+        static_cast<double>(compute_cycles) / elapsed_sec);
     // 存在执行记录时打印平均耗时、最新单次耗时（转毫秒：ns / 1e6）
     if (compute_cycles > 0) {
         printf(
-            " | avg: %.2f ms | last: %.2f ms", compute_total / 1e6 / compute_cycles,
-            compute_last / 1e6);
+            " | avg: %.2f ms | last: %.2f ms",
+            static_cast<double>(compute_total) / 1e6 / static_cast<double>(compute_cycles),
+            static_cast<double>(compute_last) / 1e6);
     }
     // 全局唤醒总次数、平均唤醒频率
-    printf(" | notifies: %-4" PRIu64 " (%.1f Hz)\n", notify_total, notify_total / elapsed_sec);
+    printf(
+        " | notifies: %-4" PRIu64 " (%.1f Hz)\n", notify_total,
+        static_cast<double>(notify_total) / elapsed_sec);
 
     // 内部工具：打印延迟分位数统计（最小、p50中位数、p95、最大值）
     auto print_latency_stats = [](const auto& latency) {
         // 存在采样数据才输出
         if (latency.sample_count > 0) {
             printf(
-                "   min:%.2f p50:%.2f p95:%.2f max:%.2f ms", latency.min_ns / 1e6,
-                latency.p50_ns / 1e6, latency.p95_ns / 1e6, latency.max_ns / 1e6);
+                "   min:%.2f p50:%.2f p95:%.2f max:%.2f ms",
+                static_cast<double>(latency.min_ns) / 1e6,
+                static_cast<double>(latency.p50_ns) / 1e6,
+                static_cast<double>(latency.p95_ns) / 1e6,
+                static_cast<double>(latency.max_ns) / 1e6);
             printf("\n");
         }
     };
@@ -1752,9 +1757,9 @@ void Scheduler::print_stats() const {
             // 有效记录次数：仅产生数据输出/触发唤醒时才计数
             const auto record_cnt = sys_stats.record_count.load(std::memory_order_relaxed);
             // 计算延迟直方图分位数数据
-            const auto latency    = sys_stats.latency_hist.compute();
+            const auto latency = sys_stats.latency_hist.compute();
             // 实际运行频率 = 有效记录次数 / 总运行时长
-            const auto actual_hz  = record_cnt / elapsed_sec;
+            const auto actual_hz = static_cast<double>(record_cnt) / elapsed_sec;
             // 判断系统是否存在输出通道/修改共享资源（会触发下游唤醒）
             const bool write_mode = counts_written_calls(entry.system->meta());
 
@@ -1782,9 +1787,9 @@ void Scheduler::print_stats() const {
             // 系统run执行总次数
             const auto run_count = sys_stats.run_count.load(std::memory_order_relaxed);
             // 延迟统计
-            const auto latency   = sys_stats.latency_hist.compute();
+            const auto latency = sys_stats.latency_hist.compute();
             // 实际运行频率
-            const auto actual_hz = run_count / elapsed_sec;
+            const auto actual_hz = static_cast<double>(run_count) / elapsed_sec;
 
             printf(
                 "  %-30s@%.1fHz runs:%" PRIu64, entry.system->meta().name.c_str(), actual_hz,
@@ -1816,24 +1821,25 @@ auto Scheduler::get_stats_json() const -> std::string {
     root["runtime_seconds"] = elapsed_sec;
 
     // 填充计算循环全局指标
-    json& compute_json             = root["compute_loop"];
-    compute_json["cycles"]         = cycles;
-    compute_json["frequency_hz"]   = cycles / elapsed_sec;
-    compute_json["avg_time_ms"]    = cycles > 0 ? (total_time / 1e6 / cycles) : 0.0;
-    compute_json["last_time_ms"]   = last_time / 1e6;
+    json& compute_json           = root["compute_loop"];
+    compute_json["cycles"]       = cycles;
+    compute_json["frequency_hz"] = static_cast<double>(cycles) / elapsed_sec;
+    compute_json["avg_time_ms"] =
+        cycles > 0 ? (static_cast<double>(total_time) / 1e6 / static_cast<double>(cycles)) : 0.0;
+    compute_json["last_time_ms"]   = static_cast<double>(last_time) / 1e6;
     compute_json["total_notifies"] = notify_total;
 
     // 内部工具：将完整延迟分位数批量写入JSON对象
     auto add_latency_stats = [](json& sys, const auto& latency, double) {
         sys["sampled_runs"] = latency.sample_count;
-        sys["min_ms"]       = latency.min_ns / 1e6;
-        sys["p50_ms"]       = latency.p50_ns / 1e6;
-        sys["p95_ms"]       = latency.p95_ns / 1e6;
-        sys["p99_ms"]       = latency.p99_ns / 1e6;
-        sys["p999_ms"]      = latency.p999_ns / 1e6;
-        sys["mean_ms"]      = latency.mean_ns / 1e6;
-        sys["max_ms"]       = latency.max_ns / 1e6;
-        sys["stddev_ms"]    = latency.stddev_ns / 1e6;
+        sys["min_ms"]       = static_cast<double>(latency.min_ns) / 1e6;
+        sys["p50_ms"]       = static_cast<double>(latency.p50_ns) / 1e6;
+        sys["p95_ms"]       = static_cast<double>(latency.p95_ns) / 1e6;
+        sys["p99_ms"]       = static_cast<double>(latency.p99_ns) / 1e6;
+        sys["p999_ms"]      = static_cast<double>(latency.p999_ns) / 1e6;
+        sys["mean_ms"]      = static_cast<double>(latency.mean_ns) / 1e6;
+        sys["max_ms"]       = static_cast<double>(latency.max_ns) / 1e6;
+        sys["stddev_ms"]    = static_cast<double>(latency.stddev_ns) / 1e6;
     };
 
     // 统一生成系统JSON数据模板，消除重复循环
@@ -1867,7 +1873,7 @@ auto Scheduler::get_stats_json() const -> std::string {
             sys["notifies"]       = notify_cnt;
             sys["executions"]     = exec_count;
             sys["runs"]           = record_cnt;
-            sys["actual_hz"]      = record_cnt / elapsed_sec;
+            sys["actual_hz"]      = static_cast<double>(record_cnt) / elapsed_sec;
             sys["count_mode"]     = write_mode ? "written_calls" : "run_calls";
         });
 
@@ -1878,7 +1884,7 @@ auto Scheduler::get_stats_json() const -> std::string {
         [elapsed_sec](json& sys, const auto&, const auto& stats) {
             const auto run_count = stats.run_count.load(std::memory_order_relaxed);
             sys["runs"]          = run_count;
-            sys["actual_hz"]     = run_count / elapsed_sec;
+            sys["actual_hz"]     = static_cast<double>(run_count) / elapsed_sec;
         });
 
     // 序列化JSON为字符串返回
@@ -1922,11 +1928,11 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
     }
 
     // 读取配置的运行频率，单位Hz（每秒执行次数）
-    const auto frequency        = ctx.policy.frequency_hz;
+    const auto frequency = ctx.policy.frequency_hz;
     // 绑定当前系统专属的性能统计对象引用，用于记录循环耗时、延迟直方图
-    auto& stats                 = ctx.scheduler->fixed_rate_stats_[ctx.system_index];
+    auto& stats = ctx.scheduler->fixed_rate_stats_[ctx.system_index];
     // 判断当前系统是否属于输出型系统：执行完成后会产生数据传递给下游系统
-    const bool write_mode       = counts_written_calls(ctx.system->meta());
+    const bool write_mode = counts_written_calls(ctx.system->meta());
     // 执行完成统计闭包：统一处理计数、延迟统计、下游唤醒逻辑
     const auto record_execution = [&](const bool written, const std::uint64_t elapsed) {
         // 宽松内存序：仅本地统计自增，无跨线程同步需求，性能最优
@@ -2005,24 +2011,23 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
 // Compute 主线程主循环（调度器主线程阻塞在此函数）
 // 负责轮询就绪系统、自适应空闲退避、支持热更暂停、定时打印性能统计
 // ============================================================================
-void Scheduler::run_compute_loop() 
-{
+void Scheduler::run_compute_loop() {
     // 自适应空闲退避三级策略：自旋 → 让出CPU → 短休眠
     // 设计目标：高负载有任务时零延迟、低负载无任务时降低CPU空转占用
     // 阶段1：短时自旋，CPU空跑，不放弃时间片，唤醒后立刻执行业务，延迟最低
     // 阶段2：std::this_thread::yield() 主动放弃当前CPU时间片，交给其他就绪线程
     // 阶段3：短时间休眠，内核收回CPU，彻底降低整机CPU使用率
-    constexpr std::size_t SPIN_LIMIT  = 100;        // 第一阶段自旋最大累计空闲次数
-    constexpr std::size_t YIELD_LIMIT = 1000;       // 第二阶段yield让出CPU最大累计空闲次数
+    constexpr std::size_t SPIN_LIMIT  = 100;  // 第一阶段自旋最大累计空闲次数
+    constexpr std::size_t YIELD_LIMIT = 1000; // 第二阶段yield让出CPU最大累计空闲次数
     constexpr auto SLEEP_DURATION     = std::chrono::microseconds(10); // 第三阶段休眠时长 10微秒
-    std::size_t idle_count            = 0;          // 连续无任务空闲计数，用于切换三级退避策略
+    std::size_t idle_count            = 0; // 连续无任务空闲计数，用于切换三级退避策略
 
     // 读取配置：是否定时打印性能统计日志
     const auto should_print = config_.print_stats;
     // 统计打印固定间隔：5秒输出一次
-    auto print_interval     = std::chrono::seconds(5);
+    auto print_interval = std::chrono::seconds(5);
     // 记录上一次打印统计的时间点，用于间隔判断
-    auto last_print         = Clock::now();
+    auto last_print = Clock::now();
 
     // 主循环：调度器处于Running运行状态时持续循环调度系统任务
     // [[likely]] 编译器提示：绝大多数情况条件为true，编译器优化分支预测
@@ -2082,7 +2087,7 @@ void Scheduler::run_compute_loop()
             // 延迟计时探针，用于统计单次系统分层执行耗时（纳秒精度）
             primitive::LatencyProbe probe;
             // 根据就绪掩码分层执行对应ECS系统，返回执行结果（包含本轮新产生的延迟就绪掩码）
-            const auto result  = run_compute_selective(ready);
+            const auto result = run_compute_selective(ready);
             // 获取从probe创建到当前的总执行耗时（单位ns）
             const auto elapsed = probe.elapsed_ns();
 
@@ -2142,10 +2147,10 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
         return {};
     }
 
-    std::uint64_t pending_ready = ready_mask;    // 当前等待执行的系统掩码
-    std::uint64_t executed_mask = 0;            // 本轮已执行完成系统掩码
-    std::uint64_t written_mask  = 0;            // 本轮执行后产生输出的系统掩码
-    std::uint64_t deferred_mask = 0;            // 本轮无法执行、延后到下一轮的系统掩码
+    std::uint64_t pending_ready = ready_mask; // 当前等待执行的系统掩码
+    std::uint64_t executed_mask = 0;          // 本轮已执行完成系统掩码
+    std::uint64_t written_mask  = 0;          // 本轮执行后产生输出的系统掩码
+    std::uint64_t deferred_mask = 0;          // 本轮无法执行、延后到下一轮的系统掩码
 
     // 合并新产生的就绪位，已执行过的系统延后执行
     auto enqueue_ready = [&](const std::uint64_t new_bits) {
@@ -2262,7 +2267,8 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
 
 // ============================================================================
 // 依赖拓扑构建核心函数 build_topology_snapshot
-// 7大阶段：数量校验 → 通道采集 → 通道合法性校验 → 构建依赖邻接掩码 → 外部源掩码计算 → Kahn拓扑分层 → 环检测+可达性校验 → 生成唤醒掩码
+// 7大阶段：数量校验 → 通道采集 → 通道合法性校验 → 构建依赖邻接掩码 → 外部源掩码计算 → Kahn拓扑分层
+// → 环检测+可达性校验 → 生成唤醒掩码
 // ============================================================================
 auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapshot, BuildError> {
     const auto n = compute_systems_.size();
@@ -2665,6 +2671,3 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 }
 
 } // namespace talos::scheduler
-
-
-
