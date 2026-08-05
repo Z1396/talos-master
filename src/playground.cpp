@@ -225,4 +225,4 @@ int main() {
             std::chrono::system_clock::now() - start)
             .count());
     return 0;
-}
+}// namespace talos_gimbal
