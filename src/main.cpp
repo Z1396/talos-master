@@ -232,7 +232,7 @@ int main() {
 #endif
 
 /*
-│                       启动期调用链                                    │
+                       启动期调用链                                    
 main.cpp
   ├─ load_config() ───────────────────> RuntimeConfig
   ├─ Scheduler scheduler(cfg) ─────────> Scheduler + World
