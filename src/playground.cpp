@@ -218,7 +218,7 @@ int main() {
         SPDLOG_WARN("send: {}", result.error());
     }
 
-    // ===================== 程序退出清理与统计打印 =====================
+    // ===================== 程序退出清理与统计打印 ===========
     SPDLOG_INFO(
         "shutting down... ({} frames, {}ms)", frame_count,
         std::chrono::duration_cast<std::chrono::milliseconds>(
