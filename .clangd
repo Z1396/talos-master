@@ -24,3 +24,30 @@ Diagnostics:
   ClangTidy:
     Remove:
       - misc-include-cleaner
+
+---
+# Axera NPU后端：依赖AX650专有SDK头文件(ax_engine_api.h等)
+# 当前开发机未安装，CMake通过AXERA_FOUND条件编译排除，clangd报错为误报
+If:
+  PathMatch: "src/fcs/L2_perception/armor/backends/axera\\.(cpp|hpp)"
+Diagnostics:
+  Suppress:
+    - "*"
+
+---
+# TensorRT后端：依赖NVIDIA TensorRT头文件(NvInfer.h)
+# 当前开发机未安装，CMake通过TensorRT_FOUND条件编译排除，clangd报错为误报
+If:
+  PathMatch: "src/fcs/L2_perception/armor/backends/tensor_rt\\.(cpp|hpp)"
+Diagnostics:
+  Suppress:
+    - "*"
+
+---
+# CUDA Letterbox预处理：依赖CUDA Toolkit(__global__等关键字)
+# 当前开发机未安装CUDA，CMake通过CUDA_FOUND条件编译排除，clangd报错为误报
+If:
+  PathMatch: "src/fcs/L2_perception/armor/backends/letterbox\\.cu(h)?"
+Diagnostics:
+  Suppress:
+    - "*"

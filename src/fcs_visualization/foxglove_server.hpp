@@ -98,12 +98,13 @@ template <typename Def>
     // 编译期判断：描述符是否定义传输方式，此处仅占位
     if constexpr (requires { Def::transport; }) {}
 
+    // Def 是模板元编程的类型参数，编译期就确定 Def::is_raw 的布尔常量
     if constexpr (Def::is_raw) {
-        // 二进制原始通道
-        return init_raw_channel<Def>(channels.*(Def::member), context);
+            // 二进制原始通道
+            return init_raw_channel<Def>(channels.*(Def::member), context);
     } else {
-        // 结构化类型通道
-        return init_typed_channel<Def>(channels.*(Def::member), context);
+            // 结构化类型通道
+            return init_typed_channel<Def>(channels.*(Def::member), context);
     }
 }
 
