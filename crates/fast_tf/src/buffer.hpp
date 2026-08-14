@@ -31,28 +31,32 @@ using sample_per_sec = std::size_t;      // 每秒采样点数，缓冲区密度
 
 // ===================== 时序查询插值模式标记空类型（标签分发） =====================
 /**
- * 四种时间戳查找策略，空结构体仅作编译期标签，无运行时开销
+ * @brief 四种时间戳查找策略，空结构体仅作编译期标签，无运行时开销
+ * 标签分发：编译期根据类型走不同lookup分支，运行时无if判断开销
  */
 struct exact_t {};          // 精确匹配：必须时间戳完全相等，否则报错
 struct nearest_t {};        // 就近取值：取前后两个时间戳中距离更近的样本
 struct interpolate_t {};    // 线性插值：按时间比例插值两个相邻样本
 struct clamped_t {};        // 钳位截断：查询时间超出区间时返回首尾样本，不报错
 
-// 全局常量实例，方便调用时直接传入
+// 全局常量实例，方便调用时直接传入，不用写模板参数
+// 示例：buf.lookup(ts, interpolate);
 inline constexpr exact_t exact{};
 inline constexpr nearest_t nearest{};
 inline constexpr interpolate_t interpolate{};
 inline constexpr clamped_t clamped{};
 
 /**
- * @brief 概念约束：限定模板参数只能是上面四种查询模式
+ * @brief concept约束：限定模板参数只能是上面四种查询模式
+ * 如果传入别的类型，编译直接报错，不会等到运行时崩溃
  */
 template <typename Mode>
 concept buffer_lookup_mode = std::same_as<Mode, exact_t> || std::same_as<Mode, nearest_t>
                           || std::same_as<Mode, interpolate_t> || std::same_as<Mode, clamped_t>;
 
 /**
- * @brief 概念约束：缓冲区值类型必须配套实现BufferOps工具集
+ * @brief concept约束：缓冲区值类型必须配套实现BufferOps工具集
+ * requires语法：编译期检查类型是否拥有指定静态函数签名
  * 要求Ops具备三个静态函数：
  *  1. identity()：返回单位初值（零变换/零旋转）
  *  2. interpolate(a,b,ratio)：两个样本按比例插值生成中间值
@@ -69,6 +73,7 @@ concept buffer_value_ops = requires(const T& value, fp_t ratio) {
 /**
  * @brief 缓冲区数据操作基模板，针对不同数据类型做特化实现
  * 对外统一接口：identity / interpolate / is_valid / with_rotation(可选)
+ * 模板特化：不同数学类型，插值算法完全不一样；矩阵LERP；四元数SO3要Slerp流形插值
  */
 template <typename T>
 struct BufferOps;
@@ -97,6 +102,7 @@ struct BufferOps<TransformMatrix<T, From, To>> {
      * @param base 原始变换，平移保持不变
      * @param rot 新RPY旋转角
      * @return 平移不变、旋转更新后的新变换矩阵
+     * 场景：云台转动，底盘不动；只更新旋转，平移直接复用历史值
      */
     static Transform with_rotation(const Transform& base, const math_fuxk::Ros2EulerRotd& rot) {
         const auto translation        = base.translation();
@@ -109,7 +115,7 @@ struct BufferOps<TransformMatrix<T, From, To>> {
 
 /**
  * @brief 特化2：SO3三维旋转群（四元数旋转流形）
- * 使用球面线性插值Slerp，不能直接线性插值矩阵
+ * ❗不能直接线性插值矩阵，必须流形Slerp插值(log‑exp映射)
  */
 template <typename T>
 struct BufferOps<group::SO3<T>> {
@@ -117,8 +123,8 @@ struct BufferOps<group::SO3<T>> {
     static group::SO3<T> identity() { return group::SO3<T>{}; }
 
     /// SO3流形插值：log映射到向量空间插值再exp映射回旋转群
+    /// a.inv()*b：得到a到b的旋转增量；log转为旋转向量；乘以比例；exp转回四元数；左乘a得到插值结果
     static group::SO3<T> interpolate(const group::SO3<T>& a, const group::SO3<T>& b, fp_t ratio) {
-        // a.inv() * b 得到a到b的旋转差，对数映射为角速度向量，缩放后指数还原旋转
         return a * group::SO3<T>::exp(group::SO3<T>::log(a.inv() * b) * ratio);
     }
 
@@ -163,7 +169,7 @@ struct BufferOps<Spherial<T>> {
  */
 template <typename T, sec Range, sample_per_sec Density, typename Ops = BufferOps<T>>
 class Buffer {
-    // 编译期静态校验
+    // 编译期静态断言，编译阶段检查参数合法性
     static_assert(Density > 0, "Density must be greater than 0");
     // 必须实现配套插值/校验操作
     static_assert(buffer_value_ops<Ops, T>, "Buffer ops are not defined for this value type");
@@ -184,10 +190,11 @@ public:
     static constexpr bool is_static             = Range == 0;
     // 缓冲区总容量：静态固定1，动态=时长*每秒采样数
     static constexpr std::size_t capacity_value = is_static ? 1 : Range * Density;
-    // 读写同步锁：TBB自旋读写锁，读多写少场景性能优于互斥锁
+    // 读写同步锁：TBB自旋读写锁，读多写少场景性能优于std::mutex
+    // 大量查询读、少量push写，自旋rw锁非常适合TF场景
     using mutex_type                            = tbb::spin_rw_mutex;
 
-    // 动态缓冲区默认构造
+    // 动态缓冲区默认构造；requires(!is_static) C++20约束：只有动态缓冲区才允许这个构造函数
     Buffer() noexcept requires(!is_static) = default;
 
     /**
@@ -198,12 +205,13 @@ public:
               StoredSample{value, 0}
     } {}
 
-    // 禁用拷贝构造/拷贝赋值：缓冲区包含锁，不可拷贝
+    // 禁用拷贝构造/拷贝赋值：缓冲区包含锁，锁不能拷贝，禁止拷贝整个Buffer对象
     Buffer(const Buffer&)            = delete;
     Buffer& operator=(const Buffer&) = delete;
 
     /**
      * 移动构造：转移另一个缓冲区全部数据、索引、时间戳状态
+     * noexcept判断：底层array移动是否不抛异常
      */
     Buffer(Buffer&& other) noexcept(std::is_nothrow_move_assignable_v<decltype(buffer_)>) {
         move_from(std::move(other));
@@ -227,19 +235,19 @@ public:
      * 逻辑：非法数据直接丢弃；时序倒退丢弃；环形覆盖旧样本，更新首尾时间戳
      */
     void push(timestamp_ns_t timestamp_ns, const T& value) noexcept requires(!is_static) {
-        // 校验数据合法性，非法直接丢弃
+        // 校验数据合法性，非法直接丢弃，不写入缓冲区
         if (!Ops::is_valid(value)) {
             return;
         }
 
-        // 写锁独占访问缓冲区
+        // 写锁，独占访问缓冲区，其他读写阻塞
         mutex_type::scoped_lock lock(mutex_);
-        // 新样本时序早于最新样本，时序回退，直接丢弃
+        // 新样本时序早于最新样本，时序回退，直接丢弃（时间戳必须单调递增）
         if (size_ != 0 && timestamp_ns <= newest_ts_) {
             return;
         }
 
-        // 写入环形缓冲区头部位置
+        // 写入环形缓冲区head_指向的位置
         buffer_[head_] = StoredSample{value, timestamp_ns};
 
         // 空缓冲区：当前样本为最早时间戳
@@ -253,10 +261,10 @@ public:
         head_ = (head_ + 1) % capacity_value;
 
         if (size_ < capacity_value) {
-            // 未满，有效样本数+1
+            // 缓冲区未满，有效样本数+1
             ++size_;
         } else {
-            // 缓冲区已满，覆盖最旧样本，更新最早时间戳为下一个逻辑起点
+            // 缓冲区已满，覆盖最旧样本；更新oldest_ts为下一个逻辑起点
             oldest_ts_ = buffer_[head_].timestamp;
         }
     }
@@ -265,6 +273,7 @@ public:
      * @brief 仅更新旋转、平移复用最新样本的快捷写入接口
      * @param timestamp_ns 新时间戳
      * @param rot 新RPY旋转角
+     * requires约束：只有Ops实现with_rotation才会实例化该函数
      * 适用：云台仅旋转、平移不变场景，减少外部构造完整变换矩阵代码
      */
     template <typename U = T>
@@ -284,15 +293,15 @@ public:
 
     /**
      * @brief 获取缓冲区最新写入的样本
-     * @return 成功返回带时间戳数据；空缓冲区返回错误字符串
+     * @return std::expected<T,string> 成功返回带时间戳数据；空缓冲区返回错误字符串
      */
     [[nodiscard]] std::expected<Timestamped, std::string> latest() const noexcept {
-        // 静态缓冲区固定返回唯一样本
+        // 编译期if constexpr，静态缓冲区直接返回唯一样本
         if constexpr (is_static) {
             return Timestamped{buffer_[0].value, 0};
         }
 
-        // 共享读锁，多线程并发读无阻塞
+        // 共享读锁，false代表读模式；多线程可以同时读，写的时候阻塞所有读
         mutex_type::scoped_lock lock(mutex_, false);
         if (size_ == 0) {
             return std::unexpected(
@@ -307,7 +316,8 @@ public:
      * @brief 核心时序查询函数：按指定模式查找对应时间戳数据
      * @tparam Mode 查询模式 exact/nearest/interpolate/clamped
      * @param ts 目标查询纳秒时间戳
-     * @return 匹配/插值后的时序数据，或错误信息
+     * @return std::expected，匹配/插值后的时序数据，或错误信息
+     * 标签分发：if constexpr编译期分支，不同Mode编译生成不同代码路径，运行时无开销
      */
     template <buffer_lookup_mode Mode>
     [[nodiscard]] std::expected<Timestamped, std::string>
@@ -317,6 +327,7 @@ public:
             return Timestamped{buffer_[0].value, ts};
         }
 
+        // 获取读锁，多线程并发读
         mutex_type::scoped_lock lock(mutex_, false);
         // 缓冲区空直接报错
         if (size_ == 0) {
@@ -331,7 +342,7 @@ public:
 
         // ========== 处理查询时间超出缓冲区区间 ==========
         if constexpr (std::same_as<Mode, clamped_t>) {
-            // clamped模式：截断，超出直接返回首尾，不报错
+            // clamped模式：截断，超出直接返回首尾样本，不报错，不做外推
             if (ts < oldest.timestamp) {
                 return materialize(oldest);
             }
@@ -339,7 +350,7 @@ public:
                 return materialize(newest);
             }
         } else {
-            // 其余模式：超出区间报错，禁止外推
+            // 其余模式：超出区间报错，禁止时间外推（不做未来/过去外插）
             if (ts < oldest.timestamp) {
                 return std::unexpected(
                     fmt::format(
@@ -356,10 +367,10 @@ public:
             }
         }
 
-        // 二分线性查找小于等于ts的最大时间戳样本下标（floor下界）
+        // 线性查找小于等于ts的最大时间戳样本下标（floor下界）
         const std::size_t lower_idx = find_floor_from_latest(ts);
         const auto& lower           = at_logical(lower_idx);
-        // 精确匹配，直接返回
+        // 精确匹配时间戳，直接返回
         if (lower.timestamp == ts) {
             return materialize(lower);
         }
@@ -373,7 +384,7 @@ public:
                     "nearest floor={}ns, buffer range=[{}, {}]",
                     ts, lower.timestamp, oldest.timestamp, newest.timestamp));
         } else if constexpr (std::same_as<Mode, nearest_t>) {
-            // nearest就近模式
+            // nearest就近模式：比较前后两个样本时间差，返回更近的
             if (lower_idx + 1 >= size_) {
                 // 下界已是最后一个样本，无下一个，直接返回
                 return materialize(lower);
@@ -399,7 +410,7 @@ public:
 
             const auto& next = at_logical(lower_idx + 1);
             const auto dt    = next.timestamp - lower.timestamp;
-            // 两个样本时间戳完全相同，直接取下界
+            // 两个样本时间戳完全相同，直接取下界，避免除以0
             if (dt == 0) {
                 return materialize(lower);
             }
@@ -412,11 +423,12 @@ public:
 
     /**
      * @brief 获取缓冲区存储的完整时间区间[最早时间戳, 最新时间戳]
-     * @return 空缓冲区返回nullopt，否则返回pair
+     * @return 空缓冲区返回nullopt，否则返回pair<oldest_ns, newest_ns>
      */
     [[nodiscard]] std::optional<std::pair<timestamp_ns_t, timestamp_ns_t>>
         time_range() const noexcept {
         if constexpr (is_static) {
+            // 静态TF返回(0,0)，上层代码靠这个判断是不是静态变换
             return std::make_pair(timestamp_ns_t{0}, timestamp_ns_t{0});
         }
 
@@ -437,7 +449,7 @@ public:
         return size_;
     }
 
-    /// 缓冲区总固定容量（编译期常量）
+    /// 缓冲区总固定容量（编译期常量，运行时无开销）
     [[nodiscard]] constexpr std::size_t capacity() const noexcept { return capacity_value; }
 
     /// 判断缓冲区是否存满
@@ -499,13 +511,14 @@ private:
      * @param other 待移动的源缓冲区
      */
     void move_from(Buffer&& other) noexcept(std::is_nothrow_move_assignable_v<decltype(buffer_)>) {
+        // 锁住源对象，防止移动过程别的线程读写other
         typename mutex_type::scoped_lock lock(other.mutex_);
         buffer_    = std::move(other.buffer_);
         head_      = other.head_;
         size_      = other.size_;
         oldest_ts_ = other.oldest_ts_;
         newest_ts_ = other.newest_ts_;
-        // 置空原对象状态
+        // 置空原对象状态，被移动后的对象处于合法可析构状态
         reset_moved_from(other);
     }
 
@@ -514,6 +527,7 @@ private:
      */
     void move_assign_from(Buffer&& other) noexcept(
         std::is_nothrow_move_assignable_v<decltype(buffer_)>) {
+        // 同时锁住两个对象
         typename mutex_type::scoped_lock this_lock(mutex_);
         typename mutex_type::scoped_lock other_lock(other.mutex_);
         buffer_    = std::move(other.buffer_);
@@ -545,7 +559,8 @@ private:
 
     /**
      * @brief 逻辑下标转环形数组物理下标
-     * 逻辑下标0 = 最旧样本；逻辑下标size-1 = 最新样本
+     * 逻辑下标0 = 最旧样本；逻辑下标size‑1 = 最新样本
+     * 环形数组head_是写入位置；计算逻辑下标对应的物理数组索引
      */
     [[nodiscard]] const StoredSample& at_logical(std::size_t idx) const {
         const std::size_t physical = (head_ + capacity_value - size_ + idx) % capacity_value;
@@ -554,7 +569,7 @@ private:
 
     /**
      * @brief 从最新样本向前线性查找第一个 <= ts 的样本下标（floor下界）
-     * 时序数据严格递增，样本量小线性遍历性能足够
+     * 时序数据严格递增，缓冲区样本数量不大，线性遍历性能足够，不需要二分树
      */
     [[nodiscard]] std::size_t find_floor_from_latest(timestamp_ns_t ts) const {
         std::size_t idx = size_ - 1;
@@ -564,18 +579,19 @@ private:
         return idx;
     }
 
-    // 底层固定数组环形存储
+    // 底层固定数组环形存储；std::array栈/静态存储，不是vector堆
     std::array<StoredSample, capacity_value> buffer_{};
     std::size_t head_         = 0;      // 环形写入头指针（下一次写入位置）
     std::size_t size_         = 0;      // 当前有效样本总数
     timestamp_ns_t oldest_ts_ = 0;      // 缓冲区最旧样本时间戳
     timestamp_ns_t newest_ts_ = 0;      // 缓冲区最新样本时间戳
-    mutable mutex_type mutex_;          // 读写自旋锁，const函数也可加锁 mutable
+    mutable mutex_type mutex_;          // 读写自旋锁；mutable：const成员函数也可以上锁
 };
 
 /**
  * @brief 静态单样本缓冲区别名
  * Range=0, Density=1，仅保存固定一个变换/旋转，无视时序插值查询
+ * 用来存静态TF：相机外参、传感器安装偏移
  */
 template <typename T, typename Ops = BufferOps<T>>
 using StaticBuffer = Buffer<T, 0, 1, Ops>;

@@ -627,35 +627,48 @@ public:
      * @brief 移入资源，会校验资源结构是否允许修改
      * 阶段：仅初始化阶段可用，冻结后禁止调用
      */
-    // 模板函数实现
+    /// @brief 把一个资源对象移入全局资源池（接收左值/右值引用，完美转发）
+    /// @tparam T 传入资源的原始带修饰类型（可能带 & / const / &&）
     template <typename T>
     void insert_resource(T&& resource) {
-        // 1. 去除T的const/volatile/引用，拿到纯净类型U
+        // 1. std::remove_cvref_t<T>：剥除 const、volatile、&、&&，拿到【纯净裸类型U】
+        // 例：传入 const Config&& → U = Config；传入 Track& → U = Track
         using U = std::remove_cvref_t<T>;
-        // 2. 打印日志：注册资源类型名
+
+        // 2. 打印调试日志，输出原始传入类型T的可读名字（demangle还原C++编译后的typeid名字）
         SPDLOG_DEBUG("register {}", demangle(typeid(T).name()));
-        // 3. 保证该类型资源的存储结构已初始化
+
+        // 3. 确保类型U对应的存储结构/哈希槽已经分配、初始化（类型单例池前置检查）
+        //    内部一般是：如果U还没注册过，新建对应的存储；已存在则跳过
         ensure_resource_structure_mutable<U>();
-        // 4. 在resources_容器中emplace构造/转发存入资源，忽略返回值
-        /*2.1 为什么要加 .template？
-        resources_ 是依赖模板参数的容器（异构容器，类似 std::any
-        存储、多类型哈希池），编译器在解析阶段分不清： emplace 是成员模板，还是 emplace 乘号 <。
-        模板类成员调用成员模板时，必须加 .template 告诉编译器：后面的 <>
-        是模板参数列表，不是小于号。 语法固定格式： 对象.template 模板函数<类型>(参数);
-        resources_.template emplace<U>(args);
-        不加会编译报错，编译器语法解析歧义。*/
+
+        // 4. 核心：异构容器 resources_ 调用成员模板 emplace<U>，完美转发resource
+        //    static_cast<void>(...)：丢弃emplace返回值（不接收引用，仅做存入动作）
+        //    ✅ .template 语法重点（你注释里提到的歧义问题）
+        //       resources_ 是依赖模板的类，编译器预解析分不清：
+        //       emplace < U >  → 【模板函数调用】 还是 emplace 小于 U
+        //       规则：依赖类型的成员模板调用，必须写 `.template` / `->template`
+        //    ✅ std::forward<T>(resource)：保持值类别（左值继续拷贝、右值走移动）
         static_cast<void>(resources_.template emplace<U>(std::forward<T>(resource)));
     }
 
     /**
-     * @brief 原位构造全局资源
-     */
+    * @brief 在资源池【原地构造】资源（推荐优先用这个，减少临时对象/拷贝）
+    * @tparam T 想要存入的**最终纯净资源类型**（不带引用）
+    * @tparam Args... T构造函数需要的参数包
+    * @param args 传给T构造函数的参数包，完美转发
+    * @return T& 返回资源池内实例的引用（[[nodiscard]]强制使用者接收，防止误丢返回值）
+    */
     template <typename T, typename... Args>
     [[nodiscard]] T& emplace_resource(Args&&... args) {
+        // 同样：剔除T可能带的cv/ref，得到纯净类型U（防御性写法）
         using U = std::remove_cvref_t<T>;
+
+        // 前置：保证U的存储槽就绪
         ensure_resource_structure_mutable<U>();
-        /*2. std::forward<Args>(args)... 空包展开会发生什么
-        当 Args... 为空时，std::forward<Args>(args)... 展开后完全消失，无任何代码。*/
+
+        // 原地emplace：直接把参数包转发进容器，在resources_内部内存构造U对象
+        // std::forward<Args>(args)... 参数包展开；Args为空时，展开为空，直接调用U默认构造
         return resources_.template emplace<U>(std::forward<Args>(args)...);
     }
 

@@ -29,7 +29,7 @@ namespace fcs::visualization {
 // std::optional 语义：通道可能未初始化，取值前需判断是否有效
 // ============================================================================
 // 类型别名简化写法，统一包装为 std::optional，代表：该通道可选创建、可空
-// 3D场景绘制通道：立方体、线条、标记、网格、模型等3D可视化元素
+// 3D场景绘制通道：立方体、线条、标记、网格、模型等3D可视化元素：立方体、线条、包围盒
 using SceneCh  = std::optional<::foxglove::schemas::SceneUpdateChannel>;
 // 压缩图像通道：JPG/PNG 单帧图片，相机画面快照
 using ImageCh  = std::optional<::foxglove::schemas::CompressedImageChannel>;
@@ -521,43 +521,60 @@ struct FoxgloveMsg {
 // 简化业务代码书写，不用每次写 FoxgloveMsg<scene_def> 冗长模板
 // 直接 using SceneMessage 即用，语义清晰、可读性高
 // ============================================================================
-using SceneMessage                = FoxgloveMsg<scene_def>;
-using TrackSceneMessage           = FoxgloveMsg<track_scene_def>;
-using LdmTrackSceneMessage        = FoxgloveMsg<ldm_track_scene_def>;
-using GimbalSceneMessage          = FoxgloveMsg<gimbal_scene_def>;
-using AssociationSceneMessage     = FoxgloveMsg<association_scene_def>;
-using MpcPredictionSceneMessage   = FoxgloveMsg<mpc_prediction_scene_def>;
-using RuneSceneMessage            = FoxgloveMsg<rune_scene_def>;
-using RuneEkfSceneMessage         = FoxgloveMsg<rune_ekf_scene_def>;
-using GroundTruthSceneMessage     = FoxgloveMsg<ground_truth_scene_def>;
-using ImageMessage                = FoxgloveMsg<img_def>;
-using VideoMessage                = FoxgloveMsg<video_def>;
-using CalibrationImageMessage     = FoxgloveMsg<calibration_img_def>;
-using BinaryImageMessage          = FoxgloveMsg<binary_img_def>;
-using PatternImageMessage         = FoxgloveMsg<pattern_img_def>;
-using RuneArrowImageMessage       = FoxgloveMsg<rune_arrow_img_def>;
-using RuneTargetImageMessage      = FoxgloveMsg<rune_target_img_def>;
-using RuneCenterImageMessage      = FoxgloveMsg<rune_center_img_def>;
-using EkfHeatmapMessage           = FoxgloveMsg<ekf_heatmap_def>;
-using DebugLightsMessage          = FoxgloveMsg<debug_lights_def>;
-using DebugArmorsMessage          = FoxgloveMsg<debug_armors_def>;
-using MeasurementMessage          = FoxgloveMsg<measurement_def>;
-using TargetMessage               = FoxgloveMsg<target_def>;
-using TargetSelectionTraceMessage = FoxgloveMsg<target_selection_trace_def>;
-using GimbalCmdMessage            = FoxgloveMsg<cmd_gimbal_def>;
-using PerfStatsMessage            = FoxgloveMsg<perf_stats_def>;
-using ResourceMessage             = FoxgloveMsg<resources_def>;
-using MpcTrajectoryMessage        = FoxgloveMsg<mpc_traj_def>;
-using RuneDebugMessage            = FoxgloveMsg<rune_debug_def>;
-using PnPSolverMessage            = FoxgloveMsg<pnp_solver_def>;
-using NNConfidenceMessage         = FoxgloveMsg<nn_confidence_def>;
-using EnergyMeterMessage          = FoxgloveMsg<energy_meter_def>;
-using LdmDetectionMessage         = FoxgloveMsg<ldm_detection_def>;
-using LdmMeasurementMessage       = FoxgloveMsg<ldm_measurement_def>;
-using LdmStateMessage             = FoxgloveMsg<ldm_state_def>;
-using GroundTruthMessage          = FoxgloveMsg<ground_truth_def>;
-using TfMessage                   = FoxgloveMsg<tf_def>;
-using LogMessage                  = FoxgloveMsg<log_def>;
+// Foxglove 可视化消息类型别名定义
+// 模板 FoxgloveMsg<T>：基于自定义 protobuf 定义 T，封装成可直接发送给 Foxglove Studio 的消息包装类型
+// scene_def / track_scene_def ... 全部是 protobuf 消息结构体，对应每一类调试可视化数据
+
+// ===================== 场景3D可视化消息（Foxglove 3D场景面板） =====================
+using SceneMessage                = FoxgloveMsg<scene_def>;                  // 通用3D场景：点、线、立方体、标记等基础调试绘制
+using TrackSceneMessage           = FoxgloveMsg<track_scene_def>;            // 目标跟踪3D场景：跟踪框、历史轨迹
+using LdmTrackSceneMessage        = FoxgloveMsg<ldm_track_scene_def>;        // LDM能量机关专用跟踪3D可视化
+using GimbalSceneMessage          = FoxgloveMsg<gimbal_scene_def>;            // 云台3D可视化：云台坐标系、姿态锥、指向射线
+using AssociationSceneMessage     = FoxgloveMsg<association_scene_def>;     // 数据关联可视化：检测与目标匹配连线
+using MpcPredictionSceneMessage   = FoxgloveMsg<mpc_prediction_scene_def>;   // MPC预测轨迹3D绘制，预测未来弹丸/机器人运动
+using RuneSceneMessage            = FoxgloveMsg<rune_scene_def>;              // 能量机关3D场景：扇叶、机关本体标记
+using RuneEkfSceneMessage         = FoxgloveMsg<rune_ekf_scene_def>;         // 能量机关EKF滤波状态3D可视化
+using GroundTruthSceneMessage     = FoxgloveMsg<ground_truth_scene_def>;     // 真值3D场景，仿真/标定的真实目标位置
+
+// ===================== 图像类消息（Foxglove Image面板，图像流叠加调试绘制） =====================
+using ImageMessage                = FoxgloveMsg<img_def>;                     // 原始相机图像
+using VideoMessage                = FoxgloveMsg<video_def>;                   // 视频流编码图像
+using CalibrationImageMessage     = FoxgloveMsg<calibration_img_def>;         // 标定专用图像，角点、标定标记绘制
+using BinaryImageMessage          = FoxgloveMsg<binary_img_def>;              // 二值化处理之后的掩码图像
+using PatternImageMessage         = FoxgloveMsg<pattern_img_def>;             // 模板匹配/图案检测输出图像
+using RuneArrowImageMessage       = FoxgloveMsg<rune_arrow_img_def>;          // 能量机关：箭头识别叠加图像
+using RuneTargetImageMessage      = FoxgloveMsg<rune_target_img_def>;         // 能量机关：目标扇叶标记叠加图像
+using RuneCenterImageMessage      = FoxgloveMsg<rune_center_img_def>;          // 能量机关：中心定位可视化图像
+using EkfHeatmapMessage           = FoxgloveMsg<ekf_heatmap_def>;             // EKF置信热力图，概率热图输出
+
+// ===================== 装甲、检测、测量调试消息 =====================
+using DebugLightsMessage          = FoxgloveMsg<debug_lights_def>;            // 装甲灯条原始检测结果
+using DebugArmorsMessage          = FoxgloveMsg<debug_armors_def>;            // 装甲板检测结果：框、角点、置信度
+using MeasurementMessage          = FoxgloveMsg<measurement_def>;             // 测量输出：PnP解算位姿、距离观测值
+using TargetMessage               = FoxgloveMsg<target_def>;                    // 最终输出目标：敌方装甲目标状态
+using TargetSelectionTraceMessage = FoxgloveMsg<target_selection_trace_def>;  // 目标选择过程追踪日志，调试选靶逻辑
+
+// ===================== 控制、规划、MPC 消息 =====================
+using GimbalCmdMessage            = FoxgloveMsg<cmd_gimbal_def>;              // 云台控制指令，yaw/pitch输出指令
+using MpcTrajectoryMessage        = FoxgloveMsg<mpc_traj_def>;                // MPC输出完整规划轨迹点序列
+
+// ===================== 能量机关LDM模块专用调试消息 =====================
+using RuneDebugMessage            = FoxgloveMsg<rune_debug_def>;               // 能量机关综合调试信息
+using LdmDetectionMessage         = FoxgloveMsg<ldm_detection_def>;           // LDM能量机关原始检测输出
+using LdmMeasurementMessage       = FoxgloveMsg<ldm_measurement_def>;         // LDM观测值（角度、距离）
+using LdmStateMessage             = FoxgloveMsg<ldm_state_def>;               // LDM滤波器内部状态变量输出
+
+// ===================== 算法模块调试消息 =====================
+using PnPSolverMessage            = FoxgloveMsg<pnp_solver_def>;               // PnP求解器调试：迭代、残差、位姿结果
+using NNConfidenceMessage         = FoxgloveMsg<nn_confidence_def>;            // 神经网络推理置信度输出
+using EnergyMeterMessage          = FoxgloveMsg<energy_meter_def>;            // 能量值、弹丸计数等计数值调试
+
+// ===================== 系统、真值、TF、日志、性能统计 =====================
+using GroundTruthMessage          = FoxgloveMsg<ground_truth_def>;             // 真值数据，仿真给出真实位姿
+using TfMessage                   = FoxgloveMsg<tf_def>;                       // 坐标变换树 TF，各个坐标系转换关系
+using LogMessage                  = FoxgloveMsg<log_def>;                      // 文本日志，打印到foxglove控制台
+using PerfStatsMessage            = FoxgloveMsg<perf_stats_def>;               // 性能统计：各模块耗时、帧率
+using ResourceMessage             = FoxgloveMsg<resources_def>;                // 系统资源：CPU内存占用
 
 // ============================================================================
 // 七、载荷分发器 PayloadLogger

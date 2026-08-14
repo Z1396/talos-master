@@ -2271,73 +2271,93 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
 // 7大阶段：数量校验 → 通道采集 → 通道合法性校验 → 构建依赖邻接掩码 → 外部源掩码计算 → Kahn拓扑分层
 // → 环检测+可达性校验 → 生成唤醒掩码
 // ============================================================================
+// 函数定义：成员const函数 → 承诺本函数不会修改Scheduler对象本身
+// auto 推导返回值，-> 后置返回类型写法
+// std::expected<T,E>【C++23语法】：要么返回T成功值，要么返回E错误
 auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapshot, BuildError> {
+    // 取出计算系统数组长度；后面要用uint64_t位掩码，因此上限64
     const auto n = compute_systems_.size();
+    // 构造空拓扑快照对象，最终要返回给调度器运行时使用
     TopologySnapshot snapshot;
 
-    // 限制最多64个Compute系统（uint64_t位掩码存储依赖）
+    // 硬上限校验：最多64个compute系统，因为依赖关系用uint64_t（64bit）存储
     if (n > TooManyComputeSystemsError::max_count) {
+        // std::unexpected【C++23】：构造一个“失败”的expected，携带错误结构体
         return std::unexpected(TooManyComputeSystemsError{.count = n});
     }
 
     // ========================================================================
     // 阶段1：遍历所有系统，采集全部通道读写端点
     // ========================================================================
-    // 判断通道是否为写者
+    // 【捕获lambda】判断通道类型是否是写者：spsc写 / spmc写
     const auto is_writer = [](channel_kind k) {
         return k == channel_kind::spsc_writer || k == channel_kind::spmc_writer;
     };
 
-    // 判断通道是否SPSC类型
+    // lambda：判断通道是不是SPSC系列（单生产者单消费者）
     const auto is_spsc = [](channel_kind k) {
         return k == channel_kind::spsc_reader || k == channel_kind::spsc_writer;
     };
 
-    // 通道端点：标记属于定时/计算系统+下标
+    // 结构体：ChannelEndpoint = 一个系统对某条通道的一次读写使用记录
     struct ChannelEndpoint {
-        std::size_t index;
-        bool is_fixed_rate;
+        std::size_t index;        // 系统在fixed_rate_systems_ / compute_systems_数组里的下标
+        bool is_fixed_rate;       // true=定时系统，false=计算系统
     };
 
-    // 单条通道全量读写使用记录
+    // 结构体：单条通道的全局使用记录表
     struct ChannelUsage {
-        channel_kind kind = channel_kind::local;
-        std::vector<ChannelEndpoint> writers;
-        std::vector<ChannelEndpoint> readers;
-        std::string first_system; // 首次注册该通道的系统名，用于冲突报错
+        channel_kind kind = channel_kind::local;       // 通道类型spsc/spmc/local
+        std::vector<ChannelEndpoint> writers;          // 所有写这条通道的系统端点
+        std::vector<ChannelEndpoint> readers;           // 所有读这条通道的系统端点
+        std::string first_system;                      // 第一个注册该通道的系统名，报错提示用
     };
 
+    // std::map：key=通道唯一键(类型+topic)，value=这条通道的读写使用情况
     std::map<ChannelKey, ChannelUsage> channels;
 
-    // 格式化端点所属系统名称，报错时打印
+    // 捕获lambda：把ChannelEndpoint转成人类可读字符串，报错日志打印
+    // [&] 【lambda捕获】引用捕获外层所有局部变量
     auto endpoint_name = [&](const ChannelEndpoint endpoint) -> std::string {
+        // 分支：区分是定时系统数组 还是 计算系统数组，取出系统名字
         const auto& name = endpoint.is_fixed_rate
                              ? fixed_rate_systems_[endpoint.index].system->meta().name
                              : compute_systems_[endpoint.index].system->meta().name;
+        // 定时系统额外标注后缀，方便日志区分
         if (endpoint.is_fixed_rate) {
             return fmt::format("{} (fixed_rate)", name);
         }
         return name;
     };
 
-    // 遍历一组系统的所有通道，填充全局通道记录表，校验SPSC/SPMC类型冲突
+    // 【高阶捕获lambda】process_system_channels：批量扫描一组系统（fixed组 / compute组）
+    // 入参systems：系统数组；is_fixed_rate标记这组是不是定时系统
+    // 返回BuildResult（本质expected<void, BuildError>，代表成功/失败）
     auto process_system_channels = [&](const auto& systems,
                                        const bool is_fixed_rate) -> BuildResult {
+        // 遍历本组所有系统，i是数组下标
         for (std::size_t i = 0; i < systems.size(); ++i) {
+            // 拿到系统元信息meta：里面预先收集好这个系统声明的spsc/spmc通道列表
             const auto& meta = systems[i].system->meta();
 
-            // 处理单条通道，校验类型冲突，写入读写端点
+            // 【嵌套lambda】处理单一条通道，校验+注册读写端点
+            // expect_spsc=true代表当前通道是SPSC，false=SPMC
             auto process_channel = [&](const ChannelMeta& ch,
                                        const bool expect_spsc) -> BuildResult {
+                // 构造通道唯一主键：通道类型 + topic名，同一个topic才能匹配
                 ChannelKey key{ch.type, ch.topic};
+                // 找到/自动创建该通道的使用记录（map[]不存在则默认构造）
                 auto& usage              = channels[key];
+                // 判断这条通道之前有没有注册过读写端点
                 const bool has_endpoints = !usage.writers.empty() || !usage.readers.empty();
 
-                // 通道已存在，校验SPSC/SPMC类型是否统一
+                // 如果通道已经存在，校验：不能同topic混用SPSC/SPMC
                 if (has_endpoints) {
+                    // expect_spsc是当前系统预期的类型；usage.kind是之前登记的类型
                     const auto is_expected_kind =
                         expect_spsc ? is_spsc(usage.kind) : !is_spsc(usage.kind);
                     if (!is_expected_kind) {
+                        // 类型冲突，返回错误
                         return std::unexpected(
                             ChannelKindConflict{
                                 .key           = ChannelKeyInfo(ch.type, ch.topic, expect_spsc),
@@ -2346,55 +2366,61 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                             });
                     }
                 } else {
-                    // 首次注册该通道，记录类型与来源系统
+                    // 首次见到这个通道：记录通道类型、第一个注册的系统名称
                     usage.kind         = ch.kind;
                     usage.first_system = meta.name;
                 }
 
+                // 构造当前系统的端点记录
                 const ChannelEndpoint endpoint{
                     .index         = i,
                     .is_fixed_rate = is_fixed_rate,
                 };
-                // 区分写入者/读者列表
+                // 判断是写者还是读者，推入对应vector
                 if (is_writer(ch.kind)) {
                     usage.writers.push_back(endpoint);
                 } else {
                     usage.readers.push_back(endpoint);
                 }
+                // 成功，返回无错误的expected<void>
                 return {};
             };
 
-            // 处理SPSC通道组
+            // 循环处理当前系统所有SPSC通道
             for (const auto& ch : meta.spsc_channels) {
+                // 调用嵌套lambda；如果返回失败，直接向上传递错误
                 if (auto result = process_channel(ch, true); !result) {
                     return result;
                 }
             }
-            // 处理SPMC通道组
+            // 循环处理当前系统所有SPMC通道
             for (const auto& ch : meta.spmc_channels) {
                 if (auto result = process_channel(ch, false); !result) {
                     return result;
                 }
             }
         }
+        // 本组系统全部扫描完毕，无错误
         return {};
     };
 
-    // 先遍历定时系统通道，再遍历计算系统通道
+    // 先扫描定时系统组（fixed_rate）
     if (auto result = process_system_channels(fixed_rate_systems_, true); !result) {
+        // 把内部错误向上抛出
         return std::unexpected(result.error());
     }
+    // 再扫描计算系统组（compute）
     if (auto result = process_system_channels(compute_systems_, false); !result) {
         return std::unexpected(result.error());
     }
 
     // ========================================================================
     // 阶段2：通道强约束合法性校验（报错阻断构建）
-    // 1. 通道多写者  2.SPSC多读者  3.只有读者无写者
-    // 仅计算系统无读者写者输出警告，不阻断
     // ========================================================================
+    // lambda：批量把端点列表转为系统名字vector，用于报错信息
     auto collect_endpoint_names = [&](const std::vector<ChannelEndpoint>& endpoints) {
         std::vector<std::string> names;
+        // 预分配内存，减少扩容开销
         names.reserve(endpoints.size());
         for (const auto endpoint : endpoints) {
             names.push_back(endpoint_name(endpoint));
@@ -2402,8 +2428,11 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
         return names;
     };
 
+    // 遍历所有登记过的通道，执行静态契约检查
     for (const auto& [key, usage] : channels) {
-        // 错误1：任意通道存在多个写者，直接报错
+        // 【结构化绑定 C++17语法】auto& [key,usage] 直接解pair的first/second
+
+        // 规则1：任何通道不允许多写者
         if (usage.writers.size() > 1) {
             return std::unexpected(
                 MultipleWritersError{
@@ -2412,7 +2441,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                 });
         }
 
-        // 错误2：SPSC通道多个读者，单生产者单消费者规范不允许
+        // 规则2：SPSC通道不允许多读者（单生产者单消费者）
         if (is_spsc(usage.kind) && usage.readers.size() > 1) {
             return std::unexpected(
                 MultipleReadersError{
@@ -2421,7 +2450,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                 });
         }
 
-        // 错误3：通道只有读者，无任何写者，数据无来源
+        // 规则3：只有读者、没有写者 → 孤儿读者，没有数据源，直接报错
         if (usage.writers.empty() && !usage.readers.empty()) {
             return std::unexpected(
                 OrphanedReaderError{
@@ -2430,7 +2459,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                 });
         }
 
-        // 警告：计算系统写者、无任何读者（定时系统写者无读者合法，作为周期数据源）
+        // 软警告（不阻断）：计算系统写通道，但没人读；定时系统写而无读者合法
         if (!usage.writers.empty() && usage.readers.empty() && !usage.writers[0].is_fixed_rate) {
             SPDLOG_WARN(
                 "[WARN] Channel has writer '{}' but no readers\n",
@@ -2440,27 +2469,33 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 
     // ========================================================================
     // 阶段3：构建计算系统间依赖邻接掩码、入度数组（仅计算系统互相依赖）
-    // adj_mask[i] = i执行完成后可唤醒的下游系统位掩码
-    // in_degree[i] = i的前置依赖系统总数，用于Kahn拓扑排序
+    // adj_mask[i] = uint64_t位掩码：bitN=1 → 系统i跑完可以唤醒系统N
+    // in_degree[i] = 系统i剩余未完成的前置依赖数量，Kahn拓扑排序使用
     // ========================================================================
     std::vector<std::uint64_t> adj_mask(n, 0);
     std::vector<std::size_t> in_degree(n, 0);
 
+    // 遍历所有通道，建立【计算系统→计算系统】依赖边
     for (const auto& [key, usage] : channels) {
+        // 没有写者 或 没有读者 → 不存在依赖，跳过
         if (usage.writers.empty() || usage.readers.empty()) {
             continue;
         }
 
+        // 取唯一写者（前面已经校验最多1个写者）
         const auto writer = usage.writers[0];
-        // 定时系统写者不参与计算系统拓扑分层，跳过
+        // 如果写者是定时系统，不属于compute图节点，不加入拓扑依赖
         if (writer.is_fixed_rate) {
             continue;
         }
 
-        // 遍历所有计算系统读者，建立依赖边
+        // 遍历这条通道所有读者
         for (const auto reader : usage.readers) {
+            // 只关心【计算系统读者】，排除定时系统；禁止自依赖
             if (!reader.is_fixed_rate && writer.index != reader.index) {
+                // 把reader.index对应的bit置1
                 const std::uint64_t bit = 1UL << reader.index;
+                // 防重复建边：避免in_degree多次累加同一个依赖
                 if ((adj_mask[writer.index] & bit) == 0) {
                     adj_mask[writer.index] |= bit;
                     ++in_degree[reader.index];
@@ -2469,25 +2504,27 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
         }
     }
 
-    // 计算外部触发源掩码：两类可主动唤醒计算系统的源头
-    // 1. 外部IO触发系统 as_external_compute()  2.可唤醒下游的定时系统写者
+    // 外部触发源掩码：不需要其他compute系统唤醒、可以主动启动依赖链的系统
     std::uint64_t external_source_mask = 0;
+    // 第一类外部源：标记as_external_compute()的计算系统（外部IO信号触发）
     for (std::size_t i = 0; i < n; ++i) {
         if (compute_systems_[i].system->as_external_compute() != nullptr) {
             external_source_mask |= (1ULL << i);
         }
     }
+    // 第二类外部源：开启notifies的定时系统写者，可以主动唤醒下游compute系统
     for (const auto& [key, usage] : channels) {
         if (usage.writers.empty() || usage.readers.empty()) {
             continue;
         }
 
         const auto writer = usage.writers[0];
-        // 仅可唤醒下游的定时系统才作为外部源
+        // 必须是定时系统，并且policy.notifies=true（才具备唤醒能力）
         if (!writer.is_fixed_rate || !fixed_rate_systems_[writer.index].policy.notifies) {
             continue;
         }
 
+        // 这条定时通道的所有计算读者，加入外部源掩码
         for (const auto reader : usage.readers) {
             if (!reader.is_fixed_rate) {
                 external_source_mask |= (1ULL << reader.index);
@@ -2497,12 +2534,12 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 
     // ========================================================================
     // 阶段4：Kahn拓扑排序，生成并行执行层级levels_
-    // 同层级系统无依赖，可多核并行执行
+    // levels内同一层的系统互相无依赖，可以多核并行执行
     // ========================================================================
     snapshot.levels.clear();
     std::vector<std::size_t> current_level;
 
-    // 初始入度为0的系统为第一层
+    // 初始化：所有入度=0的系统，作为第一层（无前置依赖）
     for (std::size_t i = 0; i < n; ++i) {
         if (in_degree[i] == 0) {
             current_level.push_back(i);
@@ -2510,128 +2547,188 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     }
 
     std::size_t processed = 0;
+    // Kahn主循环：逐层处理
     while (!current_level.empty()) {
+        // 当前层级存入快照
         snapshot.levels.push_back(current_level);
         processed += current_level.size();
 
         std::vector<std::size_t> next_level;
         next_level.reserve(compute_systems_.size());
-        // 遍历当前层级所有节点，减少下游入度
+        // 遍历当前层所有节点，释放下游依赖
         for (std::size_t node : current_level) {
             std::uint64_t neighbors = adj_mask[node];
+            // 【位运算循环】遍历掩码里所有为1的bit
             while (neighbors) {
+                // std::countr_zero【C++20】：unsigned整数，统计末尾连续0的个数 → 拿到最低置1bit下标
                 const std::size_t neighbor = std::countr_zero(neighbors);
+                // 清除最低位1：经典bit trick
                 neighbors &= neighbors - 1;
-                // 下游依赖全部满足，加入下一层
+                // 下游入度减一；入度归零 → 全部前置依赖就绪，加入下一层
                 if (--in_degree[neighbor] == 0) {
                     next_level.push_back(neighbor);
                 }
             }
         }
+        // 移动语义【std::move】：转移vector所有权，不拷贝内存
         current_level = std::move(next_level);
     }
 
     // ========================================================================
     // 阶段5：环检测
-    // Kahn处理节点总数 < 总系统数 → 存在依赖环，DFS遍历提取环路报错
+    // Kahn特性：处理过节点总数 < 总节点数 → 图存在环（循环依赖，永远跑不完）
+    // 用DFS回溯找到环路，收集系统名用于报错
     // ========================================================================
+        // Kahn拓扑排序后校验：processed是成功处理的节点总数
+    // 如果处理完的节点数 < 总compute系统数量n → 说明图里存在环（循环依赖）
     if (processed < n) {
+        // 保存检测到的环路系统名称，用于报错打印
         std::vector<std::string> cycle;
 
+        // 标记节点是否被DFS访问过（全局访问标记）
         std::vector visited(n, false);
+        // 标记节点是否在当前递归DFS栈里（核心：用来判断回边，区分普通后向边和环）
         std::vector in_stack(n, false);
+        // 记录当前DFS正在走的路径（节点下标数组），找到环后截取这段路径
         std::vector<std::size_t> path;
 
-        // DFS深度优先搜索查找环路
+        // 【语法】std::function 包装lambda，允许lambda内部递归调用自己；原生匿名lambda不能直接递归
+        // 签名：入参node=系统下标，返回bool=true代表找到环
         std::function<bool(std::size_t)> find_cycle = [&](const std::size_t node) -> bool {
+            // 当前节点标记为已访问
             visited[node]  = true;
+            // 当前节点压入递归栈标记
             in_stack[node] = true;
+            // 当前节点加入DFS路径栈
             path.push_back(node);
 
+            // adj_mask[node]：当前节点下游所有依赖节点的uint64位掩码
             std::uint64_t neighbors = adj_mask[node];
+            // 循环：遍历掩码里所有bit=1的下游节点
             while (neighbors) {
+                // 【语法】std::countr_zero C++20：求无符号数末尾连续0个数，快速拿到最低置1bit的下标
                 const std::size_t neighbor = std::countr_zero(neighbors);
+                // 【语法】经典bit trick：neighbors & (neighbors-1) → 清除最低位的1，迭代遍历所有置位bit
                 neighbors &= neighbors - 1;
 
+                // 情况1：下游节点还没访问过 → 继续递归DFS
                 if (!visited[neighbor]) {
+                    // 递归搜索子节点；一旦子分支找到环，直接向上传递true
                     if (find_cycle(neighbor)) {
                         return true;
                     }
-                } else if (in_stack[neighbor]) {
-                    // 找到环路起点，截取路径生成环路名称列表
+                }
+                // 情况2：下游节点已经访问过，**并且还在当前递归栈内 → 找到回边 = 检测出环！**
+                else if (in_stack[neighbor]) {
+                    // 在path数组里找到环的起点neighbor
                     auto it = std::find(path.begin(), path.end(), neighbor);
+                    // 从环起点一直到path末尾，全部存入cycle（环路主体）
                     for (; it != path.end(); ++it) {
                         cycle.push_back(compute_systems_[*it].system->meta().name);
                     }
+                    // 补上起点，形成闭环展示
                     cycle.push_back(compute_systems_[neighbor].system->meta().name);
+                    // 找到环，返回true终止所有递归
                     return true;
                 }
             }
 
+            // 回溯逻辑：离开当前节点递归分支，弹出路径、取消栈标记
             path.pop_back();
             in_stack[node] = false;
+            // 本分支无环，返回false
             return false;
         };
 
-        // 从存在剩余入度的节点开始DFS
+        // 遍历所有系统，只要还没找到环，并且节点入度>0、未访问 → 启动DFS搜环
         for (std::size_t i = 0; i < n && cycle.empty(); ++i) {
             if (in_degree[i] > 0 && !visited[i]) {
                 find_cycle(i);
             }
         }
 
+        // 构造错误返回值：【语法】std::unexpected 构造expected的失败分支，携带环路信息
         return std::unexpected(DependencyCycleError{.cycle = std::move(cycle)});
     }
 
     // ========================================================================
-    // 阶段6：可达性校验（无外部源头可触发的孤立系统报错）
-    // 从外部源BFS遍历，所有未被遍历到的系统不可触发执行
+    // 阶段6：可达性校验（孤立系统检测）
+    // 含义：必须能从外部触发源（外部IO/带notify的定时系统）顺着依赖链走到所有compute系统
+    // 存在永远无法触发、跑不起来的孤立系统 → 直接报错
+    // 算法：BFS扩散标记所有可达节点，底层用uint64位掩码做高性能集合运算
     // ========================================================================
+    // 构造掩码：所有compute系统对应的全集掩码
+    // 分支：刚好64个系统直接取uint64最大值全1；否则 1ULL左移n位再-1，低n位全部置1
     const auto all_compute_mask =
         n == 64 ? std::numeric_limits<std::uint64_t>::max() : ((1ULL << n) - 1ULL);
+    // reachable：BFS过程中已经确认可达的系统掩码
     std::uint64_t reachable = external_source_mask;
+    // frontier：BFS本轮待扩散的前沿节点掩码（待遍历）
     std::uint64_t frontier  = external_source_mask;
 
-    // BFS扩散所有可到达系统
+    // BFS主循环：前沿不为0就持续扩散下游依赖
     while (frontier != 0) {
+        // next：本轮前沿节点能直接触达的所有下游节点集合
         std::uint64_t next = 0;
+        // 拷贝一份前沿掩码，用来逐个取出bit
         auto sources       = frontier;
+        // 遍历sources里所有激活bit
         while (sources != 0) {
+            // 拿到最低置1bit下标，也就是当前待处理系统索引
             const auto idx = static_cast<std::size_t>(std::countr_zero(sources));
+            // 清除最低位1，处理下一个
             sources &= sources - 1;
+            // 把当前系统的所有下游节点合并进next掩码（按位或）
             next |= adj_mask[idx];
         }
+        // 【语法】~ 按位取反；next & ~reachable = 只保留新发现、还没标记可达的节点，作为下一轮前沿
         frontier = next & ~reachable;
+        // 把新可达节点并入总可达集合
         reachable |= frontier;
     }
 
-    // 存在不可达系统，收集名称返回错误
+    // 校验：可达集合 是否等于 全部compute系统集合
+    // 不相等 = 存在bit不在reachable里 → 有孤立系统，永远无法被调度触发
     if ((reachable & all_compute_mask) != all_compute_mask) {
+        // 存放所有不可达系统名字，用于报错
         std::vector<std::string> unreachable;
+        // 逐个遍历所有compute系统，检查对应bit是否在可达掩码内
         for (std::size_t i = 0; i < n; ++i) {
             const auto bit = 1ULL << i;
+            // 当前系统不在可达集合里
             if ((reachable & bit) == 0) {
                 unreachable.push_back(compute_systems_[i].system->meta().name);
             }
         }
+        // 返回错误：携带不可达系统列表
         return std::unexpected(UnreachableComputeSystemsError{.systems = std::move(unreachable)});
     }
 
     // ========================================================================
-    // 阶段7：生成两套唤醒掩码存入拓扑快照
-    // 1.fixed_rate_affects：定时系统写者直接下游计算系统掩码
-    // 2.compute_affects：计算系统写者直接下游计算系统掩码
+    // 阶段7：预生成两套唤醒掩码，存入拓扑快照TopologySnapshot，**专供运行时调度器使用**
+    // 1. fixed_rate_affects：定时系统写通道 → 能够直接唤醒哪些compute系统（掩码）
+    // 2. compute_affects：compute系统写通道 → 能够直接唤醒哪些compute系统（掩码）
+    // 核心目的：运行时不用再遍历map、不用再解析通道，直接位运算判断唤醒，性能极高
     // ========================================================================
+    // 初始化fixed_rate_affects数组：长度和定时系统数量一致，初始值全部0
     snapshot.fixed_rate_affects.assign(fixed_rate_systems_.size(), 0);
 
-    // 遍历定时系统所有输出通道，收集直接读者
+    // 【语法】auto& meta_channels 泛型lambda（C++14通用lambda）
+    // 功能辅助函数：遍历某个系统的输出通道，收集它能直接唤醒的compute系统，写入affects掩码
     auto collect_direct_readers = [&](const auto& meta_channels, std::uint64_t& affects) {
+        // 遍历当前系统注册的所有通道元信息
         for (const auto& ch : meta_channels) {
+            // 只处理【写通道】，读者通道不会产生下游唤醒
             if (is_writer(ch.kind)) {
+                // 构造通道唯一键：通道类型 + topic名称
                 ChannelKey key{ch.type, ch.topic};
+                // 【语法】C++17 if内初始化：find查找通道，找到才进入分支
                 if (auto it = channels.find(key); it != channels.end()) {
+                    // 遍历这条通道所有读者端点
                     for (const auto reader : it->second.readers) {
+                        // 只收集compute系统读者，定时系统之间的唤醒不在这套掩码管理
                         if (!reader.is_fixed_rate) {
+                            // 把读者下标对应的bit置1，合并进掩码
                             affects |= (1UL << reader.index);
                         }
                     }
@@ -2640,34 +2737,49 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
         }
     };
 
+    // ========== 填充 fixed_rate_affects：定时系统 → compute 的唤醒掩码 ==========
     for (std::size_t i = 0; i < fixed_rate_systems_.size(); ++i) {
+        // 单个定时系统的唤醒掩码，初始0
         std::uint64_t affects = 0;
+        // 取出定时系统预注册的元信息（spsc/spmc通道列表）
         const auto& meta      = fixed_rate_systems_[i].system->meta();
+        // 处理该系统所有SPSC输出通道，收集唤醒掩码
         collect_direct_readers(meta.spsc_channels, affects);
+        // 处理该系统所有SPMC输出通道，收集唤醒掩码
         collect_direct_readers(meta.spmc_channels, affects);
+        // 写入快照数组，运行时直接读取
         snapshot.fixed_rate_affects[i] = affects;
     }
 
-    // 生成计算系统互相唤醒掩码
+    // ========== 填充 compute_affects：compute系统 → compute系统 的唤醒掩码 ==========
+    // 初始化数组：长度等于compute系统总数n，初始全部0
     snapshot.compute_affects.assign(n, 0);
+    // 【语法】C++17结构化绑定，遍历channels这个map，直接取出key和usage
     for (const auto& [key, usage] : channels) {
+        // 这条通道没有写者、没有读者 → 不存在依赖唤醒，跳过
         if (usage.writers.empty() || usage.readers.empty()) {
             continue;
         }
 
+        // 取出这条通道唯一写者（前面静态校验已经保证最多1个写者）
         const auto writer = usage.writers[0];
+        // 写者是定时系统，不归compute_affects管理，跳过
         if (writer.is_fixed_rate) {
             continue;
         }
 
+        // 遍历这条通道所有读者
         for (const auto reader : usage.readers) {
+            // 只关心compute读者，并且禁止系统自依赖（自己写自己读不算跨系统唤醒）
             if (!reader.is_fixed_rate && writer.index != reader.index) {
+                // 读者对应bit置1，写入compute互相唤醒掩码
                 snapshot.compute_affects[writer.index] |= (1UL << reader.index);
             }
         }
     }
 
-    // 全部校验通过，返回完整拓扑快照
+    // 全部静态校验、依赖构图、唤醒掩码生成完成
+    // 返回拓扑快照给调度器，后续运行时完全依靠这份快照做系统唤醒、并行调度
     return snapshot;
 }
 

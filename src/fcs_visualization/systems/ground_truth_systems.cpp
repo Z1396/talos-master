@@ -113,7 +113,6 @@ constexpr double kLabelFontSize = 0.08;
  * @param app ECS全局调度器实例，用于注册pool_compute线程池并行任务
  */
 void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
-
     // =========================================================================
     // GroundTruth真值3D场景实体 + JSON数据包发布系统
     // 调度策略：pool_compute 线程池执行，不阻塞图像主线程

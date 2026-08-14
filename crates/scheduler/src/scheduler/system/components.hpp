@@ -278,8 +278,11 @@ using spmc = basic_channel<
  * @brief SPMC 写端
  */
 template <typename T, typename Topic = DefaultTopic>
-using spmc_mut =
-    basic_writer<T, Topic, typename primitive::SpmcChannel<T>, channel_kind::spmc_writer>;
+using spmc_mut = basic_writer<
+    T, 
+    Topic, 
+    typename primitive::SpmcChannel<T>::Writer, 
+    channel_kind::spmc_writer>;
 
 // ------------------------------
 // 共享资源
@@ -288,13 +291,17 @@ using spmc_mut =
  * @brief 只读共享资源
  */
 template <typename T>
-using res = basic_resource<T, false, channel_kind::res>;
+using res = basic_resource<T, 
+            false, 
+            channel_kind::res>;
 
 /**
  * @brief 可写共享资源
  */
 template <typename T>
-using res_mut = basic_resource<T, true, channel_kind::res_mut>;
+using res_mut = basic_resource<T, 
+                true, 
+                channel_kind::res_mut>;
 
 // ------------------------------
 // 语义化别名（业务常用）
@@ -315,12 +322,14 @@ using publish = spmc_mut<T, Topic>;
 // 六、静态断言：编译期校验所有组件符合规范
 // 确保上面所有别名都满足 component_kind 约束，提前拦截类型错误
 // ============================================================================
-static_assert(component_kind<spsc<bool>>);
-static_assert(component_kind<spsc_mut<bool>>);
-static_assert(component_kind<spmc<bool>>);
-static_assert(component_kind<spmc_mut<bool>>);
-static_assert(component_kind<res<bool>>);
-static_assert(component_kind<res_mut<bool>>);
-static_assert(component_kind<local<bool>>);
+// 编译期校验所有对外公开的组件别名是否满足统一的 component_kind 约束
+// 提前拦截类型不符合规范的错误，避免运行时才暴露问题
+static_assert(component_kind<spsc<bool>>);      // 校验 SPSC 单生产者单消费者读端组件
+static_assert(component_kind<spsc_mut<bool>>); // 校验 SPSC 单生产者单消费者写端组件
+static_assert(component_kind<spmc<bool>>);      // 校验 SPMC 单生产者多消费者读端组件
+static_assert(component_kind<spmc_mut<bool>>); // 校验 SPMC 单生产者多消费者写端组件
+static_assert(component_kind<res<bool>>);      // 校验只读共享资源组件
+static_assert(component_kind<res_mut<bool>>);   // 校验可写共享资源组件
+static_assert(component_kind<local<bool>>);     // 校验系统/任务局部变量组件
 
 } // namespace talos::scheduler::system

@@ -498,6 +498,14 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             // 从相机内参取出主点cx cy（图像光学中心）
             const double cx = cam->camera_matrix(0, 2);
             const double cy = cam->camera_matrix(1, 2);
+            // 在图像光学中心(主点cx,cy)绘制十字标记，便于前端对齐坐标系原点
+            // 参数说明：
+            //   img_bgr: 绘制画布（原图拷贝）
+            //   cv::Point(cx, cy): 相机内参主点坐标（图像光学中心），浮点转整型像素点
+            //   OPTICAL_CENTER: 十字标记颜色（BGR格式转换后的光学中心专属色）
+            //   cv::MARKER_CROSS: 标记类型为十字形
+            //   MARKER_SIZE: 十字标记尺寸（像素）
+            //   LINE_MEDIUM: 十字线线宽
             cv::drawMarker(
                 img_bgr, cv::Point(static_cast<int>(cx), static_cast<int>(cy)),
                 tac::to_cv_bgr(tac::Image::OPTICAL_CENTER), cv::MARKER_CROSS,

@@ -803,25 +803,34 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
         });
 }
 
-/**
- * @brief 创建装甲检测器推理后端共享智能指针对象
- * @param config 装甲检测器配置（模型路径、推理设备、输入分辨率、后端类型）
- * @return std::expected 成功返回后端句柄（智能指针+后端名称），失败返回错误字符串
- */
+// 函数签名说明：
+// 返回值 std::expected<DetectorBackendHandle, std::string>
+//  ✅ 成功：返回 DetectorBackendHandle 探测器后端句柄
+//  ❌ 失败：返回 std::unexpected + string 类型错误信息
+// noexcept：本函数**不会抛出C++异常**，适合机器人实时链路，避免异常打乱调度时序
 std::expected<DetectorBackendHandle, std::string>
-    create_detector_backend_handle(const ArmorDetectorConfig& config) noexcept {
-    // 底层工厂函数创建推理后端实例（Axera/TensorRT/ONNX）
+create_detector_backend_handle(const ArmorDetectorConfig& config) noexcept {
+    // 调用底层工厂函数，根据配置创建真正的推理后端实例
+    // 内部自动根据 config.backend_type 选择：Axera / TensorRT / ONNX Runtime
     auto backend_result = create_detector_backend(config);
-    // 创建失败，返回错误信息
+
+    // 判断：推理后端实例创建失败（比如模型文件找不到、硬件NPU打不开、TensorRT引擎加载失败）
     if (!backend_result) {
+        // 把底层的错误信息move转移所有权，封装进unexpected向上返回
+        // std::move 避免字符串拷贝，减少内存开销
         return std::unexpected(std::move(backend_result.error()));
     }
 
-    // 裸后端对象封装为shared_ptr，全局共享推理实例
+    // backend_result.value() 是 DetectorBackend 裸实例，用shared_ptr包装
+    // 目的：多地方共享同一个推理后端、自动生命周期管理，不用手动delete
     auto backend_ptr  = std::make_shared<DetectorBackend>(std::move(*backend_result));
-    // magic_enum编译期转后端枚举名字符串，用于日志打印
+
+    // magic_enum：编译期反射枚举，把 backend_type 枚举值转成可读字符串（如"Axera" / "TensorRT"）
+    // 编译期完成转换，运行时无开销，专门用来打日志、调试Foxglove面板
     auto backend_name = std::string(magic_enum::enum_name(config.backend_type));
-    // 封装句柄返回
+
+    // 构造句柄结构体返回：持有shared_ptr推理实例 + 后端名字串
+    // DetectorBackendHandle本质就是一个轻量包装，对外屏蔽底层shared_ptr细节
     return DetectorBackendHandle{std::move(backend_ptr), std::move(backend_name)};
 }
 
