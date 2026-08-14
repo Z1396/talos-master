@@ -457,43 +457,58 @@ struct McuImu {
     }
 };
 
-/**
- * @brief IMU统一封装层
- * std::variant 存储三种硬件实现：DaedalusImu / McuImu / ChiralImu
- * 对外暴露统一system接口，通过std::visit+overloaded自动分发对应硬件逻辑
- */
+// IMU统一抽象封装体
+// 核心目标：对外暴露**唯一、不变的system()接口**，内部自动兼容3种IMU底层实现
+// 不用写一堆if-else判断是仿真/串口MCU/Chiral云台，用std::variant+std::visit做静态分发
 struct Imu {
+    // variant：类型安全的联合体，同一时刻只会存下面三者中的**某一个实例**
+    //  - DaedalusImu：Bevy仿真器IPC虚拟IMU
+    //  - McuImu：实物STM32(串口/USB HID)上报的IMU
+    //  - ChiralImu：Chiral私有云台协议的IMU
     std::variant<DaedalusImu, McuImu, ChiralImu> impl;
 
     /**
      * @brief 统一周期入口，自动分发到对应硬件实现的system函数
+     * 这个函数会被调度器以1000Hz固定频率调用（就是上一段setup_l1里注册的imu_reader系统）
      */
     void system(
-        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
-        core::trajectory::bullet_speed_mut bullet_speed, core::detecting_color_mut detecting_color,
-        core::capabilities_mut capabilities, core::following_mut following,
-        core::imu_state_mut imu_state,
-        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
-        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept {
-        // std::visit + overloaded 多分支类型分发，匹配variant内部存储的硬件类型
+        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,      //【可写ECS资源】坐标变换缓存（fast_tf，维护坐标系树、插值查询）
+        core::trajectory::bullet_speed_mut bullet_speed,          //【可写ECS资源】弹速配置，IMU/云台上报后更新
+        core::detecting_color_mut detecting_color,                //【可写ECS资源】敌方识别颜色（红/蓝，云台MCU上报权威颜色）
+        core::capabilities_mut capabilities,                      //【可写ECS资源】云台硬件能力包（底盘/云台限位、功率等，USB MCU才会上报）
+        core::following_mut following,                        //【可写ECS资源】云台跟随状态
+        core::imu_state_mut imu_state,                          //【可写ECS资源】IMU原始姿态/角速度输出，全框架共用的IMU状态结构体
+        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out, //【SPMC写端】控制快照通道，输出当前云台状态给上层、Foxglove可视化
+        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept   //【SPMC写端】真值数据通道，仿真时输出GroundTruth真值
+    {
+        // std::visit：访问variant里面当前存的那个类型实例
+        // overloaded{}：语法糖，把多个lambda打包成一个可重载的访问器，编译期自动匹配variant内类型
         std::visit(
             overloaded{
+                // 分支1：如果variant里存的是 McuImu（实物STM32串口/USB IMU）
                 [&](McuImu& inner) {
+                    // 转发调用McuImu自己实现的system，把全部参数原样传进去
                     inner.system(
                         tf_buffer, bullet_speed, detecting_color, capabilities, following,
                         imu_state, control_out, gt_out);
                 },
+                // 分支2：如果variant里存的是 DaedalusImu（仿真虚拟IMU）
                 [&](DaedalusImu& inner) {
+                    // 注意：Daedalus仿真IMU不需要capabilities参数，所以传参列表少一个
                     inner.system(
                         tf_buffer, bullet_speed, detecting_color, following, imu_state, control_out,
                         gt_out);
                 },
-                // 通用兜底分支：ChiralImu参数最少，直接转发
+                // 分支3【泛型兜底auto&】：剩下所有类型（这里就是ChiralImu）走这个lambda
+                // auto& 是模板推导，编译期实例化，不用单独手写ChiralImu的lambda
+                // ChiralImu的system参数更少，不需要following、capabilities
                 [&](auto& inner) {
                     inner.system(
                         tf_buffer, bullet_speed, detecting_color, imu_state, control_out, gt_out);
-                }},
-            impl);
+                }
+            },
+            impl // 传入variant实例，std::visit会判断impl当前是哪一种，自动匹配上面lambda
+        );
     }
 };
 
@@ -508,88 +523,111 @@ struct Imu {
  * @param cfg 顶层硬件variant配置 std::variant<DaedalusConfig, DirectConfig>
  * @return 成功返回相机配置；失败返回std::expected错误字符串
  */
+// 函数返回值：成功返回L1L2SetupResult结构体；失败返回string类型错误信息
+// 作用：L1硬件层统一初始化入口，兼容两种硬件方案：Daedalus仿真IPC / Direct实物硬件（串口/USB/Chiral云台+海康相机）
 std::expected<L1L2SetupResult, std::string> setup_l1(
-    talos::World& world, talos::Scheduler& scheduler, hardware::HardwareBackendConfig cfg) {
-    // 相机输入、武器输出接口句柄
+    talos::World& world,                // ECS世界实例，存放全局资源(IMU状态、相机内参等)
+    talos::Scheduler& scheduler,        // Talos拓扑调度器，用来注册固定周期运行的系统(IMU读取、相机读取、武器输出)
+    hardware::HardwareBackendConfig cfg) // 顶层硬件配置variant：二选一 DaedalusConfig / DirectConfig
+{
+    // ===================== 局部句柄定义 =====================
+    // 相机输入接口抽象（统一封装：仿真IPC相机 / 实物海康相机）
     std::unique_ptr<fcs::L1::CameraInterface> camera;
+    // 武器输出接口抽象（统一封装：仿真IPC输出 / 实物MCU串口/USB/Chiral云台发射）
     std::unique_ptr<fcs::L1::OutputInterface> output;
-    // IMU统一封装实例
+    // IMU统一抽象封装（内部用variant包装不同实现：DaedalusImu / McuImu / ChiralImu）
     auto imu       = std::make_shared<Imu>();
-    bool imu_ready = false; // IMU硬件是否初始化完成标志
-    // 预先插入全局IMU姿态资源
+    bool imu_ready = false; // 标记：IMU/MCU硬件是否初始化成功，后面用来决定要不要注册IMU、武器输出系统
+
+    // 在ECS全局资源里预先插入IMU状态存储，给后面IMU读取系统写入姿态数据
     world.insert_resource(core::ImuState{});
 
-    // std::visit 分发顶层硬件配置分支：Daedalus / Direct分体MCU
+    // ===================== Variant分发：根据硬件配置类型自动选择初始化分支 =====================
+    // std::visit：访问variant（HardwareBackendConfig是std::variant<DaedalusConfig,DirectConfig>）
+    // overloaded{}：语法糖，批量放多个lambda，自动匹配variant当前类型
     std::expected<void, std::string> result = std::visit(
         overloaded{
-            // 分支1：Daedalus一体化IPC设备
+            // ========== 分支1：Daedalus一体化IPC（你的Bevy仿真器，共享内存IPC通信） ==========
+            // 捕获&：引用外部所有局部变量camera/output/imu/imu_ready，在lambda内修改
             [&camera, &output, &imu,
              &imu_ready](hardware::DaedalusConfig) -> std::expected<void, std::string> {
-                SPDLOG_INFO("connecting to daedalus ipc...");
-                // 连接共享内存IPC
+                SPDLOG_INFO("connecting to daedalus ipc..."); // 日志：开始连接仿真共享内存IPC
+
+                // 创建ShmClient共享内存IPC客户端，连接Daedalus仿真
                 auto ipc_ = ipc::ShmClient::connect();
+                // 判断IPC连接是否失败
                 if (!ipc_) {
+                    // 返回错误，包装字符串，向上抛出
                     return std::unexpected(fmt::format("connect ipc: {}", ipc_.error()));
                 }
+                // 把成功的IPC客户端move进shared_ptr，给相机、IMU、输出共用
                 auto ipc_device = std::make_shared<ipc::ShmClient>(std::move(*ipc_));
 
-                // 创建IPC相机输入接口
                 SPDLOG_INFO("initializing daedalus input interface...");
+                // 创建仿真端相机输入接口（从共享内存拿仿真图像）
                 auto input_result = fcs::L1::CameraInterface::create_ipc(ipc_device);
-                if (!input_result) {
+                if (!input_result) { // 相机IPC接口创建失败
                     return std::unexpected(
                         fmt::format("init daedalus input: {}", input_result.error()));
                 }
-                // 创建IPC武器输出接口
                 SPDLOG_INFO("initializing daedalus output interface...");
+                // 创建仿真武器输出接口（发射指令写入共享内存给仿真器）
                 auto out_result = fcs::L1::OutputInterface::create_ipc(ipc_device);
-                if (!out_result) {
+                if (!out_result) { // 输出IPC接口创建失败
                     return std::unexpected(
                         fmt::format("init daedalus output: {}", out_result.error()));
                 }
 
+                // 转移所有权，构造CameraInterface实例
                 camera =
                     std::make_unique<fcs::L1::CameraInterface>(std::move(input_result.value()));
+                // 转移所有权，构造OutputInterface实例
                 output = std::make_unique<fcs::L1::OutputInterface>(std::move(out_result.value()));
-                // variant存入DaedalusImu实现
+                // 给IMU抽象层绑定Daedalus仿真IMU实现，共用同一个IPC句柄
                 imu->impl = DaedalusImu{ipc_device};
-                imu_ready = true;
-                return {};
+                imu_ready = true; // IMU就绪标记置true，后面会注册IMU、武器系统
+                return {}; // 成功，返回空expected<void>
             },
 
-            // 分支2：Direct分体硬件（Serial/USB MCU + 海康相机 / Chiral云台）
+            // ========== 分支2：Direct分体实物硬件（MCU+海康相机，支持串口/USB HID/Chiral私有云台） ==========
             [&camera, &output, &imu,
              &imu_ready](hardware::DirectConfig cfg) -> std::expected<void, std::string> {
-                // 清空全局串口解析缓冲区
+                // 全局静态缓冲区清零：存放MCU上报IMU数据、云台能力数据
                 g_imu_data                                     = {};
                 g_capabilities_data                            = {};
+                // 给STM32解析器挂全局IMU数据指针，解析回调直接写这块内存
                 talos_gimbal::Stm32Parser::latest_imu          = &g_imu_data;
+                // 默认先不启用能力包解析
                 talos_gimbal::Stm32Parser::latest_capabilities = nullptr;
 
+                // 取出MCU子配置
                 auto mcu_config = cfg.hardware.mcu;
-                // 非仅相机模式：初始化MCU云台通信
+                // 判断：不是【仅相机模式】→ 需要初始化MCU云台、IMU、发射输出
                 if (!cfg.camera_only) {
-                    std::shared_ptr<McuHandle> mcu_device;
+                    std::shared_ptr<McuHandle> mcu_device; // MCU通信句柄（串口/USB）
                     SPDLOG_INFO(
                         "MCU authoritative self_color={} bullet_speed={}",
                         mcu_config->mcu_authoritative_self_color,
                         mcu_config->mcu_authoritative_bullet_speed);
-                    // 直连串口/USB MCU
+
+                    // 判断底层传输方式：Direct（串口/USB HID） 或者 Chiral私有云台协议
                     if (cfg.transport == hardware::Transport::Direct) {
-                        // 串口后端
+                        // 子分支：MCU后端=Serial串口
                         if (mcu_config->mcu_backend == fcs::McuBackend::Serial) {
                             SPDLOG_INFO(
                                 "connecting to mcu via serial with {} @ {} baud",
                                 mcu_config->serial_device, mcu_config->serial_baud_rate);
+                            // 创建串口MCU句柄：设备名+波特率
                             auto device_result = McuHandle::create_serial(
                                 mcu_config->serial_device, mcu_config->serial_baud_rate);
-                            if (!device_result) {
+                            if (!device_result) { // 串口打开失败
                                 return std::unexpected(device_result.error());
                             }
+                            // 转移构造MCU共享句柄
                             mcu_device =
                                 std::make_shared<McuHandle>(std::move(device_result).value());
                         } else {
-                            // USB HID后端，开启能力包解析
+                            // 子分支：MCU后端=USB HID
                             if (mcu_config->mcu_product_id) {
                                 SPDLOG_INFO(
                                     "connecting to mcu via USB with {:#x}:{:#x}",
@@ -599,30 +637,32 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                                     "connecting to mcu via USB with {:#x} (product_id unspecified)",
                                     mcu_config->mcu_vendor_id);
                             }
+                            // 创建USB HID MCU句柄（VID/PID）
                             auto device_result = McuHandle::create_usb(
                                 mcu_config->mcu_vendor_id, mcu_config->mcu_product_id);
-                            if (!device_result) {
+                            if (!device_result) { // USB打开失败
                                 return std::unexpected(device_result.error());
                             }
                             mcu_device =
                                 std::make_shared<McuHandle>(std::move(device_result).value());
+                            // USB模式启用能力包解析，挂载capabilities缓冲区
                             talos_gimbal::Stm32Parser::latest_capabilities = &g_capabilities_data;
                         }
                         SPDLOG_INFO("connected to mcu via {}", mcu_config->mcu_backend);
-                        // 创建MCU武器输出接口
+                        // 构造MCU武器输出接口（后续下发发射指令给STM32）
                         output = std::make_unique<fcs::L1::OutputInterface>(
                             fcs::L1::McuOutput(mcu_device));
-                        // variant存入McuImu
+                        // IMU抽象绑定McuImu实现，挂载IMU缓冲区、能力缓冲区
                         imu->impl = McuImu{
                             mcu_config, mcu_device, &g_imu_data,
                             mcu_config->mcu_backend == fcs::McuBackend::Usb ? &g_capabilities_data
                                                                             : nullptr};
-                        imu_ready = true;
+                        imu_ready = true; // IMU就绪标记打开
                     } else {
-                        // Chiral私有云台协议
+                        // 子分支：Chiral私有云台协议
                         SPDLOG_INFO("initializing chiral mcu...");
                         auto chiral_result = talos::chiral::gimbal::TalosEndpoint::create();
-                        if (!chiral_result) {
+                        if (!chiral_result) { // Chiral云台创建失败
                             SPDLOG_INFO(
                                 "failed to create chiral mcu: {}",
                                 magic_enum::enum_name(chiral_result.error()));
@@ -632,8 +672,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                         std::shared_ptr<talos::chiral::gimbal::TalosEndpoint> chiral =
                             std::move(chiral_result.value());
 
+                        // 构造Chiral武器输出接口
                         output = std::make_unique<fcs::L1::OutputInterface>(
                             fcs::L1::ChiralOutput(chiral));
+                        // IMU抽象绑定ChiralImu实现
                         imu->impl = ChiralImu{
                             mcu_config,
                             chiral,
@@ -641,93 +683,113 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                         imu_ready = true;
                     }
                 }
-                // 初始化海康工业相机
+                // ========== 海康相机初始化（Direct模式共用相机，不管MCU是否启用） ==========
                 SPDLOG_INFO("initializing hikrobot camera...");
                 auto input_result = fcs::L1::CameraInterface::create_hik(cfg.hardware.camera);
-                if (!input_result) {
+                if (!input_result) { // 海康相机打开失败
                     return std::unexpected(
                         fmt::format("init hikrobot camera: {}", input_result.error()));
                 }
+                // 构造相机接口，接管海康相机
                 camera =
                     std::make_unique<fcs::L1::CameraInterface>(std::move(input_result.value()));
-                return {};
+                return {}; // Direct硬件初始化成功
             }},
-        cfg);
-    // 硬件初始化失败，向上返回错误信息
+        cfg); // std::visit传入variant变量cfg
+    // ==============================================
+    // 上面硬件分支初始化失败 → 直接向上返回错误字符串
     if (!result) {
         return std::unexpected(result.error());
     }
 
-    // 将相机内参存入全局ECS资源
+    // 读取相机内参，存入ECS全局资源，给L2识别、PnP解算使用
     const auto& cam_info = camera->camera_info();
     world.insert_resource(cam_info);
 
-    // IMU硬件正常，注册1000Hz周期IMU读取系统
+    // ===================== IMU就绪：注册 1000Hz IMU读取系统 =====================
     if (imu_ready) {
+        // fixed_rate<1000,1>：固定1000Hz周期执行
         scheduler.add_system<talos::fixed_rate<1000, 1>>(
-            "imu_reader",
+            "imu_reader", // 系统名字（拓扑日志、调试用）
+            // 捕获imu，move进lambda，所有权转移
             [imu = std::move(imu)](
+                // res_mut：ECS可变资源引用，tf_buffer坐标变换缓存
                 talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
+                // 弹道相关资源：弹速、敌方颜色、云台能力、跟随状态、IMU状态
                 core::trajectory::bullet_speed_mut bullet_speed,
                 core::detecting_color_mut detecting_color, core::capabilities_mut capabilities,
                 core::following_mut following, core::imu_state_mut imu_state,
+                // spmc_mut：SPMC通道可变写入端 → 输出控制快照、真值数据（给Foxglove可视化/上层）
                 talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic>
                     control_out,
                 talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) {
+                // 调用IMU抽象层system函数：读取IMU、更新TF、写通道
                 imu->system(
                     tf_buffer, bullet_speed, detecting_color, capabilities, following, imu_state,
                     control_out, gt_out);
             });
     } else {
+        // IMU没就绪（仅相机模式），打印警告：没有MCU/IMU数据
         SPDLOG_WARN("pretending mcu is connected, no mcu data will be available");
     }
 
-    // 相机读取系统 250Hz，输出图像帧消息通道
+    // ===================== 注册 250Hz 相机读取系统 =====================
+    // 原子变量记录帧序号，用来检测丢帧，shared_ptr是因为lambda捕获move后多轮循环持续持有
     auto last_seq = std::make_shared<std::atomic<uint64_t>>(0);
     scheduler.add_system<talos::fixed_rate<250, 1>>(
-        "camera_reader", [camera = std::move(camera),
-                          last_seq](talos::spmc_mut<ImageFrame, ImageChannelTopic> cam_out) {
+        "camera_reader",
+        // 转移camera所有权、last_seq原子计数器到lambda
+        [camera = std::move(camera),
+          last_seq](talos::spmc_mut<ImageFrame, ImageChannelTopic> cam_out) {
             using namespace std::chrono_literals;
-            // 阻塞1秒等待图像帧
+            // 阻塞读取图像帧，最长阻塞1s超时
             const auto frame = camera->recv(1s);
+            // 读取失败（超时/断连），打日志直接return
             if (!frame) [[unlikely]] {
                 SPDLOG_ERROR("read camera: {}", frame.error());
                 return;
             }
 
-            // 帧序号丢帧检测日志
+            // 取出当前帧号
             const auto seq  = frame->seq;
+            // 无锁原子加载上一帧序号，relaxed内存序（纯统计，不需要同步）
             const auto prev = last_seq->load(std::memory_order_relaxed);
+            // 检测丢帧：当前seq不是上一帧+1，且不是第一帧 → 打印丢帧Debug日志
             if (seq != prev + 1 && prev > 0) {
                 SPDLOG_DEBUG("skip {} frame", seq - prev - 1);
             }
+            // 更新原子帧号
             last_seq->store(seq, std::memory_order_relaxed);
 
-            // 图像帧写入IPC通道供上层识别使用
+            // 提取图像，打包成ImageFrame写入SPMC通道，发给L2识别、Foxglove可视化
             auto img = frame->image;
             cam_out.write(fcs::ImageFrame{std::move(img), frame->timestamp_ns, seq});
         });
 
-    // 武器输出设备存入全局资源
+    // 把武器输出接口存入Scheduler内的ECS资源，给weapon_output系统读取
     scheduler.world().insert_resource(std::move(output));
 
-    // IMU就绪时注册250Hz武器发射指令下发系统
+    // ===================== IMU就绪：注册250Hz武器发射指令下发系统 =====================
     if (imu_ready) {
         scheduler.add_system<talos::fixed_rate<250, 1>>(
             "weapon_output",
-            [](talos::res<std::unique_ptr<fcs::L1::OutputInterface>> output,
-               talos::spmc<fcs::L5::WeaponCommand, fcs::WeaponCommandChannelTopic> cmd_in) {
-                // 读取上层下发的发射指令
+            [](
+                // res只读资源：拿到OutputInterface句柄
+                talos::res<std::unique_ptr<fcs::L1::OutputInterface>> output,
+                // spmc只读消费端：读取L5下发的WeaponCommand发射指令
+                talos::spmc<fcs::L5::WeaponCommand, fcs::WeaponCommandChannelTopic> cmd_in) {
+                // 从SPMC通道读取最新发射指令（三缓冲快照读）
                 auto cmd = cmd_in.read();
+                // 无新指令直接返回
                 if (!cmd) [[unlikely]] {
                     return;
                 }
-                // 下发到硬件MCU/IPC
+                // 调用底层接口，下发发射指令到MCU/仿真IPC
                 (*output)->send(*cmd);
             });
     }
 
-    // 返回初始化结果，携带相机标定信息
+    // 全部初始化成功，返回结果结构体（携带相机标定信息）
     return L1L2SetupResult{.camera_config = cam_info};
 }
 

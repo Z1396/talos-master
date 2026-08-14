@@ -240,35 +240,53 @@ public:
  * ## 线程安全
  * 继承底层三缓冲的线程安全规则
  */
+    /// @brief 带写入追踪的包装通道（上层封装，在底层Buffer原始读写句柄之上包一层追踪逻辑）
+    /// @tparam T 通道传输的数据类型（消息体类型，比如SceneUpdate、RobotState）
+    /// @tparam Buffer 底层环形缓冲区/IPC缓冲区类型（SPSC/SPMC队列实现）
 template <typename T, typename Buffer>
 class TrackedChannel {
-    using WriteInner = Buffer::template Write<T>;
-    using ReadInner  = Buffer::template Read<T>;
+        // 取底层Buffer里面【T类型对应的原生写入句柄类型】
+        // .template 是语法要求：Buffer是依赖模板参数的类型，后面<>是模板，不是小于号
+        using WriteInner = Buffer::template Write<T>;
+        // 取底层Buffer里面【T类型对应的原生读取句柄类型】
+        using ReadInner  = Buffer::template Read<T>;
 
-    WriteInner writer_;
-    ReadInner reader_;
+        // 保存底层原生读写句柄（底层裸通道，不带追踪）
+        WriteInner writer_;
+        ReadInner reader_;
 
-public:
-    using value_type  = T;
-    using buffer_type = Buffer;
-    using Writer      = TrackedWriter<T, Buffer>;
-    using Reader      = TrackedReader<T, Buffer>;
+    public:
+        // 对外别名：消息载荷类型
+        using value_type  = T;
+        // 对外别名：底层缓冲区类型
+        using buffer_type = Buffer;
+        // 对外包装后的读写句柄（带写入标记、脏追踪的封装，就是你前面seen/written_flag那套）
+        using Writer      = TrackedWriter<T, Buffer>;
+        using Reader      = TrackedReader<T, Buffer>;
 
-    // 编译期常量，标记通道类型
-    static constexpr bool is_spmc = detail::SpmcLike<Buffer, T>;
-    static constexpr bool is_spsc = detail::SpscLike<Buffer, T>;
+        /// 编译期bool常量：底层Buffer是否是SPMC（单生产者多消费者）模型
+        /// detail::SpmcLike 是type trait，编译期判断Buffer特征，运行时无开销
+        static constexpr bool is_spmc = detail::SpmcLike<Buffer, T>;
+        /// 编译期bool常量：底层Buffer是否是SPSC（单生产者单消费者）模型
+        static constexpr bool is_spsc = detail::SpscLike<Buffer, T>;
 
-    // 构造：接收底层原生读写句柄
-    TrackedChannel(WriteInner w, ReadInner r) noexcept
-        : writer_(std::move(w))
-        , reader_(std::move(r)) {}
+        /// @brief 构造函数：接收底层原生读写句柄，包装成追踪通道
+        /// @param w 底层Buffer原生Write句柄
+        /// @param r 底层Buffer原生Read句柄
+        /// @note noexcept：保证不会抛异常
+        TrackedChannel(WriteInner w, ReadInner r) noexcept
+            : writer_(std::move(w))  // 移动接管底层写句柄，不拷贝
+            , reader_(std::move(r)) {}// 移动接管底层读句柄
 
-    // 通道整体不可拷贝（生产者唯一）
-    TrackedChannel(const TrackedChannel&)            = delete;
-    TrackedChannel& operator=(const TrackedChannel&) = delete;
-    // 允许移动整个通道对象
-    TrackedChannel(TrackedChannel&&) noexcept   = default;
-    TrackedChannel& operator=(TrackedChannel&&) = default;
+        // ========== 拷贝语义禁用 ==========
+        // 通道整体禁止拷贝：生产者/IPC句柄、环形缓冲区资源不能复制，防止多生产者、句柄重复释放等UB
+        TrackedChannel(const TrackedChannel&)            = delete;
+        TrackedChannel& operator=(const TrackedChannel&) = delete;
+
+        // ========== 移动语义默认开启 ==========
+        // 允许把整个通道所有权转移（比如存进资源池、emplace_resource移入异构容器）
+        TrackedChannel(TrackedChannel&&) noexcept   = default;
+        TrackedChannel& operator=(TrackedChannel&&) = default;
 
     // ========================================================================
     // 内置写入快捷接口（也可使用split()获取独立Writer）

@@ -43,10 +43,12 @@ public:
         foxglove::schemas::FrameTransforms transforms_msg;
 
         // 遍历所有坐标系帧缓存，回调处理每一组父子帧变换
+        // 遍历所有坐标变换buffer；回调里面每个回调对应一组【父坐标系 → 子坐标系】的变换缓存
         for_each_coordinate_buffer(system, [&](auto frame_tag, const auto& buffer) {
             // 提取当前子帧类型、父祖先帧类型（编译期模板推导）
-            using Descendant = typename decltype(frame_tag)::type;
-            using Ancestor   = typename Descendant::ancestor;
+            // frame_tag 是编译期标签类型，不是运行时字符串
+            using Descendant = typename decltype(frame_tag)::type; // 子坐标系（子帧）类型
+            using Ancestor   = typename Descendant::ancestor;      // 父坐标系（父帧）类型
 
             // 读取缓存内最新一条变换记录
             auto latest_result = buffer.latest();
@@ -55,42 +57,49 @@ public:
                 return;
             }
 
+            // ============ 时间戳ts：我们想要查询这个时刻的坐标变换 ============
             // 按目标时间戳插值获取变换
             auto tf_result = buffer.lookup(ts, interpolate);
-            // 插值失败（时间戳超出缓存区间），降级使用最新一条历史变换
+            // 插值失败（时间戳超出缓存区间：ts太早/太晚，不在缓存时间窗口内），降级使用最新一条历史变换
             if (!tf_result) {
                 tf_result = latest_result;
             }
 
             // 获取缓存整体时间区间 [起始时间, 结束时间]
             const auto time_range = buffer.time_range();
-            // 判断静态变换：缓存起止时间都为0，代表固定不变的静态TF
+            // 判断静态变换：缓存起止时间都为0，代表固定不变的静态TF（比如相机外参、安装偏移，永远不变）
             const bool is_static  = time_range && time_range->first == 0 && time_range->second == 0;
 
-            // 构造单条帧变换消息
+            // 构造单条帧变换消息，Foxglove官方schema结构体 FrameTransform
             foxglove::schemas::FrameTransform frame_transform;
-            // 父坐标系ID字符串
+
+            // 父坐标系ID字符串，来自编译期定义的frame_id常量
             frame_transform.parent_frame_id = std::string(Ancestor::frame_id);
             // 子坐标系ID字符串
             frame_transform.child_frame_id  = std::string(Descendant::frame_id);
 
-            // 静态变换：时间戳字段置空；动态变换填充纳秒拆分的秒+纳秒
+            // ========== 静态TF 和动态TF 的时间戳处理（Foxglove规则） ==========
+            // 静态变换：时间戳字段置空std::nullopt，Foxglove识别为static_transform，永久生效
+            // 动态TF：填入时间戳，单位：秒 + 纳秒（foxglove::schemas::Timestamp 格式）
             if (is_static) {
                 frame_transform.timestamp = std::nullopt;
             } else {
                 frame_transform.timestamp = foxglove::schemas::Timestamp{
-                    static_cast<uint32_t>(ts / 1'000'000'000), // 总秒数
-                    static_cast<uint32_t>(ts % 1'000'000'000)  // 剩余纳秒
+                    static_cast<uint32_t>(ts / 1'000'000'000), // 总秒数，ts是纳秒时间戳
+                    static_cast<uint32_t>(ts % 1'000'000'000)  // 剩下的纳秒部分
                 };
             }
 
-            // 提取平移、四元数旋转，填充消息字段
+            // 从插值结果拿平移、四元数旋转
             const auto translation      = tf_result->value.translation();
             const auto quat             = tf_result->value.quaternion();
+
+            // 填进Foxglove消息，注意：Foxglove的坐标结构体是简单的{x,y,z}
             frame_transform.translation = {translation.x(), translation.y(), translation.z()};
             frame_transform.rotation    = {quat.x(), quat.y(), quat.z(), quat.w()};
 
-            // 加入批量消息列表
+            // 把这条变换塞到大批量消息 transforms_msg 里面
+            // transforms_msg 类型是 FrameTransforms，一次可以携带多条FrameTransform，批量发送
             transforms_msg.transforms.push_back(frame_transform);
         });
 

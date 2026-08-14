@@ -187,8 +187,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
         "foxglove_l3_tracker_scene",
         [](
             // SPMC输入通道：批量多目标跟踪输出数组
-            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic>
-                tracker_in,
+            talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
             // 全局只读资源：Foxglove服务智能指针，提供场景消息发送接口
             talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 前置校验：Foxglove服务已初始化、输入通道存在可读数据

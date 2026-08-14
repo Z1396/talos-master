@@ -192,42 +192,113 @@ struct extract_local_types<std::tuple<Ts...>> {
 template <typename Tuple>
 using extract_local_types_t = extract_local_types<Tuple>::type;
 
+
 /**
- * @brief 构造单个函数参数
- * @tparam T 参数原始类型
- * @tparam LocalStorage 本地存储元组
- * @tparam LocalIdx 当前local参数在本地存储中的下标
- * @param world ECS世界，用于获取组件/通道
- * @param local_storage 系统内部本地变量存储
- * @return 构造完成的参数（local 取本地存储，其余从World获取）
+ * @brief 构造单个函数参数的辅助函数（编译期多态分派）
+ *
+ * 根据参数类型 T 的编译期属性，自动选择「从本地存储取值」或「从全局 World 获取」，
+ * 统一生成可用于调用业务函数的参数实例。
+ *
+ * 工作原理：
+ * 通过 if constexpr 在编译期分支——
+ *   - 若 T 是 local<Inner> 本地类型：从 local_storage 元组中按偏移量取出预先分配的存储槽，
+ *     构造 local<Inner> 包装对象（仅保存指针，不拷贝数据）
+ *   - 若 T 是普通组件/通道类型：调用 World::get<T>() 从 ECS 全局容器查询并返回句柄
+ *
+ * @tparam T             目标参数的原始类型（如 local<MyLocal> 或 res<ComponentA>）
+ * @tparam LocalStorage  本地存储元组类型（仅存放 local<T> 参数的底层存储）
+ * @tparam LocalIdx      当前参数在本地存储元组中的偏移下标（由 count_locals_before 计算得到）
+ *
+ * @param world          ECS 全局世界容器，用于查询组件/通道句柄
+ * @param local_storage  系统内部本地变量存储元组（local<T> 参数的实际存放位置）
+ * @param LocalIdxTag    编译期下标标签（integral_constant 包装值，驱动模板参数推导）
+ *
+ * @return 构造完成的参数实例：
+ *         - local<Inner> 类型：包装了本地存储槽的指针，支持引用语义
+ *         - 组件/通道类型：从 World 获取的句柄对象
+ *
+ * @note noexcept：所有操作均为编译期类型推导 + 运行期非异常查询，保证无异常抛出
  */
 template <typename T, typename LocalStorage, std::size_t LocalIdx>
 auto make_arg(
     World& world, LocalStorage& local_storage,
     std::integral_constant<std::size_t, LocalIdx>) noexcept {
-    // 编译期分支：区分本地参数 / 组件参数
+    // 编译期分支：根据 T 是否为 local<T> 类型，选择不同的构造路径
+    // if constexpr 保证未选中的分支在编译期直接丢弃，不会产生运行期开销
     if constexpr (is_local_type<T>::value) {
-        // local<T>：从系统内部本地存储取值
-        using Inner   = inner_type_t<T>;
+        // ======== 分支 A：local<T> 本地类型参数 ========
+        // 场景：系统函数参数中声明了 local<T>，需要从系统内部存储中取值而非查询 World
+
+        // 提取 local<T> 内部包装的真实类型（如 local<MyLocal> → MyLocal）
+        using Inner = inner_type_t<T>;
+
+        // 从本地存储元组中取出第 LocalIdx 个存储槽的引用
+        // LocalIdx 由 count_locals_before 计算，跳过当前参数之前的所有 local 类型参数
         auto& storage = std::get<LocalIdx>(local_storage);
+
+        // 构造 local<Inner> 包装对象，仅传入存储槽的指针（零拷贝）
+        // 业务函数通过 local<Inner> 可以读写该本地变量，生命周期由 System 管理
         return local<Inner>{&storage};
+
     } else {
-        // 普通组件/通道参数：从全局 World 中获取
+        // ======== 分支 B：普通组件/通道类型参数 ========
+        // 场景：参数是组件（如 res<T>）、通道（如 spmc<Topic>）或其他 World 注册的类型
+
+        // 从全局 World 容器中查询并获取类型 T 的句柄
+        // World::get<T>() 内部会根据 T 的类型元信息定位对应的组件存储或通道实例
         return world.get<T>();
     }
 }
 
 /**
- * @brief 按从左到右顺序批量构造所有参数（保证求值顺序）
- * C++17 花括号初始化列表保证顺序执行，规避模板参数乱序问题
- * @tparam ArgsTuple 目标参数元组类型
- * @tparam LocalStorage 本地存储
- * @tparam Is 下标索引序列
- * @return 组装完成的函数参数元组
+ * @brief 按从左到右顺序批量构造所有函数参数（严格保证求值顺序）
+ *
+ * 核心原理：
+ * 使用 C++17 花括号初始化列表（{ }）的特性——编译器会严格按照模板参数包展开的
+ * 从左到右顺序执行各元素的构造，从而规避了函数参数包展开时可能存在的求值顺序不确定问题。
+ *
+ * 工作流程：
+ * 1. 利用 std::index_sequence<Is...> 将参数元组的每个下标编译期展开
+ * 2. 对每个下标 Is，通过 std::tuple_element_t 获取该位置的参数原始类型
+ * 3. 调用 make_arg 为每个参数构造实际值：
+ *    - 组件/通道类型：从 World 中查询并获取
+ *    - local<T> 本地类型：从 local_storage 元组中按偏移量取出
+ * 4. 将所有构造好的参数打包为 ArgsTuple（即 std::tuple<Args...>）返回
+ *
+ * @tparam ArgsTuple      目标参数元组类型（通常为 std::tuple<组件类型...>）
+ * @tparam LocalStorage   本地存储元组类型（仅包含 local<T> 类型的存储）
+ * @tparam Is             编译期下标索引序列（由 std::make_index_sequence 生成）
+ *
+ * @param world          ECS 全局世界容器，用于查询组件/通道句柄
+ * @param local_storage  系统内部本地变量存储元组
+ * @param index_seq      编译期索引序列（函数参数包展开驱动，无运行时开销）
+ *
+ * @return ArgsTuple     构造完成的函数参数元组，可直接用于 std::apply 调用
+ *
+ * @note 此函数 noexcept，因为所有组件查询和本地存储访问均为 noexcept 操作
+ *
+ * 性能分析：
+ * - 所有类型推导、下标计算（count_locals_before）均在编译期完成
+ * - 运行期仅做对象构造，无额外分支判断
  */
 template <typename ArgsTuple, typename LocalStorage, std::size_t... Is>
 auto make_args_sequenced(
     World& world, LocalStorage& local_storage, std::index_sequence<Is...>) noexcept {
+    // 通过花括号初始化列表，按 Is 从小到大的顺序依次构造每个参数
+    //
+    // 展开示意（假设 Is = [0, 1, 2]）：
+    // ArgsTuple{
+    //     make_arg<tuple_element_t<0, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 0>::value>{}),
+    //     make_arg<tuple_element_t<1, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 1>::value>{}),
+    //     make_arg<tuple_element_t<2, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 2>::value>{})
+    // }
+    //
+    // 其中 count_locals_before<ArgsTuple, Is>::value 的作用：
+    //   计算「在第 Is 个参数之前」有多少个 local<T> 类型的参数，
+    //   从而确定当前 local<T> 参数在 local_storage 元组中的实际存储偏移位置。
+    //   例如：参数列表 [local<A>, ComponentB, local<C>]，
+    //   对 Is=0 (local<A>)，偏移=0（之前0个local）
+    //   对 Is=2 (local<C>)，偏移=1（之前有1个local<A>）
     return ArgsTuple{make_arg<std::tuple_element_t<Is, ArgsTuple>>(
         world, local_storage,
         // 传入当前下标之前的local数量，定位本地存储偏移
@@ -296,14 +367,21 @@ class System : public SystemBase {
      */
     template <std::size_t I = 0>
     void bind_written_flags() noexcept {
-        // 递归终止：遍历完所有参数
-        if constexpr (I < std::tuple_size_v<args_tuple>) {
+        // 编译期分支：如果下标I还没超出tuple长度，才走逻辑
+        if constexpr (I < std::tuple_size_v<args_tuple>) 
+        {
+            // 拿到tuple第I个位置的类型（编译期）
             using ArgType = std::tuple_element_t<I, args_tuple>;
-            // 如果当前参数是「写组件」，绑定标记位
-            if constexpr (detail::is_writer<ArgType>::value) {
+
+            // 编译期判断：这个类型是不是Writer写组件
+            if constexpr (detail::is_writer<ArgType>::value) 
+            {
+                // 取出cached_args_这个tuple里第I个writer实例
+                // 把writer内部的written_flag_指针，指向外面的written_标记
                 std::get<I>(*cached_args_).written_flag_ = &written_;
             }
-            // 递归处理下一个参数
+
+            // 递归下一个下标
             bind_written_flags<I + 1>();
         }
     }
