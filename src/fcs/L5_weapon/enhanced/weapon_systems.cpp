@@ -225,103 +225,139 @@ WeaponCommand apply_track_fire_gate(
  * 3. 错误处理:
  *    - MPC优化失败 → 使用降级透传指令
  *    - 云台姿态查询失败 → 记录错误日志
+
+ * @brief 注册L5增强武器控制系统，注册进talos调度器
+ * @param scheduler talos调度器实例
+ * @param config L5层武器配置，配置会移动进入world资源
  *
- * @param scheduler 调度器实例
- * @param config L5配置(移动语义,避免拷贝)
+ * 层级链路：
+ * L4瞄准系统输出 ControlIntent（SPMC通道） → L5 enhanced_weapon_control(250Hz)
+ * → 经过MPC轨迹优化、开火门判定 → WeaponCommand武器指令(SPMC输出)
+ * → 下发L1硬件层，最终发给云台MCU，控制角度、开火信号
+ *
+ * 三种输入意图类型：
+ * 1. TrackCommand：持续跟踪目标，使用MPC做预测弹道优化
+ * 2. ShotCommand：单次打击指令，透传模式，不走MPC优化
+ * 3. HoldCommand：保持当前云台姿态，不瞄准任何目标
  */
 void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& config) {
-    // 步骤1:获取L4轨迹配置
+    // 步骤1:获取L4轨迹配置，从全局ECS资源读取参考弹道参数
     const auto trajectory_cfg = scheduler.world().get_res<L4::L4Config>()->reference_trajectory;
 
-    // 步骤2:将L5配置插入资源容器(其他系统可访问)
+    // 步骤2:将L5配置插入资源容器，整个调度器内所有system都可以读取这份L5配置
     scheduler.world().insert_resource(config);
 
-    // 步骤3:创建轨迹优化器实例(使用shared_ptr避免拷贝)
+    // 步骤3:创建轨迹优化器实例，使用shared_ptr避免大对象拷贝
+    // TinyMpcTrajectoryOptimizer：MPC轨迹求解器，用于运动目标的预测弹道优化
     auto optimizer =
         std::make_shared<TinyMpcTrajectoryOptimizer>(config.mpc_weapon, trajectory_cfg);
 
-    // 步骤4:注册武器控制系统(fixed_rate@250Hz)
+    // 步骤4:注册武器控制系统，固定250Hz周期执行，周期4ms，控制强实时
     scheduler.add_system<talos::fixed_rate<250>>(
         "enhanced_weapon_control",
+        // lambda捕获：系统私有持久状态，仅本system可以访问
+        // optimizer：MPC优化器共享指针；trajectory_cfg：弹道参考配置；fire_cfg：开火判定参数
         [optimizer, trajectory_cfg, fire_cfg = config.fire_decision](
+            // 输入SPMC通道：接收L4瞄准输出的控制意图
             talos::spmc<fcs::L4::ControlIntent, ControlIntentChannelTopic> intent_in,
+            // 全局资源：fast_tf坐标变换缓存，查询云台当前姿态
             talos::res<fast_tf::CoordinateSystem> tf_buffer,
+            // 输出SPMC通道：输出最终武器指令，下发给L1硬件层
             talos::spmc_mut<WeaponCommand, WeaponCommandChannelTopic> weapon_out) mutable {
-            // 读取控制意图(非阻塞)
+
+            // 读取SPMC通道最新控制意图，非阻塞读取
             auto intent = intent_in.read();
+            // 没有收到L4下发的新意图，本帧直接退出，不输出指令
             if (!intent) {
-                return; // 无新数据,直接返回
+                return;
             }
 
+            // 获取当前系统时间，单位纳秒
             const uint64_t now = fcs::clock::now_ns();
 
-            // 使用std::visit穷尽处理所有意图类型
+            // std::visit + overloaded：C++变体std::visit多路分发
+            // ControlIntent是std::variant，可以存放 TrackCommand / ShotCommand / HoldCommand
+            // 根据variant内部实际存储的类型，自动进入对应分支执行逻辑
             std::visit(
                 overloaded{
-                    // 分支1:Track意图(持续跟踪)
+                    // ==============================================
+                    // 分支1：TrackCommand 持续跟踪模式（打移动装甲目标主要走这里）
+                    // ==============================================
                     [&](const L4::TrackCommand& cmd) {
-                        // 步骤1:执行MPC优化
+                        // 步骤1：调用MPC轨迹优化器，对运动目标做预测弹道求解
+                        // 返回std::expected，成功拿到WeaponCommand；失败携带错误信息
                         auto opt         = optimizer->optimize(cmd, now);
+                        // MPC优化成功就用优化结果；失败调用track_fallback降级兜底方案
                         WeaponCommand wc = opt ? *opt : track_fallback(cmd, now);
 
-                        // 步骤2:记录降级原因(如果优化失败)
+                        // 步骤2：记录降级原因，MPC求解失败时打印警告日志，方便调试Foxglove看报错
                         if (!opt) {
                             wc.degradation_reason = opt.error();
                             SPDLOG_WARN("MPC optimization failed: {}", opt.error());
                         }
 
-                        // 步骤3:获取当前云台姿态
+                        // 步骤3：查询当前真实云台姿态（从fast_tf插值获取）
                         auto tf = L4::lookup_gimbal_transform(*tf_buffer, now);
                         if (tf) {
-                            // 步骤4:应用开火门判断
+                            // 拿到云台欧拉角 r(roll) p(pitch俯仰) y(yaw偏航)
                             auto [r, p, y] = tf->euler_rot().rpy();
+                            // 步骤4：应用【开火门fire‑gate】逻辑
+                            // 判断：云台实际角度与瞄准解角度偏差是否小于阈值；角度误差大就禁止开火
                             wc = apply_track_fire_gate(wc, cmd, trajectory_cfg, fire_cfg, y, p);
                         }
 
-                        // 步骤5:写入武器指令通道
+                        // 步骤5：把最终武器指令写入SPMC通道，输出到L1硬件层
                         weapon_out.write(wc);
                     },
 
-                    // 分支2:Shot意图(单次打击)
+                    // ==============================================
+                    // 分支2：ShotCommand 单次打击指令
+                    // 一般用于能量机关、LDM吊射，不需要MPC迭代优化，直接透传瞄准角度
+                    // ==============================================
                     [&](const L4::ShotCommand& cmd) {
-                        // 步骤1:构建透传指令(无MPC优化)
+                        // 步骤1：passthrough透传接口，不跑MPC优化，直接生成武器指令
                         auto wc = optimizer->passthrough(cmd, now);
 
-                        // 步骤2:传递降级原因(如果有)
+                        // 步骤2：继承上游传递过来的降级原因，用于可视化调试
                         if (cmd.degradation_reason) {
                             wc.degradation_reason = *cmd.degradation_reason;
                         }
 
-                        // 步骤3:获取当前云台姿态
+                        // 步骤3：查询当前云台姿态
                         auto tf = L4::lookup_gimbal_transform(*tf_buffer, now);
                         if (tf) {
-                            // 步骤4:应用开火门判断
+                            // 取出云台当前rpy欧拉角
                             auto [r, p, y] = tf->euler_rot().rpy();
+                            // 组装目标点结构体，传入开火门判断函数
                             const ReferenceTrajectory::AimPoint target{
                                 .yaw      = cmd.yaw,
                                 .pitch    = cmd.pitch,
                                 .distance = cmd.distance,
                             };
+                            // 执行开火门校验，角度偏差过大关闭开火输出
                             wc = fire_gate(wc, fire_cfg, y, p, target);
                         } else {
-                            // 步骤5:云台姿态查询失败,记录错误
+                            // TF查询失败，打印错误日志
                             SPDLOG_ERROR("Gimbal transform lookup failed: {}", tf.error());
                         }
 
-                        // 步骤6:写入武器指令通道
+                        // 步骤6：输出武器指令
                         weapon_out.write(wc);
                     },
 
-                    // 分支3:Hold意图(保持姿态)
+                    // ==============================================
+                    // 分支3：HoldCommand 保持姿态指令
+                    // 没有可打击目标时进入该分支，云台维持现有角度，禁止开火
+                    // ==============================================
                     [&](const L4::HoldCommand&) {
-                        // 不发送瞄准指令,云台保持当前位置
+                        // 构造空武器指令
                         auto wc         = WeaponCommand{};
                         wc.timestamp_ns = now;
-                        wc.distance     = -1.0; // 标记为无效目标
+                        wc.distance     = -1.0; // distance=-1作为标记：无有效打击目标
                         weapon_out.write(wc);
                     },
                 },
-                *intent);
+                *intent); // 把variant变体对象传入visit，完成类型分发
         });
 }
 

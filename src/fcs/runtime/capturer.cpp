@@ -1519,13 +1519,33 @@ private:
 
 } // namespace
 
+/**
+ * @brief 注册运行时数据录制系统 RuntimeCapturer
+ * @param scheduler talos调度器
+ * @param config 录制器配置：开关、输出目录、录制参数
+ * @param launch 启动上下文，存放进程、日志相关上下文信息
+ *
+ * 功能：整套机器人全链路数据录制，把图像、检测、跟踪、L4瞄准、L5武器指令、控制器状态全部保存落盘。
+ * 用于：离线复现bug、离线仿真回放、数据集采集、问题定位。
+ *
+ * 三个系统分工：
+ * 1. runtime_control_recorder @250Hz：高频控制链路采样（控制意图、武器指令、控制器状态）
+ * 2. runtime_camera_recorder  @20Hz：图像帧采样，附带武器开火状态、手控跟随标记
+ * 3. runtime_capturer         @4Hz：低频全量大包录制，保存感知、跟踪、瞄准全套调试数据
+ *
+ * 注意标签 talos::fixed_rate_silent：静默定频系统，**超时阻塞不会触发调度器告警**；
+ * 录制写磁盘IO容易阻塞，不能用普通fixed_rate，否则调度器报系统超时警告。
+ */
 void register_runtime_capturer_system(
     talos::Scheduler& scheduler, const CapturerConfig& config,
-    const CapturerLaunchContext& launch) {
+    const CapturerLaunchContext& launch)
+{
+    // 如果配置关闭录制，直接返回，不注册任何录制系统
     if (!config.enabled) {
         return;
     }
 
+    // 创建录制器实例，返回std::expected，成功得到RuntimeCapturer对象；失败携带错误字符串
     auto capturer_result = RuntimeCapturer::create(config, launch);
     if (!capturer_result) {
         SPDLOG_ERROR("runtime capturer disabled: {}", capturer_result.error());
@@ -1533,55 +1553,122 @@ void register_runtime_capturer_system(
     }
 
     SPDLOG_INFO("runtime capturer enabled: {}", config.output_dir);
+
+    //================================================================================
+    // 系统1：runtime_control_recorder 250Hz 高频控制链路采样
+    // talos::fixed_rate_silent<250>：静默定频，写磁盘IO阻塞不会打印调度超时告警
+    // 录制对象：L4控制意图、L5武器指令、底层控制器状态；控制环是250Hz，必须高频采样
+    //================================================================================
     scheduler.add_system<talos::fixed_rate_silent<250>>(
         "runtime_control_recorder",
+        // 捕获capturer实例，lambda内部持有对象拷贝
         [capturer = *capturer_result](
+            // 输入SPMC通道：L4输出瞄准意图
             talos::spmc<L4::ControlIntent, ControlIntentChannelTopic> control_intent_in,
+            // 输入SPMC通道：L5输出武器指令
             talos::spmc<L5::WeaponCommand, WeaponCommandChannelTopic> weapon_command_in,
+            // 输入SPMC通道：底层控制器硬件快照（云台角度、电流、遥控器状态等）
             talos::spmc<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic>
-                control_state_in) mutable {
+                control_state_in) mutable
+        {
+            /**
+             * sample_channel()：工具函数，从spmc通道采样最新一帧数据
+             * 不是阻塞读；没有新消息就返回std::nullopt，录制器内部处理空样本
+             */
             capturer->record_control_sample(
-                fcs::clock::now_ns(), sample_channel(control_intent_in),
-                sample_channel(weapon_command_in), sample_channel(control_state_in));
+                fcs::clock::now_ns(),
+                sample_channel(control_intent_in),
+                sample_channel(weapon_command_in),
+                sample_channel(control_state_in));
         });
+
+    //================================================================================
+    // 系统2：runtime_camera_recorder 20Hz 图像帧录制
+    // 图像一般20fps，不需要跑250Hz；同时附带武器指令、手控跟随状态标记
+    //================================================================================
     scheduler.add_system<talos::fixed_rate_silent<20>>(
         "runtime_camera_recorder",
         [capturer = *capturer_result](
+            // 图像输入通道
             talos::spmc<ImageFrame, ImageChannelTopic> image_in,
+            // 武器指令，标记这一帧图像时刻是否允许开火
             talos::spmc<L5::WeaponCommand, WeaponCommandChannelTopic> weapon_command_in,
-            core::following following) mutable {
+            // 全局原子标记：是否手控跟随模式
+            core::following following) mutable
+        {
             capturer->capture_camera_tick(
-                fcs::clock::now_ns(), sample_channel(image_in), sample_channel(weapon_command_in),
-                following->load());
+                fcs::clock::now_ns(),
+                sample_channel(image_in),
+                sample_channel(weapon_command_in),
+                following->load()); // 读取原子布尔，当前是否手控模式
         });
+
+    //================================================================================
+    // 系统3：runtime_capturer 4Hz 低频全量数据录制
+    // 4Hz，不需要每一帧都保存全套感知数据，降低磁盘IO压力
+    // 一次性采样整条链路所有模块输出：图像、检测、测量、跟踪、能量机关、L4/L5输出
+    // 完整复现一整帧业务链路所有中间结果，用于离线调试、复现bug
+    //================================================================================
     scheduler.add_system<talos::fixed_rate_silent<4>>(
         "runtime_capturer",
+        // std::move：把capturer实例所有权移动到这个lambda；前两个系统是拷贝共享，本系统接管原始实例
         [capturer = std::move(*capturer_result)](
             talos::spmc<ImageFrame, ImageChannelTopic> image_in,
-            talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> detection_in,
-            talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> measurement_in,
-            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in,
-            talos::spmc<rune::RuneObservation, RuneObservationChannelTopic> rune_observation_in,
+            talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> detection_in,          // L2装甲检测输出
+            talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> measurement_in,    // L2 PnP测量结果
+            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in,         // L3跟踪器输出
+            talos::spmc<rune::RuneObservation, RuneObservationChannelTopic> rune_observation_in, // 能量机关观测
+            // 能量机关调试帧：绘制点、线、包围盒，Foxglove可视化用的调试图元数据
             talos::spmc<rune::RuneDebugFrame, RuneDebugFrameChannelTopic> rune_debug_in,
-            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic>
-                energy_meter_in,
-            talos::spmc<L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
-                selected_target_in,
-            talos::spmc<L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic>
-                target_selection_trace_in,
+
+            // 能量机关模块状态：已打多少块、剩余时间、激活状态等业务状态
+            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic> energy_meter_in,
+
+            // L4输出：选中目标快照，保存当前锁定的目标ID、装甲ID、目标位置信息，给ROI、可视化、录制使用
+            talos::spmc<L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> selected_target_in,
+
+            // L4输出：目标选择完整Trace追踪日志
+            // 记录为什么选这个目标、为什么切换目标、打分、切换裕量；用于调试目标乱跳问题，Foxglove回放看决策过程
+            talos::spmc<L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic> target_selection_trace_in,
+
+            // L4瞄准输出：控制意图variant(Track/Shot/Hold)，传给L5武器系统
             talos::spmc<L4::ControlIntent, ControlIntentChannelTopic> control_intent_in,
+
+            // L5武器系统输出：最终武器指令，包含yaw/pitch、开火门、降级原因
             talos::spmc<L5::WeaponCommand, WeaponCommandChannelTopic> weapon_command_in,
-            talos::spmc<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic>
-                control_state_in) mutable {
-            const auto tick_timestamp_ns = fcs::clock::now_ns();
-            capturer->capture_tick(
-                tick_timestamp_ns, sample_channel(image_in), sample_channel(detection_in),
-                sample_channel(measurement_in), sample_channel(tracker_in),
-                sample_channel(rune_observation_in), sample_channel(rune_debug_in),
-                sample_channel(energy_meter_in), sample_channel(selected_target_in),
-                sample_channel(target_selection_trace_in), sample_channel(control_intent_in),
-                sample_channel(weapon_command_in), sample_channel(control_state_in));
-        });
+
+            // 底层硬件控制器快照：云台实际角度、遥控器按键、电流、底盘状态等硬件反馈
+            talos::spmc<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_state_in) mutable
+            {
+                // 获取当前系统时间戳（纳秒），这一整个tick的统一时间戳
+                const auto tick_timestamp_ns = fcs::clock::now_ns();
+
+                /*
+                capturer->capture_tick()：录制器的主录入接口
+                sample_channel(xxx_in)：工具函数，读取spmc通道的最新样本
+                    ✅通道有新数据：返回std::optional<T>包含最新消息
+                    ❌通道没有新消息：返回std::nullopt
+                注意：不是阻塞等待，只是“采样此刻最新的一份”，不会卡住系统。
+
+                虽然各个通道产生时间戳各不相同，但录制tick使用调用时刻 tick_timestamp_ns 作为这一批样本的捆绑时间；
+                回放的时候，每条样本内部自带原生timestamp_ns，**真正对齐依靠每条消息自己内部的时间戳，不是这个tick时间**。
+                */
+                // 调用录制器tick接口，一次性采样全部通道，打包写入磁盘
+                capturer->capture_tick(
+                    tick_timestamp_ns,
+                    sample_channel(image_in),                 // 图像帧
+                    sample_channel(detection_in),             // L2装甲检测结果
+                    sample_channel(measurement_in),           // L2 PnP测量结果
+                    sample_channel(tracker_in),               // L3跟踪器输出
+                    sample_channel(rune_observation_in),      // 能量机关观测结果
+                    sample_channel(rune_debug_in),            // 能量机关调试可视化帧
+                    sample_channel(energy_meter_in),          // 能量机关业务状态
+                    sample_channel(selected_target_in),       // L4选中目标快照
+                    sample_channel(target_selection_trace_in), // L4目标选择决策trace日志
+                    sample_channel(control_intent_in),        // L4控制意图
+                    sample_channel(weapon_command_in),        // L5武器输出指令
+                    sample_channel(control_state_in));        // 底层硬件控制器快照
+            });
 }
 
 } // namespace fcs::runtime
