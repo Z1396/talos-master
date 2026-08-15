@@ -279,9 +279,9 @@ using spmc = basic_channel<
  */
 template <typename T, typename Topic = DefaultTopic>
 using spmc_mut = basic_writer<
-    T, 
-    Topic, 
-    typename primitive::SpmcChannel<T>::Writer, 
+    T,
+    Topic,
+    typename primitive::SpmcChannel<T>,
     channel_kind::spmc_writer>;
 
 // ------------------------------

@@ -850,15 +850,23 @@ auto write_hold_outputs(
 } // namespace
 
 /**
- * @brief 向Talos调度器注册L4瞄准系统
- * 1. 注册全局配置资源
- * 2. 创建自动驾驶/手控两套目标决策器
- * 3. 注册250Hz主瞄准系统
- * 4. 注册异步ROI下发系统
+ * @brief 注册L4瞄准系统整套系统到talos调度器
+ * @param scheduler talos调度器实例，管理所有系统、资源、通道
+ * @param config L4层瞄准配置，配置所有权会move进入world资源
+ *
+ * 整套瞄准系统拆成两套system：
+ * 1. l4_aimer：**250Hz定频主瞄准逻辑**，做目标选择、弹道求解、输出云台控制指令
+ * 2. l4_optimal_target_readback_roi：线程池异步任务，计算ROI区域下发给L2感知，缩小检测范围加速推理
+ *
+ * 数据流：
+ * L3 TrackerOutputs(SPMC通道) → L4瞄准系统 → ControlIntent控制意图(SPMC) → L1层输出给云台MCU
+ *         └── 输出SelectedTargetSnapshot快照、Trace调试数据给Foxglove可视化
  */
 void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
     auto& world = scheduler.world();
-    // 注入ROI配置与缓存全局资源
+
+    // ========== 注入全局资源：ROI配置、跟踪器缓存 ==========
+    // 如果全局资源还不存在，则插入资源；防止多次调用register重复插入报错
     if (!world.has_resource<L2::ArmorReadbackRoiConfig>()) {
         world.insert_resource(L2::ArmorReadbackRoiConfig{});
     }
@@ -866,16 +874,34 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
         world.insert_resource(L2::TrackerReadbackCache{});
     }
 
-    // 构造两种模式决策器
+    // ========== 构造两套目标决策器 ==========
+    // 自动模式决策器：自动选装甲、切换目标
     auto unmanned_armor_target_decider = make_armor_target_decider(
         config.aimer.target_selection.decider, config.aimer.target_selection.switch_margin);
+    // 手控模式决策器：手控跟随模式，优先画面中心目标
     auto manned_armor_target_decider = make_armor_target_decider(
         ArmorTargetDeciderKind::Manned, config.aimer.target_selection.switch_margin);
 
+    // 将瞄准配置、L4总配置移动到ECS全局资源，供system参数res<>读取
     world.insert_resource(Aimer(config.aimer));
     world.insert_resource(std::move(config));
 
-    // 注册250Hz定频瞄准主系统
+    // =================================================================================
+    // 【核心主系统 l4_aimer】250Hz定频运行，瞄准主循环
+    // talos::fixed_rate<250>：调度器约束，强制250Hz执行，周期4ms
+    // lambda捕获列表：[]里面的变量是**系统本地状态**，每次调用不会销毁，持久保存
+    //      std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash> phase_states
+    //          → 每个目标对应的弹道相位状态，多目标状态持久保存
+    //      unmanned_armor_target_decider / manned_armor_target_decider：两种决策器实例
+    //      was_following：上一帧是否手控跟随，做状态跳变检测
+    //      decider_state：目标选择器内部状态，保存当前选中目标key
+    //
+    // 系统参数（talos注入）：
+    // talos::res<T>        → 只读全局资源
+    // talos::res_mut<T>    → 可写全局资源
+    // talos::spmc<In,T>    → SPMC只读输入通道（多消费者）
+    // talos::spmc_mut<Out,T> → SPMC可写输出通道，写消息给下游/可视化
+    // =================================================================================
     scheduler.add_system<talos::fixed_rate<250>>(
         "l4_aimer",
         [phase_states =
@@ -883,25 +909,32 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
          unmanned_armor_target_decider = std::move(unmanned_armor_target_decider),
          manned_armor_target_decider   = std::move(manned_armor_target_decider),
          was_following = false, decider_state = ArmorTargetDeciderState{}](
-            talos::res<L4Config> cfg, talos::res<Aimer> aimer,
-            core::trajectory::trajectory_solver solver,
-            core::trajectory::bullet_speed bullet_speed_, core::following following,
-            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in,
-            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic> rune_in,
-            talos::spmc<L3::ldm::LdmState> ldm_in, talos::res<fast_tf::CoordinateSystem> tf_buffer,
-            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> out_snap,
-            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic> out_trace,
-            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic> out_ctrl) mutable {
+            talos::res<L4Config> cfg,                          // 只读L4配置资源
+            talos::res<Aimer> aimer,                           // 瞄准模块参数
+            core::trajectory::trajectory_solver solver,         // 弹道求解器句柄（共享）
+            core::trajectory::bullet_speed bullet_speed_,      // 弹丸初速资源
+            core::following following,                         // 手控跟随开关原子标记
+            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in, // L3跟踪输出输入通道
+            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic> rune_in, // 能量机关状态输入
+            talos::spmc<L3::ldm::LdmState> ldm_in,             // LDM吊射目标输入通道
+            talos::res<fast_tf::CoordinateSystem> tf_buffer,   // fast‑tf坐标变换缓存资源
+            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> out_snap, // 输出选中目标快照（可视化+ROI使用）
+            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic> out_trace,   // 输出目标选择调试trace，给Foxglove
+            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic> out_ctrl) mutable {        // 输出云台控制意图，下发L1硬件层
+
             const uint64_t now_ns = fcs::clock::now_ns();
-            // 查询当前云台、枪口坐标系变换
+
+            // 查询当前时刻：云台坐标系、枪口坐标系变换；从fast_tf缓存插值得到
             const auto xf         = lookup_gimbal_muzzle_transforms(*tf_buffer, now_ns);
+            // [[unlikely]]编译器提示：这个分支属于极少发生的冷路径，编译器做优化
             if (!xf) [[unlikely]] {
                 SPDLOG_WARN("tf lookup failed: {}", xf.error());
-                return;
+                return; // TF查询失败，本帧直接放弃输出控制
             }
+            // 结构化绑定：gimbal云台位姿，muzzle枪口位姿，ts_ns变换对应的时间戳
             const auto& [gimbal, muzzle, ts_ns] = *xf;
 
-            // 封装全局上下文
+            // 组装瞄准上下文，把本帧所有不变参数打包，传递给各个决策函数
             const AimContext ctx{
                 .gimbal       = gimbal,
                 .muzzle       = muzzle,
@@ -911,37 +944,46 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
                 .aimer        = *aimer,
             };
 
-            // 判断是否进入手控跟随模式
+            // ========== 手控跟随模式状态机 ==========
+            // following是原子变量：外部UI/遥控器设置，true=手控跟随模式
             const bool is_following = following->load();
-            // 刚切入手控模式，清空选中目标，强制重新锁定画面中心目标
+            // 检测上升沿：上一帧不是手控，本帧切到手控
             if (is_following && !was_following) {
-                decider_state.selected_key.reset();
+                decider_state.selected_key.reset(); // 清空选中目标，手控强制重新选中心目标
             }
-            // 切换当前生效的决策器
+
+            // 根据模式切换使用哪一套目标决策器
             const ArmorTargetDecider& active_armor_target_decider =
                 is_following ? manned_armor_target_decider : unmanned_armor_target_decider;
+            // 更新状态，保存本帧跟随标记，给下一帧做边沿检测
             was_following = is_following;
 
+            // 读取L3跟踪器最新一帧全部跟踪目标输出
             const auto tracker_vec = tracker_in.read_current();
-            // 获取兜底目标用于ROI下发
+
+            // 获取兜底目标：当完全没有新决策输出时，ROI模块可以继续使用上一个有效目标
             const auto fallback =
                 pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
 
-            // 优先级1：尝试击打装甲板
+            // ========== 目标优先级逻辑：1.装甲板优先 ==========
+            // try_armor：装甲目标选择、弹道计算，输出瞄准决策std::optional<Decision>
             auto decision = try_armor(
                 tracker_vec, ctx, active_armor_target_decider, decider_state, cfg->aimer,
                 cfg->aimer.target_selection, cfg->reference_trajectory, phase_states);
 
-            // 优先级2：无装甲可打，尝试击打能量机关
+            // ========== 优先级2：没有装甲目标，尝试打能量机关 ==========
             if (!decision) {
                 decision = try_rune(rune_in.read_current(), ctx);
                 if (decision) {
+                    // 选中非装甲目标，清空装甲目标key，防止状态错乱
                     reset_selected_target_key_for_non_armor_source(decider_state);
                 }
             }
-            // 优先级3：无装甲无能量机关，尝试LDM吊射
+
+            // ========== 优先级3：没有装甲、没有能量机关，尝试LDM吊射 ==========
             if (!decision) {
                 auto i = ldm_in.read();
+                // 如果LDM还处于检测状态，不输出吊射决策，直接返回
                 if (i->status == L3::TrackerStatus::Detecting) {
                     return;
                 }
@@ -951,45 +993,58 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
                 }
             }
 
-            // 输出控制指令
+            // ========== 输出结果到各个SPMC通道 ==========
             if (decision) {
+                // 有有效瞄准决策：把快照、trace调试信息、控制意图写入SPMC通道
                 out_snap.write(std::move(decision->snapshot));
                 out_trace.write(std::move(decision->trace));
                 out_ctrl.write(std::move(decision->intent));
             } else {
-                // 无目标，云台保持不动
+                // 完全没有任何可打击目标：输出hold保持指令，云台不动
                 write_hold_outputs(out_snap, out_trace, out_ctrl, decider_state, fallback);
             }
         });
 
-    // 额外异步线程池系统：下发ROI给L2感知，缩小识别区域提升性能
+    // =================================================================================
+    // 【异步线程池系统 l4_optimal_target_readback_roi】 pool_compute 线程池任务
+    // 不在250Hz主循环，丢进后台线程池执行，做ROI计算，不阻塞瞄准主逻辑
+    // 作用：告诉L2感知，只需要检测目标附近一小块图像区域，裁剪ROI，降低推理算力开销
+    // 输入：SelectedTargetSnapshot（l4_aimer输出的选中目标快照）
+    // 输出：写入TrackerReadbackCache全局资源，L2检测器读取这个cache做图像裁剪
+    // =================================================================================
     scheduler.add_system<talos::pool_compute>(
         "l4_optimal_target_readback_roi",
         [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
                selected_target_in,
            talos::res<L2::ArmorReadbackRoiConfig> readback_roi_config,
            talos::res_mut<L2::TrackerReadbackCache> readback_cache) {
+            // lambda内部辅助函数：判断当前快照是否支持ROI回传，只有装甲目标才支持
             auto has_readback_tracker = [](const SelectedTargetSnapshot& snapshot) noexcept {
                 return snapshot.source == GimbalPlanSource::Armor
                     && tracker_supports_readback_roi(snapshot.tracker);
             };
+
+            // spmc通道没有新数据，直接退出，不做计算
             if (!selected_target_in.has_new()) {
                 return;
             }
 
+            // 读取最新选中目标快照
             const auto selected_target = selected_target_in.read();
             if (!selected_target) {
                 return;
             }
 
-            // ROI功能关闭/目标不合法，清空缓存
+            // ROI总开关关闭 / 当前目标类型不支持ROI → 使缓存失效，L2不再做ROI裁剪
             if (!readback_roi_config->enabled || !has_readback_tracker(*selected_target)) {
                 readback_cache->invalidate(selected_target->timestamp_ns);
                 return;
             }
 
+            // 根据目标快照，计算ROI对应的两组时间戳：投影时间、新鲜度时间
             const auto roi_timestamps = resolve_readback_roi_timestamps(*selected_target);
-            // 将目标ROI信息写入全局缓存，L2感知读取后裁剪图像
+
+            // 将ROI信息存入全局缓存；L2装甲检测系统读取此缓存，对原图做ROI裁剪
             readback_cache->store(
                 L2::TrackerReadbackSnapshot{
                     .valid                   = true,
