@@ -435,6 +435,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
     // 输入SPMC通道：装甲检测批量帧、LDM光斑检测、LDM八边形位姿解算结果
     // 全局资源：Foxglove服务、相机标定、可视化配置、TF变换树、LDM几何参数
     // =========================================================================
+    //add_system:节点           里面的lambda表达式里的参数是每个通道类型
     app.add_system<talos::pool_compute>(
         "foxglove_l1_image_pub",
         // 系统持久状态捕获：lambda每次执行复用这两个状态，不会重复创建编码器/缓存

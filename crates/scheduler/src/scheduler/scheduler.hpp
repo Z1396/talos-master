@@ -411,9 +411,9 @@ private:
      * 用于运行时快速切换、热更后原子替换
      */
     struct TopologySnapshot {
-        std::vector<std::vector<std::size_t>> levels;          // 计算系统分层
-        std::vector<std::uint64_t> fixed_rate_affects;        // 定频系统影响掩码
-        std::vector<std::uint64_t> compute_affects;           // 计算系统依赖掩码
+        std::vector<std::vector<std::size_t>> levels;          // Kahn分层
+        std::vector<std::uint64_t> fixed_rate_affects;         // 定频→compute唤醒掩码
+        std::vector<std::uint64_t> compute_affects;            // compute→compute唤醒掩码
     };
 
     // ------------------------------

@@ -335,6 +335,13 @@ auto Scheduler::build() -> BuildResult {
     }
 
     // 第一步：生成拓扑快照，完成通道合法性校验、依赖环检测、分层计算
+    /*扫描所有系统的通道读写
+    → 校验合法性（多写者/多读者SPSC/孤儿读者）
+    → 建依赖邻接掩码 adj_mask
+    → Kahn 拓扑排序生成 levels
+    → 环检测
+    → 可达性校验
+    → 预生成唤醒掩码 fixed_rate_affects / compute_affects*/
     auto topology_result = build_topology_snapshot();
     if (!topology_result) {
         // 拓扑校验失败，向上抛出错误
@@ -642,8 +649,7 @@ std::uint64_t Scheduler::sum_notify_counts() const noexcept {
 void Scheduler::bind_external_compute_sources() noexcept {
     for (std::size_t i = 0; i < compute_systems_.size(); ++i) {
         // 判断系统是否为外部触发源
-        if (auto* external = compute_systems_[i].system->as_external_compute();
-            external != nullptr) {
+        if (auto* external = compute_systems_[i].system->as_external_compute(); external != nullptr) {
             // 绑定就绪位掩码与自身系统下标
             external->bind_external_ready_slot(&ready_systems_, i);
         }

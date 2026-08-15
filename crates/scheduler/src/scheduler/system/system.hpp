@@ -2,21 +2,21 @@
 // 头文件保护，防止重复包含
 
 // 框架依赖头文件
-#include "../world.hpp"          // ECS 核心 World 容器：管理所有实体、组件、通信通道
-#include "components.hpp"        // 组件类型定义、读写标记、local 本地类型包装
-#include "execution_policy.hpp"  // 执行策略（串行/并行、优先级、调度规则）
-#include "system_meta.hpp"       // 系统元数据：名称、依赖、读写权限、调度属性
+#include "../world.hpp"         // ECS 核心 World 容器：管理所有实体、组件、通信通道
+#include "components.hpp"       // 组件类型定义、读写标记、local 本地类型包装
+#include "execution_policy.hpp" // 执行策略（串行/并行、优先级、调度规则）
+#include "system_meta.hpp"      // 系统元数据：名称、依赖、读写权限、调度属性
 
 // 标准库依赖
-#include <atomic>        // 原子变量，跨线程就绪标记
-#include <cstddef>       // 标准尺寸类型 size_t
-#include <cstdint>       // 固定宽度整型
-#include <memory>        // 智能指针 unique_ptr
-#include <optional>      // 可选容器，延迟初始化参数组
-#include <string>        // 系统名称字符串
-#include <tuple>         // 元组，批量管理系统运行参数
-#include <type_traits>   // 模板元编程、类型萃取
-#include <utility>       // 移动语义、std::forward
+#include <atomic>      // 原子变量，跨线程就绪标记
+#include <cstddef>     // 标准尺寸类型 size_t
+#include <cstdint>     // 固定宽度整型
+#include <memory>      // 智能指针 unique_ptr
+#include <optional>    // 可选容器，延迟初始化参数组
+#include <string>      // 系统名称字符串
+#include <tuple>       // 元组，批量管理系统运行参数
+#include <type_traits> // 模板元编程、类型萃取
+#include <utility>     // 移动语义、std::forward
 
 /**
  * @namespace talos::scheduler::system
@@ -65,7 +65,7 @@ public:
      * @return bool true = 本系统写入了输出通道/组件；false = 无输出
      * @note 禁止动态绑定资源、禁止修改调度拓扑
      */
-    virtual bool run(World& world) noexcept         = 0;
+    virtual bool run(World& world) noexcept = 0;
 
     /**
      * @brief 获取系统元数据
@@ -137,7 +137,7 @@ template <typename... Args, std::size_t TargetIdx, std::size_t CurrentIdx>
 requires(CurrentIdx < TargetIdx)
 struct count_locals_before<std::tuple<Args...>, TargetIdx, CurrentIdx> {
     // 当前下标的参数类型
-    using CurrentArg                       = std::tuple_element_t<CurrentIdx, std::tuple<Args...>>;
+    using CurrentArg = std::tuple_element_t<CurrentIdx, std::tuple<Args...>>;
     // 判断是否为本地类型 local<T>
     static constexpr bool is_current_local = is_local_type<CurrentArg>::value;
     // 递归累加：当前是local则+1，继续向后遍历
@@ -191,7 +191,6 @@ struct extract_local_types<std::tuple<Ts...>> {
 // 对外别名：提取所有本地类型
 template <typename Tuple>
 using extract_local_types_t = extract_local_types<Tuple>::type;
-
 
 /**
  * @brief 构造单个函数参数的辅助函数（编译期多态分派）
@@ -288,9 +287,12 @@ auto make_args_sequenced(
     //
     // 展开示意（假设 Is = [0, 1, 2]）：
     // ArgsTuple{
-    //     make_arg<tuple_element_t<0, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 0>::value>{}),
-    //     make_arg<tuple_element_t<1, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 1>::value>{}),
-    //     make_arg<tuple_element_t<2, ArgsTuple>>(world, local_storage, integral_constant<size_t, count_locals_before<ArgsTuple, 2>::value>{})
+    //     make_arg<tuple_element_t<0, ArgsTuple>>(world, local_storage, integral_constant<size_t,
+    //     count_locals_before<ArgsTuple, 0>::value>{}), make_arg<tuple_element_t<1,
+    //     ArgsTuple>>(world, local_storage, integral_constant<size_t,
+    //     count_locals_before<ArgsTuple, 1>::value>{}), make_arg<tuple_element_t<2,
+    //     ArgsTuple>>(world, local_storage, integral_constant<size_t,
+    //     count_locals_before<ArgsTuple, 2>::value>{})
     // }
     //
     // 其中 count_locals_before<ArgsTuple, Is>::value 的作用：
@@ -323,32 +325,32 @@ auto make_args_sequenced(
  * 3. run 阶段直接调用函数，零重复查询开销
  * 4. 自动标记「是否写入输出组件」
  */
- /*function_traits<F>                                              [system_meta.hpp:134]
-   └─ decltype(&F::operator()) → R(C::*)(Args...) const  (lambda 是 mutable，去掉 const)
-       └─ 继承 function_traits<R(*)(Args...)>                    [system_meta.hpp:97]
-           └─ args_tuple = std::tuple<
-                  spmc<ArmorDetectionBatch, DetectionChannelTopic>,    // [0]
-                  spmc<LdmDetection, LdmDetectionChannelTopic>,        // [1]
-                  spmc<LdmMeasurement, LdmMeasurementChannelTopic>,    // [2]
-                  res<std::shared_ptr<FoxgloveServer>>,                // [3]
-                  res<CameraConfig>,                                    // [4]
-                  res<FoxgloveConfig>,                                  // [5]
-                  detecting_color,                                      // [6] 非组件，被丢弃
-                  res<fast_tf::CoordinateSystem>,                       // [7]
-                  res<LdmDetectorConfig>                                // [8]
-              >
+/*function_traits<F>                                              [system_meta.hpp:134]
+  └─ decltype(&F::operator()) → R(C::*)(Args...) const  (lambda 是 mutable，去掉 const)
+      └─ 继承 function_traits<R(*)(Args...)>                    [system_meta.hpp:97]
+          └─ args_tuple = std::tuple<
+                 spmc<ArmorDetectionBatch, DetectionChannelTopic>,    // [0]
+                 spmc<LdmDetection, LdmDetectionChannelTopic>,        // [1]
+                 spmc<LdmMeasurement, LdmMeasurementChannelTopic>,    // [2]
+                 res<std::shared_ptr<FoxgloveServer>>,                // [3]
+                 res<CameraConfig>,                                    // [4]
+                 res<FoxgloveConfig>,                                  // [5]
+                 detecting_color,                                      // [6] 非组件，被丢弃
+                 res<fast_tf::CoordinateSystem>,                       // [7]
+                 res<LdmDetectorConfig>                                // [8]
+             >
 
 extract_system_meta 展开 (折叠表达式)                              [system_meta.hpp:296]
-   for I in 0..8:
-       extract_one_param<tuple_element_t<I, args>>(meta)          [system_meta.hpp:244]
-           │
-           ├─ [0,1,2] is_spmc_reader → meta.spmc_channels.emplace_back({typeid(T), typeid(Topic), spmc_reader})
-           ├─ [3,4,5,7,8] is_res_type → meta.reads.emplace_back(typeid(T))
-           └─ [6] 非 component_kind → 静默跳过（裸 enum）*/
+  for I in 0..8:
+      extract_one_param<tuple_element_t<I, args>>(meta)          [system_meta.hpp:244]
+          │
+          ├─ [0,1,2] is_spmc_reader → meta.spmc_channels.emplace_back({typeid(T), typeid(Topic),
+spmc_reader}) ├─ [3,4,5,7,8] is_res_type → meta.reads.emplace_back(typeid(T)) └─ [6] 非
+component_kind → 静默跳过（裸 enum）*/
 template <typename F, typename Policy = default_policy>
 class System : public SystemBase {
     // 函数特征萃取：解析 F 的参数列表、参数个数
-    using traits     = detail::function_traits<F>;
+    using traits = detail::function_traits<F>;
     // 函数所有参数组成的元组类型
     using args_tuple = traits::args_tuple;
 
@@ -368,14 +370,12 @@ class System : public SystemBase {
     template <std::size_t I = 0>
     void bind_written_flags() noexcept {
         // 编译期分支：如果下标I还没超出tuple长度，才走逻辑
-        if constexpr (I < std::tuple_size_v<args_tuple>) 
-        {
+        if constexpr (I < std::tuple_size_v<args_tuple>) {
             // 拿到tuple第I个位置的类型（编译期）
             using ArgType = std::tuple_element_t<I, args_tuple>;
 
             // 编译期判断：这个类型是不是Writer写组件
-            if constexpr (detail::is_writer<ArgType>::value) 
-            {
+            if constexpr (detail::is_writer<ArgType>::value) {
                 // 取出cached_args_这个tuple里第I个writer实例
                 // 把writer内部的written_flag_指针，指向外面的written_标记
                 std::get<I>(*cached_args_).written_flag_ = &written_;
@@ -465,22 +465,22 @@ template <typename F, typename Policy = default_policy>
         std::forward<F>(func)：完美转发，把 lambda 原样移入 System 内部，避免拷贝；*/
         std::move(name), std::forward<F>(func));
 }
-        /*1. 先拆分两个核心部分
-        std::decay_t<F>：类型退化工具元函数
-        System<T>：模板包装类，用来包裹任意可调用对象（lambda / 函数指针 / 仿函数）
-        一、std::decay_t<F> 作用
-        std::decay 是类型转换工具，等价于：
-        先去掉 const / volatile 修饰
-        去掉引用 & / &&
-        数组转指针、函数转函数指针
-        模板别名 decay_t<T> = typename std::decay<T>::type
-        为什么这里必须用 decay？
-        传入的 F 往往是：
-        右值 lambda（auto&& 万能引用捕获）
-        带 &/&& 的可调用对象
-        如果直接写 System<F>：
-        若 F 是引用类型 Func&，模板实例化会带引用，无法存到 unique_ptr/ 容器；
-        lambda 万能引用 auto&& f 推导出 Func&&，带右值引用，不能作为模板参数存到结构体；
-        decay_t<F> 统一剥离引用、cv 限定，得到纯粹的值类型，保证 System<T> 存的是实体类型，而非引用。*/
+/*1. 先拆分两个核心部分
+std::decay_t<F>：类型退化工具元函数
+System<T>：模板包装类，用来包裹任意可调用对象（lambda / 函数指针 / 仿函数）
+一、std::decay_t<F> 作用
+std::decay 是类型转换工具，等价于：
+先去掉 const / volatile 修饰
+去掉引用 & / &&
+数组转指针、函数转函数指针
+模板别名 decay_t<T> = typename std::decay<T>::type
+为什么这里必须用 decay？
+传入的 F 往往是：
+右值 lambda（auto&& 万能引用捕获）
+带 &/&& 的可调用对象
+如果直接写 System<F>：
+若 F 是引用类型 Func&，模板实例化会带引用，无法存到 unique_ptr/ 容器；
+lambda 万能引用 auto&& f 推导出 Func&&，带右值引用，不能作为模板参数存到结构体；
+decay_t<F> 统一剥离引用、cv 限定，得到纯粹的值类型，保证 System<T> 存的是实体类型，而非引用。*/
 
 } // namespace talos::scheduler::system
