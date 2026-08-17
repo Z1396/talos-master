@@ -224,7 +224,7 @@ struct SystemMeta {
     PolicyInfo policy;
     // SPSC 单生产者单消费者通道列表
     std::vector<ChannelMeta> spsc_channels;
-    // SPMC 多生产者多消费者通道列表
+    // SPMC 单生产者多消费者通道列表
     std::vector<ChannelMeta> spmc_channels;
     // 内部原子变量类型（预留扩展）
     std::vector<std::type_index> atomics;
