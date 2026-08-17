@@ -2423,7 +2423,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     // ========================================================================
     // 阶段2：通道强约束合法性校验（报错阻断构建）
     // ========================================================================
-    // lambda：批量把端点列表转为系统名字vector，用于报错信息
+    // lambda：批量把通道读写端点列表转为系统名字vector，用于报错信息
     auto collect_endpoint_names = [&](const std::vector<ChannelEndpoint>& endpoints) {
         std::vector<std::string> names;
         // 预分配内存，减少扩容开销
@@ -2551,7 +2551,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
             current_level.push_back(i);
         }
     }
-
+    // 记录处理过的节点总数，用于环检测
     std::size_t processed = 0;
     // Kahn主循环：逐层处理
     while (!current_level.empty()) {
