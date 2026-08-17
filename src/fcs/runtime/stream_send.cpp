@@ -23,7 +23,7 @@ namespace fcs::runtime {
  */
 void register_quanta_stream_send_system(talos::Scheduler& scheduler) {
     // 注册【固定频率系统】talos::fixed_rate<目标频率, 最大帧补偿>
-    // fixed_rate<50,3>：目标运行频率50Hz（20ms一次）；最多允许累积3帧延迟防止雪崩
+    // fixed_rate<50,3>：目标运行频率50Hz（20ms一次）；第二个参数 3是 CPU 核心号 （绑到 CPU 3 核心）不是最大帧补偿时间
     scheduler.add_system<talos::fixed_rate<50, 3>>(
         "stream_send", // 系统名称，用于调试、日志、性能监控
         // System回调函数，Talos调度器自动注入所需全局资源

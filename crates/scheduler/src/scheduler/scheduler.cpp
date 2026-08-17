@@ -1922,6 +1922,10 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
 
     // ===================== 2、设置实时调度优先级（Linux SCHED_FIFO） =====================
     // thread_priority > 0 代表启用实时调度，0/负数使用系统默认分时调度
+    /*优先级 50 vs 80 80 先跑 ，80 不让出 CPU，50 永远等着 
+    优先级相同（都是 50） FIFO 排队 ：先就绪的先跑，跑完才轮到下一个 
+    实时线程 vs 普通线程 实时线程 抢占 所有普通线程（普通线程优先级=0） 
+    优先级 0（项目现状） 不走 SCHED_FIFO，用系统默认分时调度（SCHED_OTHER），大家公平抢 CPU*/
     if (ctx.policy.thread_priority > 0) {
         // 初始化实时调度配置结构体
         primitive::ThreadAffinity::RealtimeConfig rt_config{};

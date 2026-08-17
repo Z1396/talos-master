@@ -154,14 +154,21 @@ using muzzle         = muzzle_link_fuxk_frame;
  */
 template <typename T>
 concept frame = requires {
+    /*requires 表达式语法：`{表达式} -> 约束;`
+    代表：**表达式`T::frame_id`求值得到的类型，必须可以隐式转换成`std::string_view`**。*/
     { T::frame_id } -> std::convertible_to<std::string_view>;
+    // 要求2：T内部必须存在嵌套类型别名 ancestor
     typename T::ancestor;
 };
+
 
 /**
  * @concept root_frame
  * 根帧约束：合法frame，且父类型是void
  */
+// template<typename T> 模板，接收一个类型T做编译期检查
+// concept：C++20 概念，编译期类型约束，用来做静态断言、函数模板参数筛选，编译期报错提示友好
+// 先确定T是否是合法frame，再判断ancestor是否是void
 template <typename T>
 concept root_frame = frame<T> && std::is_void_v<typename T::ancestor>;
 
@@ -170,7 +177,14 @@ concept root_frame = frame<T> && std::is_void_v<typename T::ancestor>;
  * 非根子帧约束：合法frame，存在有效父帧
  */
 template <typename T>
+/*std::is_void<X>::value
+编译期判断：类型 X 是不是`void`。
+ X = void → `value = true`
+ X = WorldFrame / int / double → `value = false`
+
+完全发生在编译期，**零运行时开销**。*/
 concept non_root_frame = frame<T> && !std::is_void_v<typename T::ancestor>;
+
 
 // ====================== 编译期递归工具：判断子帧是否是目标帧后代 ======================
 /**
@@ -359,13 +373,20 @@ template <non_root_frame Layer, typename System, size_t I = 0>
 [[nodiscard]] constexpr decltype(auto) buffer_of(System&& system) noexcept {
     using tuple_t = std::remove_cvref_t<System>;
     // 递归遍历超出tuple长度，编译报错
+    /*static_assert(条件, "报错提示字符串");
+    - 如果**条件为 true**：啥事没有，编译器直接跳过。
+    - 如果**条件为 false**：编译直接失败，打印你写的提示文字，程序连二进制都生成不出来。
+    > 和普通运行时 `assert()` 的核心区别：
+    - `assert(cond)`：运行时才检查，程序跑起来才会崩；release 版本可以直接被关掉。
+    - `static_assert`：**编译阶段就拦截错误，还没生成 exe 就报错。*/
     static_assert(I < std::tuple_size_v<tuple_t>, "Layer not found in CoordinateSystem");
 
     // 获取第I个缓冲区对应的坐标系标签
+    //拿`std::tuple_element_t<I>`取出第 I 个缓冲区的类型，通过`buffer_coord_of`元 trait 提取这个缓冲区绑定的坐标系标签。
     using buffer_coord =
         typename buffer_coord_of<std::remove_cvref_t<std::tuple_element_t<I, tuple_t>>>::type;
 
-    // 匹配到目标帧，返回当前tuple元素
+    // 匹配到目标帧，返回当前tuple元素，匹配`Layer == buffer_coord`，就执行`return std::get<I>(system)`返回缓冲区引用。
     if constexpr (std::is_same_v<Layer, buffer_coord>) {
         return std::get<I>(std::forward<System>(system));
     }
