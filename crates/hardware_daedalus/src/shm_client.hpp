@@ -386,8 +386,7 @@ public:
      * @return true 生产者正常上线；false 等待超时
      * 作用：避免连接到残留旧共享内存，等待Rust启动并刷新心跳
      */
-    [[nodiscard]] bool
-        wait_for_producer(const std::chrono::milliseconds timeout = std::chrono::seconds(5)) const {
+    [[nodiscard]] bool wait_for_producer(const std::chrono::milliseconds timeout = std::chrono::seconds(5)) const {
         // 计算截止时间点
         const auto deadline = std::chrono::steady_clock::now() + timeout;
         // 循环轮询心跳，每50ms检测一次
@@ -407,8 +406,7 @@ public:
      * @param seq 帧序列号
      * @param timestamp_ns 帧时间戳
      */
-    void
-        publish_image(const cv::Mat& image, const uint64_t seq, const uint64_t timestamp_ns) const {
+    void publish_image(const cv::Mat& image, const uint64_t seq, const uint64_t timestamp_ns) const {
         ImageOps ops(&meta_->image);
         auto& meta = ops.borrow_mut();
 

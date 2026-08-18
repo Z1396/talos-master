@@ -559,10 +559,11 @@ constexpr auto lookup(const CoordinateSystem& system, timestamp_ns_t ns) noexcep
  */
 template <frame Target, frame Source, frame CurrentFrame>
 constexpr auto lookup_clamped(
-    const CoordinateSystem& system, TransformMatrixd<CurrentFrame, Source> acc,
-    timestamp_ns_t ns) noexcept -> std::expected<TransformMatrixd<Target, Source>, std::string> {
+    const CoordinateSystem& system, TransformMatrixd<CurrentFrame, Source> acc, timestamp_ns_t ns) noexcept -> std::expected<TransformMatrixd<Target, Source>, std::string> 
+{
     static_assert(is_descendant_of<Source, Target>(), "Source must be a descendant of Target");
-    if constexpr (std::is_same_v<CurrentFrame, Target>) {
+    if constexpr (std::is_same_v<CurrentFrame, Target>) 
+    {
         return acc;
     } else if constexpr (root_frame<CurrentFrame>) {
         return std::unexpected(
@@ -588,10 +589,29 @@ constexpr auto lookup_clamped(
 /**
  * @brief lookup_clamped 顶层对外API，夹紧插值查询变换矩阵
  */
+/**
+ * @brief 编译期模板包装：查询 Source → Target 的位姿变换，带时间钳位(Clamped)
+ * @tparam Target 目标坐标系 frame 类型（满足 frame concept）
+ * @tparam Source 源坐标系 frame 类型（满足 frame concept）
+ * @param system FastTF 坐标系系统实例，保存全部时序变换缓冲
+ * @param ns 需要查询的时间戳，纳秒
+ * @noexcept 不抛C++异常，错误走std::expected
+ * @return std::expected<TransformMatrixd<Target,Source>, std::string>
+ *         成功：返回强类型变换矩阵 Target <- Source；失败：错误字符串
+ *
+ * 语法说明：
+ *  返回值 TransformMatrixd<Target, Source> 含义：把 Source 坐标系下向量变换到 Target 坐标系
+ *
+ *  本函数只是一层**简易包装转发**，把 Source 作为中间基准帧，调用三模板参数版本。
+ */
 template <frame Target, frame Source>
 constexpr auto lookup_clamped(const CoordinateSystem& system, timestamp_ns_t ns) noexcept
     -> std::expected<TransformMatrixd<Target, Source>, std::string> {
+
+    // I<Source> 幻影类型(phantom‑type)，编译期传类型参数，运行时对象为空，0开销
+    // 调用完整版：lookup_clamped<Target, Source, Base>(system, I<Base>(), timestamp)
     return lookup_clamped<Target, Source, Source>(system, I<Source>(), ns);
 }
+
 
 } // namespace fast_tf

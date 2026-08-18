@@ -209,60 +209,96 @@ struct ChiralImu {
 };
 
 /**
- * @brief Daedalus一体化设备IMU系统
- * 基于共享内存IPC通信，直接读取底盘、云台、相机、枪口全部位姿真值
- * 无独立MCU，所有位姿由仿真/一体化硬件IPC输出
+ * @brief Daedalus仿真器的IMU实现
+ * 注意：这不是真实硬件IMU，是仿真后端；通过IPC共享内存从仿真器读取机器人各类连杆位姿，填充TF树、IMU状态、真值通道
  */
 struct DaedalusImu {
-    // IPC共享内存客户端
+    // IPC共享内存客户端：负责和Daedalus仿真进程通信，recv_xxx从共享内存读取仿真输出数据
     std::shared_ptr<ipc::ShmClient> ipc_device;
-    // 上一帧真值时间戳，防止重复推送相同真值包
+
+    // 记录上一次真值包时间戳，避免同一帧真值重复写入SPMC通道，防止重复消费
     uint64_t last_gt_timestamp_ns{0};
 
+    /**
+     * @brief Talos ECS系统入口函数，调度器固定周期调用
+     * 所有带 _mut 后缀都是资源/通道访问器：res_mut<> 代表读写访问world资源；spmc_mut<>代表写SPMC通道
+     * noexcept：函数承诺不会抛出C++异常
+     *
+     * @param tf_buffer 姿态变换树资源，读写，更新各个坐标系之间位姿
+     * @param bullet_speed 子弹速度全局资源，[[maybe_unused]]标记参数暂时没使用，消除编译器“未使用参数”警告
+     * @param detecting_color 识别颜色配置资源
+     * @param following 自动跟随开关（原子布尔）
+     * @param imu_state IMU状态全局资源，仿真中直接从仿真位姿解算roll/pitch/yaw填入
+     * @param control_out SPMC写端点：输出控制快照快照通道
+     * @param gt_out SPMC写端点：输出GroundTruth仿真真值数据包通道
+     */
     void system(
         talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
         [[maybe_unused]] core::trajectory::bullet_speed_mut bullet_speed,
         [[maybe_unused]] core::detecting_color_mut detecting_color, core::following_mut following,
         [[maybe_unused]] core::imu_state_mut imu_state,
         talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
-        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept {
+        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept
+    {
+        // 标记：本调度周期是否读到有效的位姿更新
         bool control_updated           = false;
+        // 记录本周期最新的位姿时间戳（纳秒）
         uint64_t control_timestamp_ns  = 0;
-        // 局部lambda：标记当前周期有位姿更新，记录最新时间戳
+
+        /**
+         * 局部捕获lambda：一旦读到任意一个连杆位姿，就调用这个lambda
+         * 标记control_updated=true，同时保存最大时间戳；多个不同连杆可能时间戳不一样，取std::max最新时间
+         * [&] 引用捕获：全部外部变量按引用访问
+         */
         const auto note_control_update = [&](uint64_t timestamp_ns) {
             control_updated      = true;
             control_timestamp_ns = std::max(control_timestamp_ns, timestamp_ns);
         };
 
-        // 1. 读取云台全局位姿，更新云台TF
+        // ==============================================
+        // 1、读取云台(gimbal)仿真位姿，更新TF树 + 填充IMU欧拉角
+        // ipc_device->recv_pose()：从共享内存读取指定类型位姿；返回std::optional<>，没有新数据就std::nullopt
+        // if (auto val = opt) C++17结构化if初始化，只有有值才进入分支
+        // ==============================================
         if (const auto pose = ipc_device->recv_pose(ipc::POSE_GIMBAL)) {
+            // pose->qw/qx/qy/qz：仿真输出四元数，构造Eigen四元数对象
             const Eigen::Quaterniond q(pose->qw, pose->qx, pose->qy, pose->qz);
+            // 四元数转RPY欧拉角
             const auto euler              = math_fuxk::rpy(q);
+            // 结构化绑定：把euler.rpy()返回tuple解包给roll pitch yaw三个变量
             const auto [roll, pitch, yaw] = euler.rpy();
-            // 更新云台基座完整平移+旋转TF
+
+            // 更新【gimbal】坐标系变换：四元数 + xyz平移，时间戳来自仿真数据包
             fast_tf::update(
                 *tf_buffer,
                 fast_tf::EdgeTransform<fast_tf::gimbal>::from_quaternion_xyz(
                     q, pose->x, pose->y, pose->z),
                 pose->timestamp_ns);
-            // 俯仰轴单独TF（无旋转偏移）
+
+            // 更新gimbal_pitch_fuxk_frame俯仰轴坐标系，这里填0旋转，仿真预留帧
             fast_tf::update(
                 *tf_buffer,
                 fast_tf::EdgeTransform<fast_tf::gimbal_pitch_fuxk_frame>::from_rpy(0, 0, 0),
                 pose->timestamp_ns);
-            // 填充IMU姿态
+
+            // 把仿真解算出来欧拉角写入全局ImuState资源
             imu_state->timestamp_ns = pose->timestamp_ns;
             imu_state->yaw          = yaw;
             imu_state->pitch        = pitch;
             imu_state->roll         = roll;
-            // Daedalus无角速度数据，置0
+
+            // ⚠️ Daedalus仿真IMU模块**不输出角速度**，角速度直接置0
             imu_state->yaw_vel      = 0.0;
             imu_state->pitch_vel    = 0.0;
             imu_state->roll_vel     = 0.0;
+
+            // 标记本周期有位姿更新，记录时间戳
             note_control_update(pose->timestamp_ns);
         }
 
-        // 2. 读取底盘odom平移TF
+        // ==============================================
+        // 2、读取底盘odom坐标系位姿（只有平移，旋转由云台承担）更新TF树
+        // ==============================================
         if (const auto pose = ipc_device->recv_pose(ipc::POSE_ODOM)) {
             fast_tf::update(
                 *tf_buffer,
@@ -271,7 +307,9 @@ struct DaedalusImu {
             note_control_update(pose->timestamp_ns);
         }
 
-        // 3. 相机连杆位姿
+        // ==============================================
+        // 3、相机连杆位姿，更新TF树；视觉模块依赖这个坐标系做PnP、3D解算
+        // ==============================================
         if (const auto pose = ipc_device->recv_pose(ipc::POSE_CAMERA)) {
             fast_tf::update(
                 *tf_buffer,
@@ -281,7 +319,9 @@ struct DaedalusImu {
             note_control_update(pose->timestamp_ns);
         }
 
-        // 4. 枪口完整位姿（弹道解算核心）
+        // ==============================================
+        // 4、枪口muzzle连杆完整位姿，弹道解算核心输入！炮口的位置姿态
+        // ==============================================
         if (const auto pose = ipc_device->recv_pose(ipc::POSE_MUZZLE)) {
             const Eigen::Quaterniond q(pose->qw, pose->qx, pose->qy, pose->qz);
             fast_tf::update(
@@ -292,30 +332,41 @@ struct DaedalusImu {
             note_control_update(pose->timestamp_ns);
         }
 
-        // 底盘观测数据，预留扩展
+        // 读取底盘观测数据包，当前仅预留接口，TODO后续扩展底盘速度、碰撞
         if (const auto obs = ipc_device->recv_chassis_observation()) {
             // TODO：底盘速度、碰撞检测扩展
         }
 
-        // 读取运行时状态：自动跟随开关
+        // ==============================================
+        // 读取仿真运行时状态：自动跟随开关 following
+        // following 是原子资源，load()读、store()写，多线程安全
+        // ==============================================
         if (const auto state = ipc_device->recv_runtime_state()) {
+            // state->following非0代表开启自动跟随
             const auto next_following = state->following != 0U;
-            // 原子变量更新跟随状态，变更打印日志
+
+            // 如果开关状态发生变化，才执行store更新并打印日志，避免频繁写原子变量打日志
             if (next_following != following->load()) {
                 following->store(next_following);
                 SPDLOG_INFO("daedalus following changed: {}", next_following);
             }
         }
 
-        // 真值数据包写入通道，重复时间戳跳过
+        // ==============================================
+        // 接收仿真GroundTruth真值包，写入SPMC通道供录制/调试使用
+        // last_gt_timestamp_ns做去重：同一时间戳数据包不重复写通道，防止重复消费
+        // ==============================================
         if (const auto gt = ipc_device->recv_ground_truth()) {
             if (gt->timestamp_ns != last_gt_timestamp_ns) {
                 last_gt_timestamp_ns = gt->timestamp_ns;
-                gt_out.write(*gt);
+                gt_out.write(*gt); // spmc_mut写端点，把真值包写入SPMC通道
             }
         }
 
-        // 本周期存在位姿更新，推送完整控制快照
+        // ==============================================
+        // 如果本周期读到任意有效位姿更新：发布一份完整控制快照到SPMC通道
+        // 下游瞄准、录制模块消费control_out通道的数据
+        // ==============================================
         if (control_updated) {
             publish_control_snapshot(
                 control_out, *tf_buffer, *imu_state, *detecting_color, bullet_speed->bullet_speed,
@@ -323,6 +374,7 @@ struct DaedalusImu {
         }
     }
 };
+
 
 // 分体MCU设备句柄别名
 using McuHandle = talos_gimbal::McuDeviceHandle;
@@ -545,12 +597,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     // ===================== Variant分发：根据硬件配置类型自动选择初始化分支 =====================
     // std::visit：访问variant（HardwareBackendConfig是std::variant<DaedalusConfig,DirectConfig>）
     // overloaded{}：语法糖，批量放多个lambda，自动匹配variant当前类型
-    std::expected<void, std::string> result = std::visit(
-        overloaded{
+    std::expected<void, std::string> result = std::visit(overloaded{
             // ========== 分支1：Daedalus一体化IPC（你的Bevy仿真器，共享内存IPC通信） ==========
             // 捕获&：引用外部所有局部变量camera/output/imu/imu_ready，在lambda内修改
-            [&camera, &output, &imu,
-             &imu_ready](hardware::DaedalusConfig) -> std::expected<void, std::string> {
+            [&camera, &output, &imu,&imu_ready](hardware::DaedalusConfig) -> std::expected<void, std::string> {
                 SPDLOG_INFO("connecting to daedalus ipc..."); // 日志：开始连接仿真共享内存IPC
 
                 // 创建ShmClient共享内存IPC客户端，连接Daedalus仿真
@@ -579,8 +629,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 }
 
                 // 转移所有权，构造CameraInterface实例
-                camera =
-                    std::make_unique<fcs::L1::CameraInterface>(std::move(input_result.value()));
+                camera = std::make_unique<fcs::L1::CameraInterface>(std::move(input_result.value()));
                 // 转移所有权，构造OutputInterface实例
                 output = std::make_unique<fcs::L1::OutputInterface>(std::move(out_result.value()));
                 // 给IMU抽象层绑定Daedalus仿真IMU实现，共用同一个IPC句柄
@@ -590,8 +639,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
             },
 
             // ========== 分支2：Direct分体实物硬件（MCU+海康相机，支持串口/USB HID/Chiral私有云台） ==========
-            [&camera, &output, &imu,
-             &imu_ready](hardware::DirectConfig cfg) -> std::expected<void, std::string> {
+            [&camera, &output, &imu,&imu_ready](hardware::DirectConfig cfg) -> std::expected<void, std::string> {
                 // 全局静态缓冲区清零：存放MCU上报IMU数据、云台能力数据
                 g_imu_data                                     = {};
                 g_capabilities_data                            = {};
@@ -618,14 +666,12 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                                 "connecting to mcu via serial with {} @ {} baud",
                                 mcu_config->serial_device, mcu_config->serial_baud_rate);
                             // 创建串口MCU句柄：设备名+波特率
-                            auto device_result = McuHandle::create_serial(
-                                mcu_config->serial_device, mcu_config->serial_baud_rate);
+                            auto device_result = McuHandle::create_serial(mcu_config->serial_device, mcu_config->serial_baud_rate);
                             if (!device_result) { // 串口打开失败
                                 return std::unexpected(device_result.error());
                             }
                             // 转移构造MCU共享句柄
-                            mcu_device =
-                                std::make_shared<McuHandle>(std::move(device_result).value());
+                            mcu_device = std::make_shared<McuHandle>(std::move(device_result).value());
                         } else {
                             // 子分支：MCU后端=USB HID
                             if (mcu_config->mcu_product_id) {
@@ -638,20 +684,19 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                                     mcu_config->mcu_vendor_id);
                             }
                             // 创建USB HID MCU句柄（VID/PID）
-                            auto device_result = McuHandle::create_usb(
-                                mcu_config->mcu_vendor_id, mcu_config->mcu_product_id);
+                            auto device_result = McuHandle::create_usb(mcu_config->mcu_vendor_id, mcu_config->mcu_product_id);
                             if (!device_result) { // USB打开失败
                                 return std::unexpected(device_result.error());
                             }
-                            mcu_device =
-                                std::make_shared<McuHandle>(std::move(device_result).value());
+                            // 转移构造MCU共享句柄
+                            mcu_device = std::make_shared<McuHandle>(std::move(device_result).value());
+                            std::make_shared<McuHandle>(std::move(device_result).value());
                             // USB模式启用能力包解析，挂载capabilities缓冲区
                             talos_gimbal::Stm32Parser::latest_capabilities = &g_capabilities_data;
                         }
                         SPDLOG_INFO("connected to mcu via {}", mcu_config->mcu_backend);
                         // 构造MCU武器输出接口（后续下发发射指令给STM32）
-                        output = std::make_unique<fcs::L1::OutputInterface>(
-                            fcs::L1::McuOutput(mcu_device));
+                        output = std::make_unique<fcs::L1::OutputInterface>(fcs::L1::McuOutput(mcu_device));
                         // IMU抽象绑定McuImu实现，挂载IMU缓冲区、能力缓冲区
                         imu->impl = McuImu{
                             mcu_config, mcu_device, &g_imu_data,
@@ -673,8 +718,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                             std::move(chiral_result.value());
 
                         // 构造Chiral武器输出接口
-                        output = std::make_unique<fcs::L1::OutputInterface>(
-                            fcs::L1::ChiralOutput(chiral));
+                        output = std::make_unique<fcs::L1::OutputInterface>(fcs::L1::ChiralOutput(chiral));
                         // IMU抽象绑定ChiralImu实现
                         imu->impl = ChiralImu{
                             mcu_config,
@@ -720,8 +764,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 core::detecting_color_mut detecting_color, core::capabilities_mut capabilities,
                 core::following_mut following, core::imu_state_mut imu_state,
                 // spmc_mut：SPMC通道可变写入端 → 输出控制快照、真值数据（给Foxglove可视化/上层）
-                talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic>
-                    control_out,
+                talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
                 talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) {
                 // 调用IMU抽象层system函数：读取IMU、更新TF、写通道
                 imu->system(

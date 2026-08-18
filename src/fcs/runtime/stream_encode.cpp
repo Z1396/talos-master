@@ -155,13 +155,27 @@ std::expected<void, std::string> register_quanta_stream_systems(
         return std::unexpected(fmt::format("quanta stream encoder create: {}", encoder.error()));
     }
 
-    // 创建共享状态：系统lambda捕获shared_ptr，生命周期托管，避免异步访问野指针
+    // 创建一个QuantaEncodeState编码状态实例，放到std::shared_ptr，共享所有权
     auto state    = std::make_shared<QuantaEncodeState>();
+
+    // 将编码参数赋值给状态结构体，拷贝配置（码率、帧率、gop等yaml参数）
     state->params = encode_params;
+    /**
+    * @brief encoder是std::optional<std::unique_ptr<Encoder>>
+    * emplace：原地构造，把optional里面的unique_ptr对象移动进去
+    * std::move(*encoder)：取出optional内部unique_ptr，所有权转移，原encoder变为空
+    * 注意：调用后原来的encoder变量不再持有编码器，不要再使用*encoder
+    */
     state->encoder.emplace(std::move(*encoder));
+
+    // 原始图像输入分辨率宽度
     state->src_width  = src_width;
+    // 原始图像输入分辨率高度
     state->src_height = src_height;
+
+    // 编码帧率，来自配置参数
     state->framerate  = encode_params.framerate;
+
 
     // 在ECS全局资源中创建【Quanta数据包队列】
     // 编码系统产生分片包，发送系统读取该队列，生产者消费者模型
@@ -172,7 +186,7 @@ std::expected<void, std::string> register_quanta_stream_systems(
     }
 
     // 向调度器注册固定频率运行的编码系统
-    // talos::fixed_rate<30,3>：目标30Hz运行，允许最多3帧延时补偿
+    // talos::fixed_rate<30,3,0>：目标30Hz运行，绑定到CPU核心0，默认优先级
     scheduler.add_system<talos::fixed_rate<30, 3>>(
         "stream_encode", // 系统名称，日志/调试可识别
         // System执行回调函数，Talos自动注入依赖通道与资源

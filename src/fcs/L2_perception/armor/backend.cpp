@@ -86,8 +86,7 @@ DetectorBackend::DetectorBackend(std::unique_ptr<AxeraBackend> backend)
  * @param color 待识别装甲颜色：红色/蓝色
  * @return DetectionResult 检测结果，std::expected承载装甲目标列表或错误信息
  */
-DetectorBackend::DetectionResult
-    DetectorBackend::detect(const cv::Mat& image, ArmorColor color) noexcept {
+DetectorBackend::DetectionResult DetectorBackend::detect(const cv::Mat& image, ArmorColor color) noexcept {
     // std::visit 自动匹配variant内部存储的后端类型，调用对应detect函数
     return std::visit(
         [&image, color](auto& backend) -> DetectionResult {

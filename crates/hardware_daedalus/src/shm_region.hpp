@@ -210,44 +210,66 @@ public:
      *         成功：返回非所有者实例，析构不会删除共享文件
      *         失败：NotFound/InvalidSize/PermissionDenied/OpenFailed/MapFailed
      */
+    // [[nodiscard]]：C++17属性。警告调用方不能忽略函数返回值；
+    // 如果调用写 open(...) 不接收返回值直接丢弃，编译器报警。
+    // static：静态成员函数，不需要对象实例，直接类名::open()调用，没有this指针。
+    // std::expected<T,E>：C++23，返回要么成功ShmRegion，要么错误ShmError；不抛异常。
+    // ShmRegion：共享内存封装对象；ShmError枚举错误类型。
+    // name：共享内存名字；size：期望打开的共享内存字节大小
     [[nodiscard]] static std::expected<ShmRegion, ShmError>
-        open(const std::string_view name, const size_t size) {
+    open(const std::string_view name, const size_t size) {
+        // shm_path()：内部工具函数，把共享内存name拼接成 /dev/shm/xxx 文件路径
         const auto path = shm_path(name);
 
-        // 第一步：判断文件是否存在，不存在直接返回NotFound
+        // std::filesystem::exists：C++17文件系统库，判断路径文件是否存在
         if (!std::filesystem::exists(path)) {
+            // std::unexpected(E)：构造expected的错误分支；代表执行失败，携带错误枚举
             return std::unexpected(ShmError::NotFound);
         }
 
-        // 仅读写打开，不创建、不截断
+        // ========== POSIX系统调用 ::open() 注意前面双冒号 ==========
+        // ::open：全局命名空间的系统open函数，不是类成员open；
+        // 第一个参数c风格字符串路径；O_RDWR：读写模式；第三个参数0，打开旧文件该参数被忽略
+        // 返回值：文件描述符fd；负数代表打开失败
         const int fd = ::open(path.c_str(), O_RDWR, 0);
         if (fd < 0) {
-            // 区分权限不足错误码EACCES，单独返回PermissionDenied
+            // errno：全局系统错误码，<cerrno>头；系统调用失败之后会设置errno
             if (errno == EACCES) {
                 return std::unexpected(ShmError::PermissionDenied);
             }
-            // 其他打开错误统一归类OpenFailed
             return std::unexpected(ShmError::OpenFailed);
         }
 
-        // fstat 获取文件元信息，校验磁盘文件实际大小
-        struct stat st{};
-        // 文件读取失败 或 文件真实尺寸小于用户传入size → 尺寸非法
+        // struct stat：POSIX结构体，保存文件元信息：大小、权限、时间等，<sys/stat.h>
+        struct stat st{}; // {}零初始化全部成员
+        // fstat(fd,&st)：传入文件描述符，把文件信息填充到st结构体；返回<0代表失败
+        // st.st_size：off_t类型，文件字节大小；是有符号类型，转size_t无符号做比较
         if (fstat(fd, &st) < 0 || static_cast<size_t>(st.st_size) < size) {
+            // 出错必须手动close(fd)！！文件描述符不会自动关闭，不close造成fd泄漏
             close(fd);
             return std::unexpected(ShmError::InvalidSize);
         }
 
-        // 执行内存映射，参数同create函数
+        // ========== mmap POSIX内存映射系统调用 <sys/mman.h> ==========
+        // void* mmap(addr,length,prot,flags,fd,offset)
+        // nullptr：让操作系统自己选虚拟内存地址
+        // size：映射字节长度
+        // PROT_READ | PROT_WRITE：内存页可读、可写
+        // MAP_SHARED：对内存的修改同步写到/dev/shm底层文件，多进程共享
+        // fd：已经打开的共享内存文件描述符
+        // 0：文件偏移，从文件开头开始映射
+        // 返回：映射后的虚拟内存指针；失败返回 MAP_FAILED（(void*)-1），不是nullptr！这点非常容易踩坑
         void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (ptr == MAP_FAILED) {
+            // mmap失败，文件描述符仍然要关闭，防止fd泄露
             close(fd);
             return std::unexpected(ShmError::MapFailed);
         }
 
-        // owner=false 消费者，析构不会删除共享文件
+        // 构造ShmRegion返回；owner=false：消费者模式，析构的时候不会unlink删除/dev/shm文件
         return ShmRegion(ptr, size, fd, false, path);
     }
+
 
     /**
      * @brief 智能接口：优先打开已有共享内存，不存在则新建

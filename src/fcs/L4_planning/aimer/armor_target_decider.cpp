@@ -306,25 +306,30 @@ template <typename Compare>
 } // namespace
 
 /**
- * @brief 创建目标选择决策器
+ * @brief 工厂函数：根据枚举类型构造不同的目标选择决策器
+ * @param kind 决策器类型枚举：Unmanned自动选目标 / Manned手控优先
+ * @param switch_margin 自动模式下切换目标的代价裕度阈值
+ * @return ArmorTargetDecider 返回std::variant变体，可以存放两种决策器其中一种
+ * noexcept 不抛异常
  *
- * 根据决策器类型创建对应的决策器实例。
- *
- * @param kind 决策器类型
- * @param switch_margin 切换阈值（仅无人模式有效）
- * @return 决策器实例
+ * 返回类型 ArmorTargetDecider 本质是 std::variant<UnmannedArmorTargetDecider, MannedArmorTargetDecider>
  */
 auto make_armor_target_decider(ArmorTargetDeciderKind kind, double switch_margin) noexcept
     -> ArmorTargetDecider {
     switch (kind) {
+    // 自动模式：机器人自主根据代价选装甲目标，带切换裕度防止频繁跳目标
     case ArmorTargetDeciderKind::Unmanned:
         return UnmannedArmorTargetDecider{.switch_margin = switch_margin};
-    case ArmorTargetDeciderKind::Manned: return MannedArmorTargetDecider{};
+    // 手控模式：允许遥控器手动强制指定目标，算法服从遥控器指令
+    case ArmorTargetDeciderKind::Manned:
+        return MannedArmorTargetDecider{};
     }
 
-    // 默认返回无人模式决策器（避免编译警告）
+    // switch枚举没有覆盖全部分支时的兜底返回，消除编译器warning
+    // 理论不会走到这里，防御性编程
     return UnmannedArmorTargetDecider{.switch_margin = switch_margin};
 }
+
 
 /**
  * @brief 执行目标选择决策
