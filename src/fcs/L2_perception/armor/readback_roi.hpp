@@ -159,8 +159,7 @@ struct BackendInputResolution {
  * @param image_timestamp_ns 当前图像时间戳
  * @return true=数据可用，false=超时/无效
  */
-[[nodiscard]] inline bool tracker_snapshot_is_fresh(
-    const TrackerReadbackSnapshot& snapshot, const ArmorReadbackRoiConfig& config,
+[[nodiscard]] inline bool tracker_snapshot_is_fresh(const TrackerReadbackSnapshot& snapshot, const ArmorReadbackRoiConfig& config,
     uint64_t image_timestamp_ns) noexcept {
     // 基础合法性校验
     if (!snapshot.valid || snapshot.timestamp_ns == 0
@@ -216,8 +215,7 @@ struct BackendInputResolution {
  * @param input_resolution 模型输入分辨率
  * @return 合法整数ROI，失败返回nullopt
  */
-[[nodiscard]] inline std::optional<cv::Rect> resolve_readback_roi(
-    const cv::Size& frame_size, const cv::Rect2f& raw_roi, const ArmorReadbackRoiConfig& config,
+[[nodiscard]] inline std::optional<cv::Rect> resolve_readback_roi(const cv::Size& frame_size, const cv::Rect2f& raw_roi, const ArmorReadbackRoiConfig& config,
     const BackendInputResolution& input_resolution) noexcept {
     // 前置合法性校验
     if (frame_size.width <= 0 || frame_size.height <= 0 || !input_resolution.valid()

@@ -38,9 +38,8 @@ namespace fcs::core::trajectory::solver {
     case model::ModelType::LinearDrag:
         // 构造 LinearDragModel 所需参数结构体，填充配置里的重力、线性阻力系数
         // 传入模型构造函数，再封装进 DirectSolver 求解器
-        return std::make_unique<DirectSolver>(
-            std::make_unique<model::LinearDragModel>(model::LinearDragModel::ResistanceParams{
-                .gravity = config.model->gravity, .resistance = config.model->resistance}));
+        return std::make_unique<DirectSolver>(std::make_unique<model::LinearDragModel>(model::LinearDragModel::ResistanceParams
+            {.gravity = config.model->gravity, .resistance = config.model->resistance}));
     }
 }
 

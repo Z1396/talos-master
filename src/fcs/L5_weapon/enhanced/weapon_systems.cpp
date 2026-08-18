@@ -249,8 +249,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
 
     // 步骤3:创建轨迹优化器实例，使用shared_ptr避免大对象拷贝
     // TinyMpcTrajectoryOptimizer：MPC轨迹求解器，用于运动目标的预测弹道优化
-    auto optimizer =
-        std::make_shared<TinyMpcTrajectoryOptimizer>(config.mpc_weapon, trajectory_cfg);
+    auto optimizer = std::make_shared<TinyMpcTrajectoryOptimizer>(config.mpc_weapon, trajectory_cfg);
 
     // 步骤4:注册武器控制系统，固定250Hz周期执行，周期4ms，控制强实时
     scheduler.add_system<talos::fixed_rate<250>>(

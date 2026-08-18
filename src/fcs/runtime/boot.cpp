@@ -322,9 +322,9 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     }
 
     // ===================== 步骤10：Quanta视频流、离线录制系统注册 =====================
-    // 复制视频基础配置，补充图像滤波参数
-    auto quanta_cfg                  = config.vision.quanta;
-    quanta_cfg.filter                = config.vision.quanta_filter;
+
+    auto quanta_cfg      = config.vision.quanta;         // 复制视频基础配置
+    quanta_cfg.filter                          = config.vision.quanta_filter;  //补充图像滤波参数
     // 从硬件初始化结果读取相机分辨率
     const auto& stream_camera_config = setup_result.value().camera_config;
     // 注册H.265编码、Foxglove WebSocket推流ECS任务

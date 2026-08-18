@@ -111,18 +111,17 @@ void McuOutput::send(const L5::WeaponCommand& cmd) const noexcept {
     }
 
     // 串口模式：仅下发目标yaw简易数据包
-    if (device_->is_serial()) {
+    if (device_->is_serial()) 
+    {
         talos_gimbal::SendSimpleVisionData packet{
-            .header =
-                {
+            .header ={
                          .sof = talos_gimbal::HeaderFrame::SoF(), // 帧起始标识
                          .len = sizeof(talos_gimbal::SendSimpleVisionData::data), // 数据长度
                          .id  = 0x04, // 简易视觉指令包ID
-                         },
-            .data =
-                {
+                    },
+            .data ={
                          .target_yaw = static_cast<float>(cmd.yaw * kRadToDeg),
-                         },
+                    },
             .eof = talos_gimbal::HeaderFrame::EoF(), // 帧结束标识
         };
         // 同步阻塞发送二进制报文
@@ -153,9 +152,7 @@ void McuOutput::send(const L5::WeaponCommand& cmd) const noexcept {
                          },
             .eof = talos_gimbal::HeaderFrame::EoF(),
         };
-        if (auto result =
-                device_->send_sync(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet));
-            !result) {
+        if (auto result = device_->send_sync(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)); !result) {
             SPDLOG_WARN("send vision data: {}", result.error());
         }
     }

@@ -629,8 +629,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                 // 加载上一帧跟踪快照
                 const auto snapshot = readback_cache->load();
                 // 跟踪快照时间戳新鲜有效（未超时）
-                if (tracker_snapshot_is_fresh(
-                        snapshot, *readback_roi_config, frame->timestamp_ns)) {
+                if (tracker_snapshot_is_fresh(snapshot, *readback_roi_config, frame->timestamp_ns)) {
                     // 将跟踪三维框投影到图像平面，得到预估ROI区域
                     const auto maybe_roi = resolve_readback_roi(
                         frame->image.size(),

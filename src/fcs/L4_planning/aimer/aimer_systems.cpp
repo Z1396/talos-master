@@ -153,65 +153,101 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
 }
 
 /**
- * @brief 挑选最优目标用于ROI下发兜底
- * 优先选中当前锁定目标，若无则挑选画面最中心、最新观测的敌方车辆
+ * @brief ROI回退选择器：从多个跟踪器结果里挑选一个适合做ROI裁剪的跟踪器输出
+ * [[nodiscard]] 调用者必须接收返回值，禁止忽略返回结果，防止逻辑bug
+ * @param trackers 所有跟踪器输出集合，std::optional，可能为空
+ * @param preferred_key 优先锁定的目标key（遥控器锁定/上一轮选中的目标），std::optional可以无值
+ * @return std::optional<L3::TrackerOutput> 选出来的跟踪器；std::nullopt代表没有可用跟踪器
+ * @noexcept 不会抛出异常
+ *
+ * 业务场景：装甲检测开启ROI，不需要整张图推理；从跟踪器挑一个目标，取它的区域作为ROI输入检测器。
+ * 逻辑优先级：①优先用户锁定目标 → ②有有效像素距离 > ③离图像中心更近 > ④观测时间最新
  */
 [[nodiscard]] std::optional<L3::TrackerOutput> pick_readback_tracker_fallback(
     const std::optional<L3::TrackerOutputs>& trackers,
     const std::optional<core::TargetKey>& preferred_key) noexcept {
+
+    // 如果跟踪器集合本身无值，直接返回空，没有任何跟踪结果
     if (!trackers) {
         return std::nullopt;
     }
 
-    // 优先使用当前锁定目标
-    if (preferred_key.has_value()) {
-        for (const auto& tracker : *trackers) {
+    // --------------------------第一优先级：优先使用遥控器/上一轮锁定的目标--------------------------
+    if (preferred_key.has_value()) // 存在优先锁定的目标key
+    {
+        // 遍历全部跟踪器
+        for (const auto& tracker : *trackers)
+        {
+            // tracker_supports_readback_roi(tracker)：判断该跟踪器是否支持ROI回读（有些跟踪器不能做ROI）
+            // make_target_key(tracker)：从跟踪器生成唯一目标ID，和preferred_key比对
             if (tracker_supports_readback_roi(tracker)
-                && make_target_key(tracker) == *preferred_key) {
+                && make_target_key(tracker) == *preferred_key)
+            {
+                // 找到优先锁定目标，直接返回这个跟踪器，不再往下遍历
                 return tracker;
             }
         }
     }
+    // 走到这里：没有优先目标，或者优先目标已经丢失/不支持ROI，进入兜底自动挑选逻辑
 
-    const L3::TrackerOutput* best = nullptr;
-    for (const auto& tracker : *trackers) {
+    const L3::TrackerOutput* best = nullptr; // 记录当前最优跟踪器的指针，初始为空
+
+    // 遍历全部跟踪结果，筛选可用ROI跟踪器，打分选出best
+    for (const auto& tracker : *trackers)
+    {
+        // 当前跟踪器不支持ROI裁剪，直接跳过
         if (!tracker_supports_readback_roi(tracker)) {
             continue;
         }
 
+        // best是空，说明第一个可用跟踪器，直接赋值为best
         if (best == nullptr) {
             best = &tracker;
             continue;
         }
 
-        // 优先有有效画面距离的目标
+        // --------------------------第二优先级：优先拥有有效的图像中心距离（非NaN/无穷）--------------------------
+        // std::isfinite：判断浮点数不是NaN、不是正负无穷，代表距离数值有效
         const bool tracker_has_finite = std::isfinite(tracker.last_image_center_distance_px);
         const bool best_has_finite    = std::isfinite(best->last_image_center_distance_px);
-        if (tracker_has_finite != best_has_finite) {
-            if (tracker_has_finite) {
+
+        // 两个状态不一致：一个有效、一个无效
+        if (tracker_has_finite != best_has_finite)
+        {
+            if (tracker_has_finite)
+            {
+                // 当前tracker数值有效，旧best无效，替换best
                 best = &tracker;
             }
-            continue;
+            continue; // 结束本轮循环，进入下一个tracker
         }
 
-        // 画面越靠近图像中心优先级越高
+        // --------------------------第三优先级：画面上离图像中心越近优先级越高--------------------------
+        // last_image_center_distance_px：目标框距离画面中心点像素距离，越小越靠近画面中间
         if (tracker_has_finite
-            && tracker.last_image_center_distance_px < best->last_image_center_distance_px) {
+            && tracker.last_image_center_distance_px < best->last_image_center_distance_px)
+        {
             best = &tracker;
             continue;
         }
 
-        // 其次选择观测时间最新的目标
-        if (tracker.last_observation_timestamp_ns > best->last_observation_timestamp_ns) {
+        // --------------------------第四优先级：观测时间戳更新的优先--------------------------
+        // last_observation_timestamp_ns：这个跟踪器最后一次观测到目标的纳秒时间戳，越大越新
+        if (tracker.last_observation_timestamp_ns > best->last_observation_timestamp_ns)
+        {
             best = &tracker;
         }
     }
 
+    // 循环结束，best仍然为空：没有任何可用跟踪器
     if (best == nullptr) {
         return std::nullopt;
     }
+
+    // 解引用指针，拷贝构造返回跟踪器输出
     return *best;
 }
+
 
 // 解析选中目标快照的两个时间戳，用于ROI缓存
 [[nodiscard]] ReadbackRoiTimestamps
@@ -739,6 +775,17 @@ auto write_hold_outputs(
 /**
  * @brief 装甲目标处理主逻辑
  * 收集候选 → 决策器择优 → 生成控制指令
+ * [[nodiscard]]：强制调用方处理返回值，禁止忽略结果，防止漏判空值引发UB
+ *
+ * @param trackers L3层所有跟踪器输出集合，std::optional，可能为空
+ * @param ctx 瞄准上下文：时间戳、云台状态、机器人状态等运行时信息
+ * @param decider 目标选择决策器（std::variant，自动/手控二选一）
+ * @param decider_state 决策器状态：保存上一轮选中的target key、切换状态，会被函数修改（入参输出）
+ * @param aimer_cfg 瞄准模块总配置yaml
+ * @param sel_cfg 目标选择相关配置，切换裕度、过滤阈值等
+ * @param ref_traj_cfg 参考弹道配置：子弹初速、重力、弹道补偿参数
+ * @param phase_states 每个目标的相位状态map；key=目标唯一ID，value=目标时序相位；会被本函数修改
+ * @return std::optional<AimDecision> 瞄准决策结果；nullopt代表没有可用装甲目标，不输出瞄准指令
  */
 [[nodiscard]] std::optional<AimDecision> try_armor(
     const std::optional<L3::TrackerOutputs>& trackers, const AimContext& ctx,
@@ -746,51 +793,79 @@ auto write_hold_outputs(
     const AimerConfig& aimer_cfg, const TargetSelectionConfig& sel_cfg,
     const ReferenceTrajectoryConfig& ref_traj_cfg,
     std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash>& phase_states) {
+
+    // 拿到上一轮已经选中的目标ID，用于候选收集、防频繁切换
     const auto previous_key = decider_state.selected_key;
+
+    // ==========步骤1：收集装甲候选目标==========
+    // 输入跟踪器结果，过滤、打分，输出一批合法候选装甲；同时更新部分相位状态
     auto collection =
         collect_armor_candidates(trackers, ctx, aimer_cfg, sel_cfg, phase_states, previous_key);
 
+    // ==========步骤2：清理过期目标相位状态==========
+    // active_keys：当前帧有效的目标集合；把不在active_keys里面的旧目标从phase_states删掉，防止map无限膨胀内存泄漏
     cleanup_stale_phase_states(collection.active_keys, phase_states, decider_state);
 
+    // 没有任何候选装甲，直接返回空，本帧不做瞄准
     if (collection.candidates.empty()) {
         return std::nullopt;
     }
 
-    // 组装候选送入决策器
+    // ==========步骤3：转换数据格式，适配决策器输入==========
+    // 把收集出来的候选，包装成决策器需要的 ArmorTargetDeciderCandidate 结构体
     std::vector<ArmorTargetDeciderCandidate> decider_candidates;
+    // 预分配内存，避免vector多次realloc扩容
     decider_candidates.reserve(collection.candidates.size());
+
     for (const auto& candidate : collection.candidates) {
         decider_candidates.push_back(
             ArmorTargetDeciderCandidate{
-                .key     = candidate.key,
-                .tracker = candidate.tracker,
-                .scores  = candidate.scores,
+                .key     = candidate.key,        // 目标唯一ID
+                .tracker = candidate.tracker,    // 跟踪器输出位姿、观测信息
+                .scores  = candidate.scores,     // 各项打分（距离、角度、置信度等）
             });
     }
 
+    // ==========步骤4：调用目标选择决策器选出最优目标==========
+    // std::span：视图，不拷贝vector数据，只读传给决策器；decider_state会被修改，记录切换状态
     const auto decider_result =
         decide_armor_target(decider, decider_state, std::span{decider_candidates});
+
+    // 决策器选不出目标，返回空，本帧放弃瞄准
     if (!decider_result.has_value()) {
         return std::nullopt;
     }
 
+    // 根据决策返回的下标，取出被选中的候选目标
     auto& selected = collection.candidates[decider_result->selected_index];
+
+    // ==========步骤5：构建目标选择追踪trace，用于Foxglove调试可视化、日志回放==========
+    // trace记录：时间戳、上一轮目标、决策器类型、切换阈值、选中结果、全部候选、被拒绝的候选列表
     auto trace     = build_target_selection_trace(
         ctx.current_ns, previous_key, decider, sel_cfg.switch_margin, *decider_result,
         collection.candidates, std::move(collection.rejected));
 
+    // ==========步骤6：更新被选中目标的相位状态（反弹/旋转时序）==========
+    // phase_states保存目标旋转相位，用于装甲预测；修改map中对应key的状态
     update_selected_phase_state(selected, phase_states);
 
+    // ==========步骤7：生成规划器seed初始值==========
+    // seed：给弹道/云台规划器的初始猜测值，用上一帧预测结果加速求解MPC
     auto seed = make_planner_seed(selected.tracker, selected.prediction);
 
+    // ==========步骤8：生成目标快照Snapshot==========
+    // 保存当前目标全部状态：位姿、预测、来源标记（GimbalPlanSource::Armor标记来源是装甲模块），供外部录制、可视化
     auto snap = make_snapshot(selected.prediction, GimbalPlanSource::Armor, selected.tracker);
 
+    // ==========步骤9：组装最终瞄准决策返回==========
+    // intent：控制意图，送给武器/云台系统；snap状态快照；trace调试追踪信息
     return AimDecision{
         .intent = build_control_intent(selected.prediction, ctx, ref_traj_cfg, seed, std::nullopt),
         .snapshot = std::move(snap),
         .trace    = std::move(trace),
     };
 }
+
 
 /**
  * @brief 能量机关目标分支
@@ -823,29 +898,47 @@ auto write_hold_outputs(
 }
 
 /**
- * @brief LDM吊射目标分支
- * 可构建吊射轨迹平滑击打，失败则直接吊射瞄准
+ * @brief 能量机关（LDM）瞄准分支主逻辑
+ * [[nodiscard]] 必须接收返回值，禁止忽略，防止漏判空
+ *
+ * @param ldm_in L3层能量机关检测跟踪状态，std::optional，无值代表没有检测到能量机关
+ * @param ctx 瞄准上下文：云台状态、炮口、时间戳、弹速、求解器等
+ * @param ref_traj_cfg 弹道参考配置，重力、弹道补偿参数
+ * @return std::optional<AimDecision> 瞄准决策；nullopt：无能量机关，不输出瞄准指令
  */
 [[nodiscard]] std::optional<AimDecision> try_ldm(
     const std::optional<L3::ldm::LdmState>& ldm_in, const AimContext& ctx,
     const ReferenceTrajectoryConfig& ref_traj_cfg) {
+
+    // 没有能量机关输入，直接返回空，本帧不处理能量机关瞄准
     if (!ldm_in) {
         return std::nullopt;
     }
 
+    // 调用aimer.aim做能量机关预测瞄准
+    // 输入：能量机关状态、云台当前姿态、炮口位姿、当前时间、子弹速度、弹道求解器
+    // 返回std::optional，失败代表预测求解失败
     auto pred = ctx.aimer.aim(
         ldm_in.value(), ctx.gimbal, ctx.muzzle, ctx.current_ns, ctx.bullet_speed, ctx.solver);
+
+    // 预测求解失败，返回空，放弃本帧能量机关瞄准
     if (!pred)
         return std::nullopt;
 
+    // 生成目标状态快照，标记来源为Armor（能量机关复用这套快照结构），用于录制、Foxglove可视化
     auto snap = make_snapshot(*pred, GimbalPlanSource::Armor);
 
+    // 组装瞄准决策返回
     return AimDecision{
+        // 生成云台控制意图；seed传std::nullopt：能量机关不使用MPC热启动种子
+        // 最后传入ldm_in，记录原始能量机关输入给intent
         .intent   = build_control_intent(*pred, ctx, ref_traj_cfg, std::nullopt, ldm_in),
         .snapshot = std::move(snap),
+        // trace只填时间戳；能量机关没有多候选目标选择逻辑，没有选目标trace信息
         .trace    = TargetSelectionTrace{.timestamp_ns = ctx.current_ns},
     };
 }
+
 
 } // namespace
 
@@ -962,8 +1055,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             const auto tracker_vec = tracker_in.read_current();
 
             // 获取兜底目标：当完全没有新决策输出时，ROI模块可以继续使用上一个有效目标
-            const auto fallback =
-                pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
+            const auto fallback = pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
 
             // ========== 目标优先级逻辑：1.装甲板优先 ==========
             // try_armor：装甲目标选择、弹道计算，输出瞄准决策std::optional<Decision>
@@ -1014,8 +1106,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
     // =================================================================================
     scheduler.add_system<talos::pool_compute>(
         "l4_optimal_target_readback_roi",
-        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
-               selected_target_in,
+        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> selected_target_in,
            talos::res<L2::ArmorReadbackRoiConfig> readback_roi_config,
            talos::res_mut<L2::TrackerReadbackCache> readback_cache) {
             // lambda内部辅助函数：判断当前快照是否支持ROI回传，只有装甲目标才支持
