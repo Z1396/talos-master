@@ -700,8 +700,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                         // IMU抽象绑定McuImu实现，挂载IMU缓冲区、能力缓冲区
                         imu->impl = McuImu{
                             mcu_config, mcu_device, &g_imu_data,
-                            mcu_config->mcu_backend == fcs::McuBackend::Usb ? &g_capabilities_data
-                                                                            : nullptr};
+                            mcu_config->mcu_backend == fcs::McuBackend::Usb ? &g_capabilities_data : nullptr};
                         imu_ready = true; // IMU就绪标记打开
                     } else {
                         // 子分支：Chiral私有云台协议
@@ -714,8 +713,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                             return std::unexpected(
                                 std::string(magic_enum::enum_name(chiral_result.error())));
                         }
-                        std::shared_ptr<talos::chiral::gimbal::TalosEndpoint> chiral =
-                            std::move(chiral_result.value());
+                        std::shared_ptr<talos::chiral::gimbal::TalosEndpoint> chiral = std::move(chiral_result.value());
 
                         // 构造Chiral武器输出接口
                         output = std::make_unique<fcs::L1::OutputInterface>(fcs::L1::ChiralOutput(chiral));

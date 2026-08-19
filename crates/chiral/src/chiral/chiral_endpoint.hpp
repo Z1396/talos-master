@@ -522,8 +522,7 @@ public:
      * 接收通道延迟打开，第一次read时自动加载
      * @return 智能指针封装端点，失败返回错误码
      */
-    [[nodiscard]] static std::expected<std::unique_ptr<ChiralEndpoint>, ShmError>
-        create() noexcept {
+    [[nodiscard]] static std::expected<std::unique_ptr<ChiralEndpoint>, ShmError> create() noexcept {
         auto writer = ChannelWriter<Outgoing>::create();
         if (!writer) {
             return std::unexpected(writer.error());
