@@ -184,22 +184,22 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
     // 功能：遍历所有有效跟踪目标，生成3D球体、速度箭头、装甲模型、文字标签，批量下发Scene场景消息
     // =========================================================================
     app.add_system<talos::pool_compute>(
-        "foxglove_l3_tracker_scene",
+        "foxglove_l3_tracker_scene", ///< 系统名称：L3跟踪器3D可视化，运行在线程池
         [](
-            // SPMC输入通道：批量多目标跟踪输出数组
+            // SPMC输入通道：批量多目标跟踪输出数组，SPMC单生产者多消费者队列
             talos::spmc<std::vector<::fcs::L3::TrackerOutput>, TrackerOutputChannelTopic> tracker_in,
             // 全局只读资源：Foxglove服务智能指针，提供场景消息发送接口
             talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 前置校验：Foxglove服务已初始化、输入通道存在可读数据
             if (!detail::foxglove_ready(*server, tracker_in))
                 return;
-            // 读取最新一批跟踪结果
+            // 读取最新一批跟踪结果（SPMC读取快照）
             auto outputs = tracker_in.read();
             // 空数据直接跳过本轮渲染
             if (!outputs || outputs->empty())
                 return;
 
-            // 存储本帧所有3D场景实体，统一批量发送（减少IO频繁调用）
+            // 存储本帧所有3D场景实体，统一批量发送（减少IO频繁调用，降低消息吞吐压力）
             std::vector<::foxglove::schemas::SceneEntity> entities;
 
             // 遍历全部跟踪目标
@@ -208,16 +208,16 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 if (!output.is_tracking())
                     continue;
 
-                // 构造目标唯一标识字符串（颜色_类型，区分多个目标实体）
+                // 构造目标唯一标识字符串（颜色_类型，区分多个目标实体，用于foxglove entity id）
                 const std::string target_key =
                     fmt::format("{}_{}", output.target_color, output.target_name);
-                // 提取跟踪器输出的世界坐标、平移速度、偏航角速度
+                // 提取跟踪器输出的世界坐标odom系位置
                 const auto pos_opt = get_tracker_position(output);
-                if (!pos_opt)
+                if (!pos_opt) ///< 位置求解无效，跳过该目标渲染
                     continue;
-                const auto& pos  = *pos_opt;
-                const auto vel   = get_tracker_velocity(output);
-                const auto v_yaw = get_tracker_v_yaw(output);
+                const auto& pos  = *pos_opt;                     ///< 目标中心odom三维位置
+                const auto vel   = get_tracker_velocity(output); ///< 目标世界坐标系平移速度
+                const auto v_yaw = get_tracker_v_yaw(output);    ///< 目标偏航旋转角速度(rad/s)
 
                 // 1. 目标主体球体：根据跟踪状态切换颜色（稳定/丢失/初始化）
                 entities.push_back(
@@ -230,25 +230,25 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                     viz::EntityBuilder::create<fast_tf::odom>(
                         "l3",
                         fmt::format("tracker_info_{}_{}", output.target_color, output.target_name))
-                        .timestamp(output.timestamp_ns)
-                        .position(pos)
-                        .color(tac::Text::PRIMARY)
+                        .timestamp(output.timestamp_ns)                                 ///< 实体时间戳(ns)
+                        .position(pos)                                                  ///< 标签基准空间位置(odom，米)
+                        .color(tac::Text::PRIMARY)                                      ///< 文字渲染主色
                         // 球体上方偏移文字
                         .text_with_offset(
                             tracker_label(output), tac::L3::TARGET_SIZE * 1.4, 0.0,
-                            tac::L3::LABEL_OFFSET_Z, tac::Text::SIZE_SMALL)
+                            tac::L3::LABEL_OFFSET_Z, tac::Text::SIZE_SMALL)           ///< 显示文本、X/Y/Z偏移、字号
                         // 前端悬停可查看的调试元信息
                         .metadata(
-                            "target_name", std::string(magic_enum::enum_name(output.target_name)))
+                            "target_name", std::string(magic_enum::enum_name(output.target_name)))  ///< 目标类型：Robot/Outpost
                         .metadata(
-                            "target_color", std::string(magic_enum::enum_name(output.target_color)))
-                        .metadata("status", std::string(magic_enum::enum_name(output.status)))
+                            "target_color", std::string(magic_enum::enum_name(output.target_color)))  ///< 敌方颜色 Red/Blue
+                        .metadata("status", std::string(magic_enum::enum_name(output.status)))        ///< 跟踪状态 Idle/Detecting/Tracking/TempLost
                         .metadata(
                             "last_image_center_distance_px",
-                            tracker_image_center_text(output.last_image_center_distance_px))
+                            tracker_image_center_text(output.last_image_center_distance_px))       ///< 目标中心距离图像中心点像素距离
                         .metadata(
                             "last_observation_timestamp_ns",
-                            std::to_string(output.last_observation_timestamp_ns))
+                            std::to_string(output.last_observation_timestamp_ns))                   ///< 上一次有效观测帧纳秒时间戳
                         .build());
 
                 // 3. 速度矢量箭头实体：X/Y平移速度 + 旋转偏航可视化箭头
@@ -265,7 +265,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                                                  "robot_armors_{}_{}", output.target_color,
                                                  output.target_name))
                                        .timestamp(output.timestamp_ns);
-                    // 填充四块装甲3D立方体实体
+                    // 填充四块装甲3D立方体实体，EKF预测出来四块装甲板位姿
                     add_robot_armor_cubes(builder, *output.robot_state(), output.target_name);
                     entities.push_back(std::move(builder).build());
                 } else if (output.is_outpost()) {
@@ -273,7 +273,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                     auto builder = viz::EntityBuilder::create<fast_tf::odom>(
                                        "l3", fmt::format("outpost_armors_{}", output.target_color))
                                        .timestamp(output.timestamp_ns);
-                    add_outpost_armor_cubes(builder, *output.outpost_state());
+                    add_outpost_armor_cubes(builder, *output.outpost_state()); ///< 填充3块前哨装甲板位姿
                     entities.push_back(std::move(builder).build());
                 }
             }
@@ -290,9 +290,9 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
     app.add_system<talos::pool_compute>(
         "foxglove_l3_ldm_tracker_scene",
         [](
-            // LDM跟踪状态数据流
+            // LDM跟踪状态数据流，SPMC队列
             talos::spmc<::fcs::L3::ldm::LdmState> ldm_in,
-            // LDM原始观测测量数据流
+            // LDM原始观测测量数据流，L2层PnP输出
             talos::spmc<::fcs::L2::ldm::LdmMeasurement, LdmMeasurementChannelTopic> ldm_meas_in,
             talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 校验服务与输入通道就绪
@@ -308,11 +308,11 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             }
 
             std::vector<::foxglove::schemas::SceneEntity> entities;
-            // 添加LDM主跟踪立方体实体
+            // 添加LDM主跟踪立方体实体：EKF滤波输出的能量机关位姿
             entities.push_back(make_ldm_state_entity(*state));
-            // 添加XYZ局部坐标系三轴线框
+            // 添加XYZ局部坐标系三轴线框，查看能量机关自身姿态
             entities.push_back(make_ldm_axes_entity(*state));
-            // 添加LDM世界坐标系速度矢量箭头
+            // 添加LDM世界坐标系速度矢量箭头，可视化odom系移动速度
             entities.push_back(
                 viz::patterns::velocity_arrows<fast_tf::odom>(
                     state->position(), state->velocity_world(), 0.0, state->timestamp_ns,
@@ -320,13 +320,13 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
 
             // 帧同步最大允许时间偏移200ms，轻微不同步仍可叠加原始观测虚影
             constexpr uint64_t kMaxMeasurementSkewNs = 200'000'000;
-            // 读取缓存的最新一帧LDM原始测量数据
+            // 读取缓存的最新一帧LDM原始测量数据(L2 PnP直接解算结果，未滤波)
             const auto measurement = ldm_meas_in.read_current();
             // 测量帧有效、位姿存在、时间戳偏差在阈值内，则绘制半透明观测立方体
             if (measurement && measurement->transform_odom.has_value()
                 && timestamp_close(
                     measurement->timestamp_ns, state->timestamp_ns, kMaxMeasurementSkewNs)) {
-                entities.push_back(make_ldm_measurement_entity(*measurement));
+                entities.push_back(make_ldm_measurement_entity(*measurement)); ///< 半透明原始PnP观测虚影，用来对比滤波输出
             }
 
             // 批量下发LDM跟踪场景消息
@@ -350,7 +350,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             if (!outputs || outputs->empty())
                 return;
 
-            // 读取当前最新图像装甲观测帧
+            // 读取当前最新图像装甲观测帧（L2层PnP原始测量集合）
             auto batch = meas_in.read_current();
             if (!batch)
                 return;
@@ -364,10 +364,10 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
 
                 const std::string target_key =
                     fmt::format("{}_{}", output.target_color, output.target_name);
-                // 机器人目标：4个预测装甲点球体
+                // 机器人目标：4个预测装甲点球体（EKF预测出来四块装甲空间位置，截图pred_0~pred_3）
                 if (output.is_robot()) {
                     const auto& state = *output.robot_state();
-                    const auto armors = state.armor_poses();
+                    const auto armors = state.armor_poses(); ///< EKF外推四块装甲世界坐标数组
                     for (int i = 0; i < 4; i++) {
                         entities.push_back(
                             viz::patterns::predicted_armor<fast_tf::odom>(
@@ -377,12 +377,12 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 } else if (output.is_outpost()) {
                     // 前哨站目标：环形3个预测装甲点，均匀120度分布
                     const auto& state           = *output.outpost_state();
-                    constexpr double kAngleStep = 2.0 * std::numbers::pi / 3.0;
+                    constexpr double kAngleStep = 2.0 * std::numbers::pi / 3.0; ///< 360°/3，三块装甲角度间隔
                     for (int i = 0; i < 3; i++) {
-                        const double armor_yaw = state.yaw + i * kAngleStep;
-                        const auto& pos        = state.position;
-                        constexpr double r     = L3::OutpostTargetState::radius;
-                        // 极坐标转笛卡尔世界坐标
+                        const double armor_yaw = state.yaw + i * kAngleStep; ///< 单块装甲自身偏航角
+                        const auto& pos        = state.position;             ///< 前哨站中心odom坐标
+                        constexpr double r     = L3::OutpostTargetState::radius; ///< 前哨站旋转半径
+                        // 极坐标转笛卡尔世界坐标，计算每一块装甲板世界位置
                         const Eigen::Vector3d armor_pos{
                             pos.x() + r * std::cos(armor_yaw), pos.y() + r * std::sin(armor_yaw),
                             state.z[i]};
@@ -404,7 +404,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 }
             }
 
-            // 绘制本帧图像原始观测装甲（灰色虚影，区分滤波预测值）
+            // 绘制本帧图像原始观测装甲（灰色虚影，区分滤波预测值，L2直接PnP输出）
             for (const auto& m : batch->measurements) {
                 const auto t = m.transform.translation();
                 entities.push_back(
@@ -455,9 +455,9 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                     return {};
 
                 // 1. 矩阵数值归一化到0~255灰度区间
-                double vmin  = mat.minCoeff();
-                double vmax  = mat.maxCoeff();
-                double range = vmax - vmin;
+                double vmin  = mat.minCoeff();   ///< 矩阵最小元素
+                double vmax  = mat.maxCoeff();   ///< 矩阵最大元素
+                double range = vmax - vmin;      ///< 数值跨度
                 // 防止全相同数值除0异常
                 if (range < 1e-15)
                     range = 1.0;
@@ -489,7 +489,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                         tac::to_cv_bgr(tac::Semantic::CONTEXT), 1);
 
                 // 每个单元格内打印矩阵原始数值
-                constexpr double kValFontScale = 0.38;
+                constexpr double kValFontScale = 0.38; ///< 单元格内数字字体缩放
                 const cv::Scalar kValColor     = tac::to_cv_bgr(tac::Text::PRIMARY);
                 for (int r = 0; r < rows; ++r) {
                     for (int c = 0; c < cols; ++c) {
@@ -556,18 +556,18 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             };
 
             // 热力图全局渲染常量：单元格像素、画布边距、标题高度
-            constexpr int kCell     = 60;
-            constexpr int kMargin   = 8;
-            const cv::Scalar kBg    = tac::to_cv_bgr(tac::Semantic::SURFACE);
-            const cv::Scalar kWhite = tac::to_cv_bgr(tac::Text::PRIMARY);
-            constexpr int kTitleH   = 22;
+            constexpr int kCell     = 60;       ///< 矩阵每个格子像素大小
+            constexpr int kMargin   = 8;        ///< 画布留白边距
+            const cv::Scalar kBg    = tac::to_cv_bgr(tac::Semantic::SURFACE); ///< 画布背景色
+            const cv::Scalar kWhite = tac::to_cv_bgr(tac::Text::PRIMARY);     ///< 标题文字颜色
+            constexpr int kTitleH   = 22;       ///< 目标标题栏像素高度
 
             // 单目标热力图行结构体：目标名称 + 多张子热力图(P/K/Q/R)
             struct TargetRow {
                 std::string label;
                 struct MatPanel {
                     cv::Mat img;
-                    std::string tag; // 矩阵标识 P/K/Q/R
+                    std::string tag; // 矩阵标识 P(后验协方差)/K(卡尔曼增益)/Q(过程噪声)/R(观测噪声)
                 };
                 std::vector<MatPanel> mats;
             };
@@ -596,7 +596,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 return labels;
             };
 
-            // 静态全局标签数组，程序生命周期只构造一次
+            // 静态全局标签数组，程序生命周期只构造一次，避免每帧重复构造字符串
             static const auto kRoboLabels    = make_robo_labels();
             static const auto kOutpostLabels = make_outpost_labels();
             static const auto kMeasLabels    = make_measure_labels();
@@ -614,16 +614,16 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 if (output->is_robot()) {
                     const auto& s  = *output->robot_state();
                     const auto& rl = kRoboLabels;
-                    // 协方差矩阵P热力图
+                    // 协方差矩阵P热力图：EKF后验状态协方差
                     if (s.P.size() > 0)
                         row.mats.push_back({render_heatmap(s.P, kCell, rl, rl), "P"});
-                    // 卡尔曼增益矩阵K热力图
+                    // 卡尔曼增益矩阵K热力图：观测对状态的修正权重
                     if (s.K.size() > 0)
                         row.mats.push_back({render_heatmap(s.K, kCell, rl, kMeasLabels), "K"});
-                    // 过程噪声协方差Q
+                    // 过程噪声协方差Q：模型预测噪声
                     if (s.Q.size() > 0)
                         row.mats.push_back({render_heatmap(s.Q, kCell, rl, rl), "Q"});
-                    // 观测噪声协方差R
+                    // 观测噪声协方差R：PnP观测测量噪声
                     if (s.R.size() > 0)
                         row.mats.push_back(
                             {render_heatmap(s.R, kCell, kMeasLabels, kMeasLabels), "R"});
@@ -702,9 +702,9 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
 
             // 填充EKF热力图消息结构体下发Foxglove
             EkfHeatmapMessage msg;
-            msg.payload.timestamp = timestamp_from_ns((*outputs)[0].timestamp_ns);
-            msg.payload.frame_id  = "ekf_heatmap";
-            msg.payload.format    = "png";
+            msg.payload.timestamp = timestamp_from_ns((*outputs)[0].timestamp_ns); ///< 使用跟踪输出时间戳
+            msg.payload.frame_id  = "ekf_heatmap";                                ///< 图像帧id，无tf作用仅标记
+            msg.payload.format    = "png";                                        ///< 图片编码格式
             // 二进制字节流转换存储
             msg.payload.data = std::vector<std::byte>(
                 reinterpret_cast<const std::byte*>(compressed.data()),
@@ -733,23 +733,19 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
 
             // JSON根对象
             nlohmann::json j;
-            // 原始纳秒时间戳
-            j["timestamp_ns"] = state->timestamp_ns;
-            // 上一帧观测时间戳
-            j["last_observation_timestamp_ns"] = state->last_observation_timestamp_ns;
-            // 拆分sec/nsec标准时间格式
+            j["timestamp_ns"] = state->timestamp_ns;                          ///< 当前滤波输出纳秒时间戳
+            j["last_observation_timestamp_ns"] = state->last_observation_timestamp_ns; ///< 上一次有效PnP观测纳秒时间戳
+            // 拆分sec/nsec标准ROS时间格式
             j["timestamp"]         = nlohmann::json::object();
-            j["timestamp"]["sec"]  = state->timestamp_ns / 1000000000L;
-            j["timestamp"]["nsec"] = state->timestamp_ns % 1000000000L;
-            // 跟踪状态枚举字符串
-            j["status"] = std::string(magic_enum::enum_name(state->status));
-            // 跟踪精度标记
-            j["accurate"] = state->accurate;
+            j["timestamp"]["sec"]  = state->timestamp_ns / 1000000000L;       ///< 时间戳秒部分
+            j["timestamp"]["nsec"] = state->timestamp_ns % 1000000000L;       ///< 时间戳纳秒余数
+            j["status"] = std::string(magic_enum::enum_name(state->status));  ///< LDM跟踪状态枚举字符串
+            j["accurate"] = state->accurate;                                  ///< 跟踪精度标记，true代表状态收敛可靠
 
-            // odom坐标系中心三维坐标
+            // odom坐标系中心三维坐标（能量机关中心）
             j["position"] = {state->position().x(), state->position().y(), state->position().z()};
 
-            // 旋转矩阵行优先平铺数组下发
+            // 旋转矩阵行优先平铺数组下发，3×3矩阵展开成9个元素数组
             const auto& R = state->rotation();
             j["rotation"] = nlohmann::json::array();
             for (int row = 0; row < 3; ++row) {
@@ -758,7 +754,7 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
                 }
             }
 
-            // 机体坐标系速度
+            // 机体坐标系速度（能量机关自身本体坐标系）
             j["velocity_body"] = {
                 state->velocity_body().x(), state->velocity_body().y(), state->velocity_body().z()};
 
@@ -771,11 +767,12 @@ void register_l3_estimation_systems(talos::scheduler::Scheduler& app) {
             j["predicted_position_odom"] = {
                 state->predicted_position_odom.x(), state->predicted_position_odom.y(),
                 state->predicted_position_odom.z()};
-            j["predicted_future_ns"] = state->predicted_future_ns;
+            j["predicted_future_ns"] = state->predicted_future_ns; ///< 预测往前推演多少纳秒
 
             // 通用JSON消息发送工具，下发LdmStateMessage结构化话题
             detail::publish_json_message<LdmStateMessage>(*server, j);
         });
+
 }
 
 } // namespace fcs::visualization::foxglove::systems

@@ -350,7 +350,6 @@ public:
 private:
     EntityBuilder() = default;
     // 私有构造函数，外部不能直接new，强制使用静态create<>工厂函数创建
-
     ::foxglove::schemas::SceneEntity entity_;
     // 保存正在构建的Foxglove场景实体消息
     std::string layer_;

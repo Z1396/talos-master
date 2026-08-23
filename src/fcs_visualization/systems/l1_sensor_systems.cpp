@@ -96,6 +96,10 @@ struct QuantaPublisherState {
     if (projected_outline.empty()) {
         return {};
     }
+    // 调用OpenCV boundingRect计算16个投影点的最小包围矩形
+    /*## 功能
+    接收一组二维点，计算出**轴对齐包围盒 (AABB)**。
+    > 矩形四条边严格平行图像 X、Y 坐标轴，**不跟随物体旋转**。*/
     return cv::boundingRect(projected_outline);
 }
 
@@ -393,13 +397,14 @@ inline void publish_jpeg_image(
     }
 
     // 构造图像消息
-    ImageMessage msg;
-    msg.payload.timestamp = timestamp_from_ns(timestamp_ns);
-    msg.payload.frame_id  = "camera_optical_frame";
-    msg.payload.format    = "jpeg";
-    msg.payload.data      = std::vector<std::byte>(
-        reinterpret_cast<const std::byte*>(compressed.data()),
-        reinterpret_cast<const std::byte*>(compressed.data() + compressed.size()));
+    ImageMessage msg;                                                          // 定义图像消息结构体实例，对应Foxglove CompressedImage消息
+    msg.payload.timestamp = timestamp_from_ns(timestamp_ns);                    // 给消息时间戳赋值：把纳秒时间戳转为Foxglove标准时间结构体(sec/nsec)
+    msg.payload.frame_id  = "camera_optical_frame";                            // 坐标系ID，光学相机坐标系，和TF坐标系对应，前端用来做3D图像对齐
+    msg.payload.format    = "jpeg";                                            // 图像压缩格式，告诉前端这是jpeg压缩图片
+    msg.payload.data      = std::vector<std::byte>(                            // 构造std::vector<std::byte>二进制字节容器，存放jpeg压缩后的图片数据
+        reinterpret_cast<const std::byte*>(compressed.data()),                 // 起始指针：把压缩缓冲区uint8_t*强转为std::byte*，C++17字节类型
+        reinterpret_cast<const std::byte*>(compressed.data() + compressed.size())); // 结束指针，data+size指向缓冲区末尾，vector通过
+
 
     server.enqueue_message(std::move(msg));
 }
@@ -490,11 +495,8 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
             // -------------------------- 绘制ROI有效检测区域矩形 --------------------------
             // 根据帧是否启用检测器ROI切换矩形颜色
-            const cv::Scalar roi_color = tac::to_cv_bgr(
-                batch->has_detector_roi ? tac::Image::ROI_VALID : tac::Image::ROI_MISSING);
-            cv::rectangle(
-                img_bgr, batch->detector_roi, roi_color, tac::Image::LINE_MEDIUM, cv::LINE_AA);
-
+            const cv::Scalar roi_color = tac::to_cv_bgr(batch->has_detector_roi ? tac::Image::ROI_VALID : tac::Image::ROI_MISSING);
+            cv::rectangle(img_bgr, batch->detector_roi, roi_color, tac::Image::LINE_MEDIUM, cv::LINE_AA);
             // -------------------------- 绘制相机光心十字标记 --------------------------
             // 从相机内参取出主点cx cy（图像光学中心）
             const double cx = cam->camera_matrix(0, 2);
@@ -671,10 +673,8 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
                 // 绘制八边形3D模型投影轮廓、可见立面信息
                 const auto& selected_idx = ldm_meas.selected_candidate_idx;
-                if (selected_idx.has_value() && *selected_idx >= 0
-                    && static_cast<size_t>(*selected_idx) < ldm_meas.mesh_candidates.size()) {
-                    const auto& selected =
-                        ldm_meas.mesh_candidates[static_cast<size_t>(*selected_idx)];
+                if (selected_idx.has_value() && *selected_idx >= 0 && static_cast<size_t>(*selected_idx) < ldm_meas.mesh_candidates.size()) {
+                    const auto& selected = ldm_meas.mesh_candidates[static_cast<size_t>(*selected_idx)];
                     // 投影轮廓点数量为16个，绘制八边形外框（背面虚线、正面实线）
                     if (selected.projected_outline_image.size() == 16) {
                         detail::draw_ldm_projected_outline(
@@ -688,11 +688,11 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
                     // 拼接可见立面编号字符串
                     std::string faces_text;
-                    for (size_t i = 0; i < selected.octagon_face_indices.size(); ++i) {
+                    for (int idx : selected.octagon_face_indices) {
                         if (!faces_text.empty()) {
                             faces_text += ",";
                         }
-                        faces_text += std::to_string(selected.octagon_face_indices[i]);
+                        faces_text += std::to_string(idx);
                     }
                     // 重投影误差格式化，非法数值显示n/a
                     const std::string rmse_text =
@@ -701,8 +701,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                             : "n/a";
 
                     // 在八边形包围框上方打印可见立面、重投影RMSE误差
-                    const cv::Rect2f meas_rect =
-                        detail::projected_outline_bounds(selected.projected_outline_image);
+                    const cv::Rect2f meas_rect = detail::projected_outline_bounds(selected.projected_outline_image);
                     cv::putText(
                         img_bgr, fmt::format("ldm faces={} rmse={}", faces_text, rmse_text),
                         cv::Point(
