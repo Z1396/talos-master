@@ -120,374 +120,375 @@ struct FoxgloveChannels {
 // 每个struct对应一条独立可视化话题，存放该话题全部静态常量信息
 struct scene_def {
     // 话题路径，对应前端Foxglove展示的topic名称
-    static constexpr std::string_view topic = "/scene";
+    static constexpr std::string_view topic = "/scene";                     // Foxglove话题名，主3D渲染场景
     // 该话题对应的通道管理类（之前定义的SceneCh）
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel; // Foxglove SceneUpdate通道类型，管理3D图元绘制
     // 单帧发送的数据载荷结构体（一整批3D绘制图元）
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;        // 载荷类型：一批3D绘制物体（线、圆、方块等）
     // 指针指向 FoxgloveChannels 容器内对应的可选通道成员，用于运行时读写通道
-    static constexpr auto member            = &FoxgloveChannels::scene_ch;
+    static constexpr auto member            = &FoxgloveChannels::scene_ch;             // 编译期成员指针，指向全局通道集合里scene_ch成员
     // 是否原始二进制Raw通道：false=Foxglove标准结构化通道，前端自动解析渲染
-    static constexpr bool is_raw            = false;
+    static constexpr bool is_raw            = false;                                   // false：标准schema结构化消息，不是原始二进制透传
 };
 
 // 跟踪目标3D场景话题
 struct track_scene_def {
-    static constexpr std::string_view topic = "/track/scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::track_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/track/scene";                          // Foxglove话题，目标跟踪模块3D可视化场景
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // SceneUpdate通道，用于3D图元渲染
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 载荷：3D场景更新数据包
+    static constexpr auto member            = &FoxgloveChannels::track_scene_ch;       // 指向全局通道集合track_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 使用Foxglove标准结构化消息
 };
 
 // 激光雷达跟踪场景
 struct ldm_track_scene_def {
-    static constexpr std::string_view topic = "/ldm/track/scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::ldm_track_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/ldm/track/scene";                      // Foxglove话题，LDM能量机关跟踪3D可视化
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元更新载荷
+    static constexpr auto member            = &FoxgloveChannels::ldm_track_scene_ch;    // 指向全局通道集合ldm_track_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // 云台解算预测场景
 struct gimbal_scene_def {
-    static constexpr std::string_view topic = "/solver/scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::gimbal_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/solver/scene";                          // Foxglove话题，云台解算预测弹道、瞄准点3D绘制
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元数据包
+    static constexpr auto member            = &FoxgloveChannels::gimbal_scene_ch;       // 指向全局通道集合gimbal_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // 目标匹配关联调试3D场景
 struct association_scene_def {
-    static constexpr std::string_view topic = "/debug/association_scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::association_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/debug/association_scene";               // Foxglove话题，目标数据关联匹配调试3D可视化
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元载荷
+    static constexpr auto member            = &FoxgloveChannels::association_scene_ch;  // 指向全局通道集合association_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // MPC模型预测轨迹场景
 struct mpc_prediction_scene_def {
-    static constexpr std::string_view topic = "/debug/mpc_prediction_scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::mpc_prediction_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/debug/mpc_prediction_scene";            // Foxglove话题，MPC预测输出轨迹3D可视化
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元数据包
+    static constexpr auto member            = &FoxgloveChannels::mpc_prediction_scene_ch;// 指向全局通道集合mpc_prediction_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // 能量机关整体绘制场景
 struct rune_scene_def {
-    static constexpr std::string_view topic = "/rune/scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::rune_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/rune/scene";                           // Foxglove话题，能量机关实体3D绘制场景
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元载荷
+    static constexpr auto member            = &FoxgloveChannels::rune_scene_ch;        // 指向全局通道集合rune_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // 能量机关EKF滤波预测场景
 struct rune_ekf_scene_def {
-    static constexpr std::string_view topic = "/rune/ekf_scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::rune_ekf_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/rune/ekf_scene";                        // Foxglove话题，能量机关EKF滤波预测状态3D可视化
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元数据包
+    static constexpr auto member            = &FoxgloveChannels::rune_ekf_scene_ch;    // 指向全局通道集合rune_ekf_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // 真值对比3D场景（仿真/标定真值）
 struct ground_truth_scene_def {
-    static constexpr std::string_view topic = "/ground_truth/scene";
-    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;
-    using payload_type                      = ::foxglove::schemas::SceneUpdate;
-    static constexpr auto member            = &FoxgloveChannels::ground_truth_scene_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/ground_truth/scene";                    // Foxglove话题，仿真真值3D可视化，用于对比算法输出
+    using channel_type                      = ::foxglove::schemas::SceneUpdateChannel;  // 3D场景更新通道
+    using payload_type                      = ::foxglove::schemas::SceneUpdate;         // 3D图元载荷
+    static constexpr auto member            = &FoxgloveChannels::ground_truth_scene_ch; // 指向全局通道集合ground_truth_scene_ch成员
+    static constexpr bool is_raw            = false;                                    // 标准结构化消息
 };
 
 // -------------------------- 图像通道描述符 压缩单帧图片 CompressedImage --------------------------
 struct img_def {
-    static constexpr std::string_view topic      = "/image";
-    using channel_type                           = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                           = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member                 = &FoxgloveChannels::img_ch;
-    static constexpr bool is_raw                 = false;
+    static constexpr std::string_view topic      = "/image";                            // Foxglove话题，相机原始压缩图像
+    using channel_type                           = ::foxglove::schemas::CompressedImageChannel; // 压缩图片通道类型
+    using payload_type                           = ::foxglove::schemas::CompressedImage;        // 载荷类型：压缩图像消息结构体
+    static constexpr auto member                 = &FoxgloveChannels::img_ch;                   // 指向全局通道集合img_ch成员
+    static constexpr bool is_raw                 = false;                                        // 使用Foxglove标准图片schema
     // 传输模式限制枚举：仅WebSocket实时推流启用，录制MCAP离线包时屏蔽该通道，减少录像体积
-    static constexpr FoxgloveTransport transport = FoxgloveTransport::WebSocket;
+    static constexpr FoxgloveTransport transport = FoxgloveTransport::WebSocket;                 // 仅实时WebSocket推送，MCAP录制不记录此通道
 };
 
 // 相机标定画面
 struct calibration_img_def {
-    static constexpr std::string_view topic = "/calibration/image";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::calibration_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/calibration/image";                    // Foxglove话题，标定过程图像输出
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::calibration_img_ch;    // 指向全局通道集合calibration_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // 二值化调试图
 struct binary_img_def {
-    static constexpr std::string_view topic = "/debug/binary_img";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::binary_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/debug/binary_img";                     // Foxglove话题，图像二值化中间调试图
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::binary_img_ch;         // 指向全局通道集合binary_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // 数字识别模板匹配图
 struct pattern_img_def {
-    static constexpr std::string_view topic = "/debug/number_img";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::pattern_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/debug/number_img";                     // Foxglove话题，能量机关数字识别调试图像
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::pattern_img_ch;        // 指向全局通道集合pattern_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // 能量机关箭头ROI图
 struct rune_arrow_img_def {
-    static constexpr std::string_view topic = "/rune/arrow_img";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::rune_arrow_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/rune/arrow_img";                       // Foxglove话题，能量机关箭头ROI裁剪图像
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::rune_arrow_img_ch;    // 指向全局通道集合rune_arrow_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // 能量机关目标区域图
 struct rune_target_img_def {
-    static constexpr std::string_view topic = "/rune/target_img";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::rune_target_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/rune/target_img";                      // Foxglove话题，能量机关目标叶片ROI图像
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::rune_target_img_ch;    // 指向全局通道集合rune_target_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // 能量机关中心识别图
 struct rune_center_img_def {
-    static constexpr std::string_view topic = "/rune/center_img";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::rune_center_img_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/rune/center_img";                      // Foxglove话题，能量机关中心点识别调试图
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::rune_center_img_ch;    // 指向全局通道集合rune_center_img_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // EKF概率热力图
 struct ekf_heatmap_def {
-    static constexpr std::string_view topic = "/debug/ekf_heatmap";
-    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;
-    using payload_type                      = ::foxglove::schemas::CompressedImage;
-    static constexpr auto member            = &FoxgloveChannels::ekf_heatmap_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/debug/ekf_heatmap";                    // Foxglove话题，EKF滤波概率热力图调试图像
+    using channel_type                      = ::foxglove::schemas::CompressedImageChannel;// 压缩图片通道
+    using payload_type                      = ::foxglove::schemas::CompressedImage;       // 压缩图片载荷
+    static constexpr auto member            = &FoxgloveChannels::ekf_heatmap_ch;        // 指向全局通道集合ekf_heatmap_ch成员
+    static constexpr bool is_raw            = false;                                     // 标准图片结构化消息
 };
 
 // -------------------------- 视频通道描述符（仅MCAP离线录制） --------------------------
 struct video_def {
-    static constexpr std::string_view topic      = "/image";
-    using channel_type                           = ::foxglove::schemas::CompressedVideoChannel;
-    using payload_type                           = ::foxglove::schemas::CompressedVideo;
-    static constexpr auto member                 = &FoxgloveChannels::video_ch;
-    static constexpr bool is_raw                 = false;
+    static constexpr std::string_view topic      = "/image";                            // Foxglove话题，离线录制压缩视频话题
+    using channel_type                           = ::foxglove::schemas::CompressedVideoChannel; // 压缩视频通道类型
+    using payload_type                           = ::foxglove::schemas::CompressedVideo;        // 载荷：压缩视频帧消息
+    static constexpr auto member                 = &FoxgloveChannels::video_ch;                // 指向全局通道集合video_ch成员
+    static constexpr bool is_raw                 = false;                                       // 使用Foxglove标准视频schema
     // 传输限制：仅离线MCAP录像开启，实时WebSocket不推送视频流，降低带宽占用
-    static constexpr FoxgloveTransport transport = FoxgloveTransport::Mcap;
+    static constexpr FoxgloveTransport transport = FoxgloveTransport::Mcap;                    // 只写入MCAP录像，实时网页端不推送
 };
 
 // -------------------------- JSON原始通道描述符 RawChannel 二进制透传 --------------------------
 // is_raw=true 代表通用原始二进制通道，不使用Foxglove内置结构化类型，自定义编码格式
 // encoding标记二进制内容为json字符串，前端自动解析JSON面板
 struct debug_lights_def {
-    static constexpr std::string_view topic    = "/debug/lights";
-    using channel_type                         = ::foxglove::RawChannel;
+    static constexpr std::string_view topic    = "/debug/lights";                      // Foxglove话题，灯板状态调试JSON通道
+    using channel_type                         = ::foxglove::RawChannel;               // 原始二进制透传通道，无固定schema
     // 载荷为原始字节数组，存放序列化后的JSON字符串
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::debug_lights_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    using payload_type                         = std::vector<uint8_t>;                 // 载荷类型：原始uint8字节buffer，存放json字符串
+    static constexpr auto member               = &FoxgloveChannels::debug_lights_ch;   // 指向全局通道集合debug_lights_ch成员
+    static constexpr bool is_raw               = true;                                  // true：原始二进制通道，不走标准schema解析
+    static constexpr std::string_view encoding = "json";                                // 告诉Foxglove：字节流是json字符串，前端自动渲染json面板
 };
 
 // 装甲板检测调试JSON
 struct debug_armors_def {
-    static constexpr std::string_view topic    = "/debug/armors";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::debug_armors_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/debug/armors";                       // Foxglove话题，装甲检测结果调试JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组，存储json文本
+    static constexpr auto member = &FoxgloveChannels::debug_armors_ch; // 指向全局通道集合debug_armors_ch成员
+    static constexpr bool is_raw               = true;                                 // 启用原始二进制模式
+    static constexpr std::string_view encoding = "json";                               // 编码标记：内容为JSON字符串
 };
 
 // 视觉测量原始数据
 struct measurement_def {
-    static constexpr std::string_view topic    = "/solver/measurement";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::measurement_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/solver/measurement";                 // Foxglove话题，PnP视觉测量输出JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::measurement_ch;    // 指向全局通道集合measurement_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // 内容编码为JSON
 };
 
 // 解算目标参数
 struct target_def {
-    static constexpr std::string_view topic    = "/solver/target";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::target_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/solver/target";                     // Foxglove话题，瞄准解算目标状态JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::target_ch;         // 指向全局通道集合target_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // 内容编码JSON
 };
 
 // 目标选择决策追踪日志
 struct target_selection_trace_def {
-    static constexpr std::string_view topic    = "/solver/target_selection";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::target_selection_trace_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/solver/target_selection";            // Foxglove话题，目标选择决策追踪日志JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::target_selection_trace_ch; // 指向全局通道集合target_selection_trace_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 云台控制指令
 struct cmd_gimbal_def {
-    static constexpr std::string_view topic    = "/solver/cmd_gimbal";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::cmd_gimbal_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/solver/cmd_gimbal";                 // Foxglove话题，云台输出控制指令JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::cmd_gimbal_ch;     // 指向全局通道集合cmd_gimbal_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 硬件资源占用（CPU/内存）
 struct resources_def {
-    static constexpr std::string_view topic    = "/resources";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::resource_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/resources";                          // Foxglove话题，系统CPU内存硬件资源统计JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::resource_ch;       // 指向全局通道集合resource_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 性能统计耗时
 struct perf_stats_def {
-    static constexpr std::string_view topic    = "/perf_stats";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::perf_stats_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/perf_stats";                         // Foxglove话题，各模块运行耗时性能统计JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::perf_stats_ch;      // 指向全局通道集合perf_stats_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // MPC预测轨迹数据
 struct mpc_traj_def {
-    static constexpr std::string_view topic    = "/mpc/trajectory";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::mpc_traj_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/mpc/trajectory";                     // Foxglove话题，MPC预测轨迹点序列JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::mpc_traj_ch;      // 指向全局通道集合mpc_traj_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 能量机关全套调试参数
 struct rune_debug_def {
-    static constexpr std::string_view topic    = "/rune/debug";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::rune_debug_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/rune/debug";                         // Foxglove话题，能量机关全套调试状态JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::rune_debug_ch;    // 指向全局通道集合rune_debug_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // PnP位姿解算中间数据
 struct pnp_solver_def {
-    static constexpr std::string_view topic    = "/debug/pnp_solver";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::pnp_solver_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/debug/pnp_solver";                   // Foxglove话题，PnP位姿解算中间结果JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::pnp_solver_ch;    // 指向全局通道集合pnp_solver_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 神经网络置信度输出
 struct nn_confidence_def {
-    static constexpr std::string_view topic    = "/debug/nn_confidence";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::nn_confidence_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/debug/nn_confidence";                // Foxglove话题，神经网络推理置信度输出JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::nn_confidence_ch;  // 指向全局通道集合nn_confidence_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 能量计状态
 struct energy_meter_def {
-    static constexpr std::string_view topic    = "/energy_meter/state";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::energy_meter_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/energy_meter/state";                 // Foxglove话题，能量机关能量计模块状态JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::energy_meter_ch;   // 指向全局通道集合energy_meter_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 激光雷达原始检测框
 struct ldm_detection_def {
-    static constexpr std::string_view topic    = "/ldm/detection";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::ldm_detection_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/ldm/detection";                      // Foxglove话题，LDM激光雷达原始检测框JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::ldm_detection_ch;  // 指向全局通道集合ldm_detection_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 激光雷达测距测量值
 struct ldm_measurement_def {
-    static constexpr std::string_view topic    = "/ldm/measurement";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::ldm_measurement_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/ldm/measurement";                    // Foxglove话题，LDM激光雷达测距测量数据JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::ldm_measurement_ch;// 指向全局通道集合ldm_measurement_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 激光雷达滤波状态
 struct ldm_state_def {
-    static constexpr std::string_view topic    = "/ldm/state";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::ldm_state_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/ldm/state";                         // Foxglove话题，LDM激光雷达滤波内部状态JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::ldm_state_ch;      // 指向全局通道集合ldm_state_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // 仿真真值数据
 struct ground_truth_def {
-    static constexpr std::string_view topic    = "/ground_truth";
-    using channel_type                         = ::foxglove::RawChannel;
-    using payload_type                         = std::vector<uint8_t>;
-    static constexpr auto member               = &FoxgloveChannels::ground_truth_ch;
-    static constexpr bool is_raw               = true;
-    static constexpr std::string_view encoding = "json";
+    static constexpr std::string_view topic    = "/ground_truth";                       // Foxglove话题，仿真环境输出真值数据JSON
+    using channel_type                         = ::foxglove::RawChannel;                // 原始二进制透传通道
+    using payload_type                         = std::vector<uint8_t>;                  // 载荷：原始字节数组存储json
+    static constexpr auto member               = &FoxgloveChannels::ground_truth_ch;   // 指向全局通道集合ground_truth_ch成员
+    static constexpr bool is_raw               = true;                                 // 原始二进制通道
+    static constexpr std::string_view encoding = "json";                               // JSON编码标记
 };
 
 // -------------------------- 特殊系统内置通道描述符 TF/相机标定/日志 --------------------------
 // 坐标变换通道，等价ROS2 /tf
 struct tf_def {
-    static constexpr std::string_view topic = "/tf";
-    using channel_type                      = ::foxglove::schemas::FrameTransformsChannel;
-    using payload_type                      = ::foxglove::schemas::FrameTransforms;
-    static constexpr auto member            = &FoxgloveChannels::tf_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/tf";                                    // Foxglove话题，坐标系变换TF话题，等价ROS /tf
+    using channel_type                      = ::foxglove::schemas::FrameTransformsChannel; // TF坐标变换通道类型
+    using payload_type                      = ::foxglove::schemas::FrameTransforms;        // 载荷：多组坐标系变换数据包
+    static constexpr auto member            = &FoxgloveChannels::tf_ch;                   // 指向全局通道集合tf_ch成员
+    static constexpr bool is_raw            = false;                                      // Foxglove标准TF结构化消息
 };
 
 // 相机内参标定通道，等价ROS2 CameraInfo
 struct calib_def {
-    static constexpr std::string_view topic = "/camera_info";
-    using channel_type                      = ::foxglove::schemas::CameraCalibrationChannel;
-    using payload_type                      = ::foxglove::schemas::CameraCalibration;
-    static constexpr auto member            = &FoxgloveChannels::camera_calib_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/camera_info";                           // Foxglove话题，相机内参标定信息，等价ROS CameraInfo
+    using channel_type                      = ::foxglove::schemas::CameraCalibrationChannel; // 相机标定通道类型
+    using payload_type                      = ::foxglove::schemas::CameraCalibration;         // 载荷：相机内参畸变参数结构体
+    static constexpr auto member            = &FoxgloveChannels::camera_calib_ch;            // 指向全局通道集合camera_calib_ch成员
+    static constexpr bool is_raw            = false;                                          // Foxglove标准相机标定结构化消息
 };
 
 // 全局日志通道，等价ROS2 /rosout
 struct log_def {
-    static constexpr std::string_view topic = "/log";
-    using channel_type                      = ::foxglove::schemas::LogChannel;
-    using payload_type                      = ::foxglove::schemas::Log;
-    static constexpr auto member            = &FoxgloveChannels::log_ch;
-    static constexpr bool is_raw            = false;
+    static constexpr std::string_view topic = "/log";                                   // Foxglove话题，系统日志输出，等价ROS /rosout
+    using channel_type                      = ::foxglove::schemas::LogChannel;           // 日志消息通道类型
+    using payload_type                      = ::foxglove::schemas::Log;                // 载荷：单条日志消息结构体（等级+文本）
+    static constexpr auto member            = &FoxgloveChannels::log_ch;                // 指向全局通道集合log_ch成员
+    static constexpr bool is_raw            = false;                                     // Foxglove标准日志结构化消息
 };
+
 
 // ============================================================================
 // 四、通道注册表

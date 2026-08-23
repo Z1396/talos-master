@@ -181,8 +181,7 @@ requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
         // 当前对外暴露的最新数据智能指针，多线程共享
         std::shared_ptr<const T> current{nullptr};
         // 版本号，每次写入自增，用于读者判断是否有新数据
-        alignas(std::hardware_destructive_interference_size) std::atomic<std::uint64_t> generation{
-            0};
+        alignas(std::hardware_destructive_interference_size) std::atomic<std::uint64_t> generation{0};
     };
 
 public:

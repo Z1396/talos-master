@@ -39,12 +39,12 @@ struct nearest_t {};        // 就近取值：取前后两个时间戳中距离�
 struct interpolate_t {};    // 线性插值：按时间比例插值两个相邻样本
 struct clamped_t {};        // 钳位截断：查询时间超出区间时返回首尾样本，不报错
 
-// 全局常量实例，方便调用时直接传入，不用写模板参数
-// 示例：buf.lookup(ts, interpolate);
-inline constexpr exact_t exact{};
-inline constexpr nearest_t nearest{};
-inline constexpr interpolate_t interpolate{};
-inline constexpr clamped_t clamped{};
+// 全局常量实例，方便调用时直接传入标签对象，无需显式构造临时变量
+// 使用示例：buf.lookup(ts, interpolate);  // 等价于 buf.lookup(ts, interpolate_t{});
+inline constexpr exact_t       exact{};         // 精确匹配标签实例
+inline constexpr nearest_t     nearest{};       // 就近取值标签实例
+inline constexpr interpolate_t interpolate{};   // 线性插值标签实例
+inline constexpr clamped_t     clamped{};       // 钳位截断标签实例
 
 /**
  * @brief concept约束：限定模板参数只能是上面四种查询模式
@@ -425,8 +425,7 @@ public:
      * @brief 获取缓冲区存储的完整时间区间[最早时间戳, 最新时间戳]
      * @return 空缓冲区返回nullopt，否则返回pair<oldest_ns, newest_ns>
      */
-    [[nodiscard]] std::optional<std::pair<timestamp_ns_t, timestamp_ns_t>>
-        time_range() const noexcept {
+    [[nodiscard]] std::optional<std::pair<timestamp_ns_t, timestamp_ns_t>> time_range() const noexcept {
         if constexpr (is_static) {
             // 静态TF返回(0,0)，上层代码靠这个判断是不是静态变换
             return std::make_pair(timestamp_ns_t{0}, timestamp_ns_t{0});

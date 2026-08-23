@@ -62,18 +62,22 @@ void register_foxglove_systems(
     using namespace foxglove::systems;
 
     // ====================== 分层自动化注册可视化发布系统 ======================
-    // L1 底层传感器可视化：相机、IMU、雷达、编码器等原始传感器数据发布
+    // L1 底层传感器可视化：相机、IMU、雷达、编码器等原始传感器数据发布 image
     register_l1_sensor_systems(scheduler);
-    // L2 感知层可视化：目标检测、分割、特征点、图像处理结果
+
+    // L2 感知层可视化：目标检测、分割、特征点、图像处理结果    Raw Message   3D  3D    Raw Message     Raw Message
     register_l2_perception_systems(scheduler);
-    // L3 状态估计层可视化：位姿、里程计、滤波结果、融合定位
+
+    // L3 状态估计层可视化：位姿、里程计、滤波结果、融合定位    3D    3D    3D    Image     Raw Message
     register_l3_estimation_systems(scheduler);
-    // L4 规划控制层可视化：路径轨迹、速度指令、规划障碍物、代价地图
+
+    // L4 规划控制层可视化：路径轨迹、速度指令、规划障碍物、代价地图Raw(JSON)   Raw(JSON)   Raw(JSON)   Raw(JSON)   SceneUpdate     SceneUpdate
     register_l4_planning_systems(scheduler);
-    // 符识别专项可视化：能量机关、装甲板、Rune符文相关检测、角度预测画面m
+
+    // 符识别专项可视化：能量机关、装甲板、Rune符文相关检测、角度预测画面   Image×3     Raw Message     3D     3D
     register_rune_systems(scheduler);
 
-    // 仅开启Daedalus仿真模式时，注册Ground Truth地面真值可视化系统
+    // 仅开启Daedalus仿真模式时，注册Ground Truth地面真值可视化系统     Raw Message
     if (daedalus) {
         SPDLOG_INFO("register ground truth system");
         register_ground_truth_systems(scheduler);
@@ -81,7 +85,7 @@ void register_foxglove_systems(
 
     // 全局调试可视化系统：自定义曲线、标记、文本、临时调试绘图
     // 该系统需要调度器裸指针，支持运行时动态添加/删除可视化任务
-    register_debug_systems(scheduler, scheduler_ptr);
+    register_debug_systems(scheduler, scheduler_ptr);   //  Raw Message * 5
 }
 
 } // namespace fcs::visualization
