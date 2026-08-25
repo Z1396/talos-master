@@ -22,7 +22,7 @@ namespace fcs {
  * @承载数据 上一文件定义的 ImageFrame
  * @模式 SPMC 单生产者、多消费者
  */
-struct ImageChannelTopic {};            // L1→L2 图像流
+struct ImageChannelTopic {}; // L1→L2 图像流
 
 /**
  * @struct DetectionChannelTopic
@@ -31,7 +31,7 @@ struct ImageChannelTopic {};            // L1→L2 图像流
  * @承载数据 上一文件定义的 ArmorDetectionBatch
  * @模式 SPMC 单生产者、多消费者
  */
-struct DetectionChannelTopic {};// L2→L3 检测结果流
+struct DetectionChannelTopic {}; // L2→L3 检测结果流
 
 /**
  * @struct MeasurementChannelTopic
@@ -41,7 +41,7 @@ struct DetectionChannelTopic {};// L2→L3 检测结果流
  * @模式 SPMC 单生产者、多消费者
  * @detail 记录PnP解算器输出的3D位姿测量结果，包括目标ID、位姿（位置、旋转）、置信度等
  */
-struct MeasurementChannelTopic {};// L3→L4 测量流   
+struct MeasurementChannelTopic {}; // L3→L4 测量流
 
 /**
  * @struct LdmDetectionChannelTopic
@@ -51,7 +51,7 @@ struct MeasurementChannelTopic {};// L3→L4 测量流
  * @承载数据 上一文件定义的 LdmArmorDetectionBatch
  * @模式 SPMC 单生产者、多消费者
  */
-struct LdmDetectionChannelTopic {};// LDM 光斑检测流
+struct LdmDetectionChannelTopic {}; // LDM 光斑检测流
 
 /**
  * @struct LdmMeasurementChannelTopic
@@ -62,7 +62,7 @@ struct LdmDetectionChannelTopic {};// LDM 光斑检测流
  * @模式 SPMC 单生产者、多消费者
  * @detail 记录PnP解算器输出的符类装甲3D位姿测量结果，包括目标ID、位姿（位置、旋转）、置信度等
  */
-struct LdmMeasurementChannelTopic {};// LDM 测量流
+struct LdmMeasurementChannelTopic {}; // LDM 测量流
 
 // ============================================================================
 // L3 状态估计流水线 通道/话题定义
@@ -75,10 +75,10 @@ struct LdmMeasurementChannelTopic {};// LDM 测量流
  * @detail 记录目标跟踪器输出的目标状态，包括ID、位姿（位置、旋转）、速度、健康状态等
  * @detail 记录目标跟踪器输出的目标状态，包括ID、位姿（位置、旋转）、速度、健康状态等
  * @承载数据 fcs::L3::TrackerOutputs 跟踪结果结构体
- * @detail 记录目标跟踪器输出的跟踪结果，包括目标ID、位姿（位置、旋转）、速度、健康状态等       
+ * @detail 记录目标跟踪器输出的跟踪结果，包括目标ID、位姿（位置、旋转）、速度、健康状态等
  * @模式 SPMC 单生产者、多消费者
  */
-struct TrackerOutputChannelTopic {};// L3→L4 追踪输出流
+struct TrackerOutputChannelTopic {}; // L3→L4 追踪输出流
 
 /**
  * @struct RuneObservationChannelTopic
@@ -89,7 +89,7 @@ struct TrackerOutputChannelTopic {};// L3→L4 追踪输出流
  * @detail 承载数据 fcs::L3::RuneObservation 符类装甲观测数据
  * @模式 SPMC 单生产者、多消费者
  */
-struct RuneObservationChannelTopic {};// L3→L4 能量机关观测流
+struct RuneObservationChannelTopic {}; // L3→L4 能量机关观测流
 
 /**
  * @struct RuneDebugFrameChannelTopic
@@ -97,15 +97,15 @@ struct RuneObservationChannelTopic {};// L3→L4 能量机关观测流
  * @desc 专供可视化、调试、日志录制使用的原始帧数据
  * @模式 SPMC 单生产者、多消费者
  */
-struct RuneDebugFrameChannelTopic {};// L3→数据录制 能量机关调试帧流
+struct RuneDebugFrameChannelTopic {}; // L3→数据录制 能量机关调试帧流
 
 /**
  * @struct EnergyMeterStateChannelTopic
  * @brief 能量值状态通道
  * @desc 承载机器人自身能量、弹丸数量、状态等信息
- * @模式 SPMC 单生产者、多消费者    
+ * @模式 SPMC 单生产者、多消费者
  */
-struct EnergyMeterStateChannelTopic {};// L3→L4 能量值状态流
+struct EnergyMeterStateChannelTopic {}; // L3→L4 能量值状态流
 
 // ============================================================================
 // L4 规划决策流水线 通道/话题定义
@@ -122,7 +122,7 @@ struct EnergyMeterStateChannelTopic {};// L3→L4 能量值状态流
  *         是「用 variant 表达互斥选择」的工程实践
  * @模式 SPMC 单生产者、多消费者
  */
-struct ControlIntentChannelTopic {};// L4→L5 控制意图流
+struct ControlIntentChannelTopic {}; // L4→L5 控制意图流
 
 /**
  * @struct SelectedTargetSnapshotChannelTopic
@@ -132,7 +132,7 @@ struct ControlIntentChannelTopic {};// L4→L5 控制意图流
  * @模式 SPMC 单生产者、多消费者
  * @detail 记录当前选中目标的瞬时状态，包括ID、位姿、速度、健康状态等
  */
-struct SelectedTargetSnapshotChannelTopic {};// L4→数据录制 已选中目标快照流    
+struct SelectedTargetSnapshotChannelTopic {}; // L4→数据录制 已选中目标快照流
 
 /**
  * @struct TargetSelectionTraceChannelTopic
@@ -142,7 +142,7 @@ struct SelectedTargetSnapshotChannelTopic {};// L4→数据录制 已选中目�
  * @模式 SPMC 单生产者、多消费者
  * @detail 记录目标选择器的运行过程，包括每次决策的目标ID、置信度、决策路径等
  */
-struct TargetSelectionTraceChannelTopic {};// L4→数据录制 目标选择轨迹流
+struct TargetSelectionTraceChannelTopic {}; // L4→数据录制 目标选择轨迹流
 
 // ============================================================================
 // L5 武器执行系统 通道/话题定义
@@ -156,7 +156,7 @@ struct TargetSelectionTraceChannelTopic {};// L4→数据录制 目标选择轨�
  * @承载数据 fcs::L5::WeaponCommand 武器执行指令
  * @模式 SPMC 单生产者、多消费者
  */
-struct WeaponCommandChannelTopic {};// L5→执行器 武器命令流
+struct WeaponCommandChannelTopic {}; // L5→执行器 武器命令流
 
 /**
  * @struct RuntimeControlStateChannelTopic
@@ -165,9 +165,8 @@ struct WeaponCommandChannelTopic {};// L5→执行器 武器命令流
  * @承载数据 fcs::core::ControlResourceSnapshot 整机控制资源、传感器状态
  * @模式 SPMC 单生产者、多消费者
  */
-struct RuntimeControlStateChannelTopic {};// L5→数据录制 实时控制资源状态流
+struct RuntimeControlStateChannelTopic {}; // L5→数据录制 实时控制资源状态流
 
-/**
 // ============================================================================
 // 真值数据通道（调试/标定/算法评估专用）
 // 数据源：外部IPC真值读取模块，用途：算法对比、可视化、精度评测
@@ -180,6 +179,6 @@ struct RuntimeControlStateChannelTopic {};// L5→数据录制 实时控制资�
  * @承载数据 ipc::GroundTruthBatch 全局真值标注数据
  * @模式 SPMC 单生产者、多消费者
  */
-struct GroundTruthBatchChannelTopic {};// 真值数据包流
+struct GroundTruthBatchChannelTopic {}; // 真值数据包流
 
 } // namespace fcs

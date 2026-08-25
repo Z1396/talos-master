@@ -20,6 +20,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # 启用所有警告且视为错误（与 Talos 项目保持一致）
 add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 
+# 导出编译数据库 compile_commands.json，供 clangd 语言服务器定位头文件路径
+# （否则 IDE 里所有 #include 都会报找不到文件）
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 列出 5 个独立练习程序：源文件名即目标名 
 set(EXAMPLES
     01_concept        # concept 类型约束
@@ -27,6 +31,7 @@ set(EXAMPLES
     03_tuple_size     # 编译期元编程
     04_crtp           # 奇异递归模板模式
     05_combined       # 综合演示
+    test_1            # 测试程序1
 )
 
 # 为每个程序创建独立可执行目标，便于单独运行测试
