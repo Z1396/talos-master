@@ -99,6 +99,8 @@ public:
         for (const auto& sys : systems_) {     // 遍历所有系统
             for (const auto& w : sys.writes) { // 遍历该系统的写入列表
                 // 尝试插入，如果已存在则说明有多个写者
+                /*### `set::insert` 返回值
+                `insert(value)` 返回一个 **`std::pair<迭代器, bool>`***/
                 if (!writers.insert(w).second) { // .second 表示是否插入成功
                     throw std::runtime_error("multiple writers for same type");
                 }
@@ -109,6 +111,11 @@ public:
         // 注意：这里只是警告而不是报错，因为有些场景可能允许"只读空数据"
         for (const auto& sys : systems_) {
             for (const auto& r : sys.reads) {
+                //`contains()` 是 **C++20** 新增，`std::set` / `std::unordered_set` / `std::map` / `std::unordered_map` 都有。
+                /*bool contains(const T& key) const;
+                - 返回 `true`：容器**已经存在这个 key**
+                - 返回 `false`：容器**没有这个 key**
+                > ⚠️ **contains 仅仅做查询，不会修改容器，不会插入元素！***/
                 if (!writers.contains(r)) { // C++20 的 contains() 方法
                     std::cerr << "[warn] '" << sys.name << "' reads type with no writer\n";
                 }

@@ -14,10 +14,8 @@
 #include "armor/ekf.hpp"
 
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <random>
-#include <vector>
 
 using namespace armor;
 
