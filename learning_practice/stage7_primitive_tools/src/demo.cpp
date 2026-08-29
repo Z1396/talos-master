@@ -132,6 +132,20 @@ void test_overloaded() {
         },
     };
 
+    // ------------------------------------------------------------------
+    // 【编译期穷尽性演示】std::visit 要求 overloaded 覆盖 variant 全部类型。
+    // 取消下面任意一行的注释都会直接编译报错（漏一个 lambda → no match）：
+    //   error: no matching function for call to 'visit'
+    // 这比运行时 switch 的 default 分支可靠 —— 忘写分支编译器直接拦截。
+    //
+    //   const auto bad = overloaded{
+    //       [](const DirectConfig& c) { return c.exposure_us; },
+    //       [](const DaedalusConfig& c) { return c.shm_name; },
+    //       // 忘记 FoxgloveConfig 分支
+    //   };
+    //   auto s = std::visit(bad, configs[2]);  // ← 编译错误
+    // ------------------------------------------------------------------
+
     std::string results[3];
     for (std::size_t i = 0; i < configs.size(); ++i) {
         results[i] = std::visit(describe, configs[i]); // 编译期穷尽，漏一个 lambda 直接报错

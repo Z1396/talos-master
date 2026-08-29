@@ -49,9 +49,10 @@ public:
     // 模板参数 Fn：可调用对象（函数指针、lambda、函数对象等）
     // 返回 SystemBase& 引用，支持链式调用（Builder 模式）
     // =========================================================================
+    // 注意：SystemBase 必须保持聚合类型（aggregate），不能添加自定义构造函数，
+    // 否则 C++20 指定初始化器（.name = ... 等）将编译失败。
     template <typename Fn>
     SystemBase& add_system(std::string name, Fn fn) {
-        // 构造 SystemBase 对象并添加到 systems_ 向量尾部
         systems_.push_back(
             SystemBase{
                 .name   = std::move(name),                         // 转移字符串所有权，避免拷贝

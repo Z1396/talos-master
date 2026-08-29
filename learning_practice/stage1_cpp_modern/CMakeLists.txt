@@ -24,14 +24,14 @@ add_compile_options(-Wall -Wextra -Wpedantic -Werror)
 # （否则 IDE 里所有 #include 都会报找不到文件）
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# 列出 5 个独立练习程序：源文件名即目标名 
+# 列出独立练习程序：源文件名即目标名
 set(EXAMPLES
     01_concept        # concept 类型约束
     02_expected       # std::expected 错误处理
     03_tuple_size     # 编译期元编程
     04_crtp           # 奇异递归模板模式
     05_combined       # 综合演示
-    test_1            # 测试程序1
+    06_variant        # variant + visit 穷尽分发
 )
 
 # 为每个程序创建独立可执行目标，便于单独运行测试
