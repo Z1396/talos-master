@@ -116,18 +116,10 @@ void test_borrow_mut() {
     //   1. borrow_mut()：获取写入槽的可变引用（直接指向缓冲区内存）
     //   2. 在引用上直接构造/修改数据（不产生临时对象）
     //   3. publish()：发布新版本，通知读者
-    /*slot 是 std::string& 引用
-    std::string 有一个 赋值运算符重载：
-    std::string& operator=(const char* s);  // 接受 const char* 的赋值*/
-    /* 为什么是 const char* 而不是 char*？
-    因为字符串字面量是只读的！
-
-    char* p = "hello";        // ❌ C++ 禁止（C 语言允许，但 C++ 不允许）
-    const char* p = "hello";  // ✅ 正确
-
-    // 为什么？
-    // 因为 "hello" 存储在只读内存段，试图修改会导致程序崩溃
-    p[0] = 'H';  // 如果 p 是 const char*，编译器会报错*/
+    // slot 是 std::string& 引用
+    // std::string 有一个赋值运算符重载：operator=(const char* s)
+    // 字符串字面量 "hello, talos" 是 const char*（存储在只读内存段）
+    // C++ 禁止 char* p = "hello"（C 允许但 C++ 不允许），因为修改只读内存会崩溃
     std::string& slot = writer.borrow_mut(); // 借用写入槽
     slot              = "hello, talos";      // 直接在槽内赋值
     writer.publish();                        // 手动发布
