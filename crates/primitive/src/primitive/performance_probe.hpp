@@ -23,6 +23,16 @@ namespace talos::primitive {
  *
  * 性能开销：编译优化后单次调用耗时约 20~40 纳秒
  */
+ /*代码里的概念	体育课的对应
+LatencyProbe	体育老师手里的 秒表
+start_ns_	按下秒表开始计时的 那个瞬间
+elapsed_ns()	看一眼秒表：现在跑了多久？
+snapshot_and_reset()	记下当前成绩，然后 按归零，准备测下一个同学
+LatencyHistogram	全班同学成绩的 统计表
+record(100)	记录一个同学跑了 100 纳秒（夸张了，只是个数字）
+SAMPLE_WINDOW = 8192	统计表 最多记 8192 个成绩，满了就把最老的划掉
+Stats 里的 p50/p95/p99	百分位数：比 50%/95%/99% 的同学都快的是多少秒？
+compute()	老师把统计表拿出来算一算：平均、最快、最慢、中位数...*/
 class LatencyProbe {
 public:
     /**
@@ -173,15 +183,15 @@ private:
      */
     void update_max(std::uint64_t latency_ns) noexcept;
 
-    // 固定大小采样数组，循环覆盖写入，构成滑动窗口
+    // 固定大小采样数组，循环覆盖写入，构成滑动窗口翻译：准备一张有 8192 个格子的表格，每格填一个成绩。
     std::array<SampleSlot, SAMPLE_WINDOW> samples_{};
-    // 原子变量：当前写入位置索引，循环递增
+    // 原子变量：当前写入位置索引，循环递增翻译：记录下一个要填写成绩的格子。
     std::atomic<std::uint64_t> write_index_{0};
-    // 原子变量：累计总采样次数
+    // 原子变量：累计总采样次数翻译：记录总共填写了多少个成绩。
     std::atomic<std::uint64_t> count_{0};
-    // 原子变量：全局最小时延，初始化为 uint64 类型最大值
+    // 原子变量：全局最小时延，初始化为 uint64 类型最大值翻译：记录所有成绩中最小的那个。
     std::atomic<std::uint64_t> min_ns_{std::numeric_limits<std::uint64_t>::max()};
-    // 原子变量：全局最大时延，初始化为 0
+    // 原子变量：全局最大时延，初始化为 0翻译：记录所有成绩中最大的那个。
     std::atomic<std::uint64_t> max_ns_{0};
 };
 
