@@ -285,7 +285,7 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
 
     // 将推理引擎所有权移动到全局资源，所有L2检测任务共享同一个推理实例
     world.insert_resource(std::move(backend_handle_result->backend));
-    // 根据相机内参创建PnP三维位姿解算器，存入全局资源
+    // 根据相机内参创建PnP三维位姿解算器，存入全局资源   //1. 调用 .value() 拿到整个结构体（这里会发生一次拷贝）
     world.insert_resource(L2::create_pnp_solver(setup_result.value().camera_config));
 
     // ===================== 步骤7：注册弹道解算全局资源 =====================

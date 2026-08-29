@@ -448,7 +448,8 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
         // 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
         /*    video_state H.265 视频编码器状态（避免每帧重建编码器） ldm_state
            LDM（能量机关）数据缓存（保留上一帧数据用于叠加）*/
-        [video_state = detail::QuantaPublisherState{}, ldm_state = detail::LdmOverlayState{}](
+        [video_state = 
+            detail::QuantaPublisherState{}, ldm_state = detail::LdmOverlayState{}](
             // 输入通道1：装甲板神经网络检测批量帧（原图+所有装甲检测结果）
             talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> det_in,
             // 输入通道2：LDM能量机关光斑blob原始检测数据

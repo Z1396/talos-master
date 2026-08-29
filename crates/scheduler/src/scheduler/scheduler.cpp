@@ -404,7 +404,8 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
     不相等：把原子变量当前值写入 expected，返回 false。*/
     if (!lifecycle_.compare_exchange_strong(
             expected, LifecycleState::Running, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+            std::memory_order_acquire)) 
+    {
         // CAS交换失败，判断当前实际状态
         if (expected == LifecycleState::Running) {
             return std::unexpected(SchedulerError::AlreadyRunning);
@@ -1906,7 +1907,7 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
     };
 
     // ===================== 1、CPU核心绑定，线程隔离优化 =====================
-    // 配置中cpu_affinity >= 0 代表需要将本线程绑定至指定逻辑CPU核心
+    // 配置中cpu_affinity >= 0 代表需要将本线程绑定至指定逻辑CPU核心这里只是检查是否需要绑定，不执行绑核操作
     if (ctx.policy.cpu_affinity >= 0) {
         // 调用底层工具类将当前线程锁死到目标核心
         auto result = primitive::ThreadAffinity::pin_to_core(
