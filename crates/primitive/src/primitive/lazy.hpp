@@ -59,8 +59,7 @@ public:
      * @return std::unique_ptr<T> 动态分配T实例智能指针
      */
     template <typename... Args>
-    [[nodiscard]] std::unique_ptr<T> operator()(Args&&... args) noexcept
-        requires(sizeof...(PArgs) == 0) {
+    [[nodiscard]] std::unique_ptr<T> operator()(Args&&... args) noexcept requires(sizeof...(PArgs) == 0) {
         // 直接转发运行时参数构造T，无预绑定元组参与
         return std::make_unique<T>(std::forward<Args>(args)...);
     }

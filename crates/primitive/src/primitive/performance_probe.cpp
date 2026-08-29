@@ -24,6 +24,7 @@ namespace talos::primitive {
  * 1. elapsed_ns() 不重置起点，持续计算从创建至今总耗时
  * 2. snapshot_and_reset() 读取耗时并重置起点，分段计时
  */
+ //翻译：秒表一创建，立刻按下开始键，记录当前时间 start_ns_。
 LatencyProbe::LatencyProbe() noexcept
     : start_ns_(now_ns()) {}
 
@@ -31,12 +32,18 @@ LatencyProbe::LatencyProbe() noexcept
  * @brief 获取从探针创建到当前的总纳秒耗时，不重置起点
  * @return 时间差 纳秒 uint64_t
  */
+ //翻译：看一眼秒表，用"现在时间"减去"开始时间"，得到已经跑了多久。
 auto LatencyProbe::elapsed_ns() const noexcept -> std::uint64_t { return now_ns() - start_ns_; }
 
 /**
  * @brief 快照式读取耗时，同时重置计时起点，用于分段循环计时
  * @return 上一次重置到本次调用之间的纳秒耗时
+ * 翻译：
+ * - 看一眼秒表，用"现在时间"减去"开始时间"，得到已经跑了多久。
+ * - 然后，把秒表上的时间重置为"现在时间"，准备下一次计时。
+ * - 返回的这个时间差，就是上一次重置到本次调用之间的耗时。
  */
+ //翻译：记下当前成绩，然后立刻归零，准备下次计时。
 auto LatencyProbe::snapshot_and_reset() noexcept -> std::uint64_t {
     // 获取当前高精度时间戳
     const auto now     = now_ns();
@@ -51,6 +58,7 @@ auto LatencyProbe::snapshot_and_reset() noexcept -> std::uint64_t {
  * @brief 静态工具函数：获取系统稳定时钟当前纳秒时间戳
  * @return 自系统开机稳态时钟纪元起总纳秒数 uint64_t
  */
+ //翻译：问系统"现在几点了？"，以纳秒为单位返回。（steady_clock 是专门用来计时的钟，不像墙上的钟会被调快调慢）
 auto LatencyProbe::now_ns() noexcept -> std::uint64_t {
     // 稳定时钟 → 强制转换为纳秒精度 → 取纪元差值计数
     return std::chrono::time_point_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now())
@@ -90,6 +98,12 @@ auto LatencyHistogram::operator=(LatencyHistogram&& other) noexcept -> LatencyHi
  * 3. 原子更新全局最小、最大延时
  * 4. 原子自增写入索引与总采样计数
  */
+ /*翻译：
+看笔指着哪个格子
+把成绩填进去（index % 8192 保证不超出表格范围，满了就覆盖最老的）
+更新"最快"和"最慢"记录
+笔指向下一个格子
+总成绩数 +1*/
 void LatencyHistogram::record(const std::uint64_t latency_ns) noexcept {
     // 松弛序读取当前写入下标，无同步开销
     const auto index = write_index_.load(std::memory_order_relaxed);
@@ -108,6 +122,16 @@ void LatencyHistogram::record(const std::uint64_t latency_ns) noexcept {
  * @brief 读取全部有效采样，计算完整统计指标结构体Stats
  * @return Stats 包含 min/max/mean/p50/p95/p99/p999/stddev/总采样数/窗口有效采样数
  */
+ /*翻译：
+看看一共记了多少个成绩
+如果 0 个，直接返回全零
+把表格里有效的成绩全部拷出来
+从小到大排序
+算平均值和标准差
+用下标取百分位数：
+p50 = 排序后第 50% 位置的值
+p95 = 排序后第 95% 位置的值
+以此类推*/
 auto LatencyHistogram::compute() const -> Stats {
     // 获取总写入采样数，acquire同步确保采样全部可见
     const auto total_count = count_.load(std::memory_order_acquire);
@@ -205,6 +229,12 @@ void LatencyHistogram::copy_from(const LatencyHistogram& other) noexcept {
  * @brief 原子无锁更新全局最小延时，CAS自旋循环保证最终写入最小值
  * @param latency_ns 新采样延时
  */
+ /*翻译：
+如果新成绩比"最快记录"还快
+尝试把"最快记录"改成这个新成绩
+如果改的时候被别人抢先改了，那就重新读一下"最快记录"，再比一次
+直到改成功为止（CAS = Compare And Swap，无锁编程的核心操作）
+打个比方：几个人同时抢着更新"全班最快"记录，大家用 CAS 公平竞争，谁先读到旧值谁先更新，其他人重试。*/
 void LatencyHistogram::update_min(const std::uint64_t latency_ns) noexcept {
     auto current = min_ns_.load(std::memory_order_relaxed);
     // 自旋循环：当前最小值大于新采样则尝试交换，失败重读重试

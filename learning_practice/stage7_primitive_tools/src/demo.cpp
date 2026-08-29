@@ -63,35 +63,34 @@ struct Tracked {
         ++constructions;
     }
 
-    int         a;
+    int a;
     std::string b;
 };
 
 void test_lazy() {
     std::cout << "=== 测试1：lazy 延迟构造 ===\n";
-
-    // 路径A：预绑定参数 —— 直接构造 lazy<T, PArgs...>
-    // ⚠ 读源码发现的真实 bug：工厂 make_lazy 的返回类型写的是 lazy<T>
-    // （丢了 PArgs...），内部却构造 lazy<T, PArgs...> —— 传任何预绑定参数
-    // 都无法编译通过，该工厂实际不可用，只能显式写模板参数直接构造。
+    // 路径A：预绑定参数
     tp::lazy<Tracked, int, std::string> lz(41, std::string("hello"));
-    CHECK(Tracked::constructions == 0); // ← 延迟的本质：构造参数已存，T 未构造
 
-    auto p1 = lz(); // std::apply 解包 tuple → make_unique<Tracked>(41, "hello")
+    CHECK(Tracked::constructions == 0);
+    std::cout << "  [预绑定] lz构造完成，Tracked::constructions = " << Tracked::constructions << "\n";
+
+    auto p1 = lz();
     CHECK(Tracked::constructions == 1);
     CHECK(p1 != nullptr);
     CHECK(p1->a == 41 && p1->b == "hello");
+    std::cout << "  [预绑定] lz()执行完毕，Tracked::constructions = " << Tracked::constructions << "\n";
 
-    // 路径B：无预绑定参数，运行时传参（requires(sizeof...(PArgs) == 0) 分支）
+    // 路径B：无预绑定参数，运行时传参
     tp::lazy<Tracked> lz_runtime;
-    auto              p2 = lz_runtime(42, "world");
-    CHECK(Tracked::constructions == 2); // 累计 2 次，各自恰好一次
+    auto p2 = lz_runtime(42, "world");
+    CHECK(Tracked::constructions == 2);
     CHECK(p2->a == 42 && p2->b == "world");
+    std::cout << "  [运行时] lz_runtime(...)执行完毕，Tracked::constructions = " << Tracked::constructions << "\n";
 
-    std::cout << "  预绑定路径: 调用前构造次数 = 0，调用后 = 1（延迟生效）\n";
-    std::cout << "  运行时路径: 构造次数 +1，unique_ptr 托管\n";
     std::cout << "测试1通过\n\n";
 }
+
 
 // ===========================================================================
 // 测试2：overloaded + variant 三策略分发
@@ -151,7 +150,7 @@ void test_overloaded() {
         results[i] = std::visit(describe, configs[i]); // 编译期穷尽，漏一个 lambda 直接报错
         std::cout << "  " << results[i] << "\n";
     }
-
+    //`std::string::npos` 本质是 `size_t(-1)`，一个很大的无符号数字，代表 “没找到”。
     CHECK(results[0].find("2000") != std::string::npos);
     CHECK(results[1].find("/dev/shm/talos_frames") != std::string::npos);
     CHECK(results[2].find("8765") != std::string::npos);
