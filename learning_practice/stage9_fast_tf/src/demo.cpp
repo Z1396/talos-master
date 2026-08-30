@@ -99,6 +99,7 @@ static void print_matrix(const Eigen::Matrix4d& m) {
 static void test_frame_tree_init() {
     std::cout << "=== 测试1：帧树静态初始化（复刻 boot.cpp）===\n";
 
+    //翻译：定义一个编译期常量 pi，值是数学常数 π（3.141592653589793...）。
     constexpr double pi = std::numbers::pi;
     ft::CoordinateSystem sys;  // 创建坐标变换系统容器
 
