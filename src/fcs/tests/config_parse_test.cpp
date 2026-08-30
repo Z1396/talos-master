@@ -22,6 +22,9 @@
 #include "scheduler/scheduler.hpp"
 // TOML配置解析工具封装，提供toml表转业务配置结构体的通用方法
 #include "toml_helper.hpp"
+// Eigen 扩展：CameraConfig 含 Eigen::Matrix 内参/畸变字段，需显式引入
+// （与 runtime/config_loader.cpp 的真实用法一致）
+#include "toml_helper_eigen.hpp"
 
 // 匿名命名空间：隔离测试内部工具函数，防止全局符号冲突
 namespace {
@@ -31,9 +34,7 @@ namespace {
  * @return std::filesystem::path 源码根目录绝对路径
  * @note TALOS_SOURCE_DIR 为CMake编译时注入的宏，指向项目根目录
  */
-std::filesystem::path source_root() {
-    return std::filesystem::path(TALOS_SOURCE_DIR);
-}
+std::filesystem::path source_root() { return std::filesystem::path(TALOS_SOURCE_DIR); }
 
 /**
  * @brief 通用TOML配置文件解析模板函数
@@ -107,9 +108,7 @@ TEST(ConfigParse, HeroRobotTomlMatchesExpectedSemanticsAndValues) {
     expect_matrix_values(
         config.camera->camera_matrix,
         std::array<double, 9>{
-            1784.40785518, 0.0, 709.26908080,
-            0.0, 1784.39799730, 556.61031728,
-            0.0, 0.0, 1.0});
+            1784.40785518, 0.0, 709.26908080, 0.0, 1784.39799730, 556.61031728, 0.0, 0.0, 1.0});
     // ========== 相机5阶畸变系数校验 k1,k2,p1,p2,k3 ==========
     expect_matrix_values(
         config.camera->distort_coefficient,
@@ -119,10 +118,10 @@ TEST(ConfigParse, HeroRobotTomlMatchesExpectedSemanticsAndValues) {
     EXPECT_EQ(config.camera->height, 1080u);
 
     // ========== 相机采集参数profile校验 ==========
-    EXPECT_FALSE(config.camera->profile.trigger_mode);    // 不使用硬件外触发
-    EXPECT_FALSE(config.camera->profile.invert_image);    // 图像不做镜像翻转
-    EXPECT_EQ(config.camera->profile.exposure_time_us, 5000u); // 曝光5000微秒
-    EXPECT_DOUBLE_EQ(config.camera->profile.gain, 16.7);   // 模拟增益16.7倍
+    EXPECT_FALSE(config.camera->profile.trigger_mode);                     // 不使用硬件外触发
+    EXPECT_FALSE(config.camera->profile.invert_image);                     // 图像不做镜像翻转
+    EXPECT_EQ(config.camera->profile.exposure_time_us, 5000u);             // 曝光5000微秒
+    EXPECT_DOUBLE_EQ(config.camera->profile.gain, 16.7);                   // 模拟增益16.7倍
     EXPECT_EQ(config.camera->profile.rotate_angle, fcs::RotateType::None); // 图像无旋转
 
     // ========== 云台手眼外参平移向量校验 ==========
@@ -144,13 +143,13 @@ TEST(ConfigParse, HeroRobotTomlMatchesExpectedSemanticsAndValues) {
     EXPECT_DOUBLE_EQ(config.extrinsic->gimbal_yaw.gimbal_pitch.muzzle_link.yaw, -0.3);
 
     // ========== MCU电控USB与弹速参数校验 ==========
-    EXPECT_EQ(config.mcu->mcu_vendor_id, 0x0483); // STM32 USB厂商VID
-    EXPECT_FALSE(config.mcu->mcu_product_id.has_value()); // PID配置项未填写（std::optional无值）
-    EXPECT_TRUE(config.mcu->mcu_authoritative_self_color); // MCU作为己方颜色权威源
+    EXPECT_EQ(config.mcu->mcu_vendor_id, 0x0483);            // STM32 USB厂商VID
+    EXPECT_FALSE(config.mcu->mcu_product_id.has_value());    // PID配置项未填写（std::optional无值）
+    EXPECT_TRUE(config.mcu->mcu_authoritative_self_color);   // MCU作为己方颜色权威源
     EXPECT_TRUE(config.mcu->mcu_authoritative_bullet_speed); // MCU下发弹速为权威值
     EXPECT_DOUBLE_EQ(config.mcu->bullet_speed_default, 11.0); // 默认弹速11m/s
-    EXPECT_DOUBLE_EQ(config.mcu->bullet_speed_min, 10.0);    // 最小弹速下限
-    EXPECT_DOUBLE_EQ(config.mcu->bullet_speed_max, 20.0);    // 最大弹速上限
+    EXPECT_DOUBLE_EQ(config.mcu->bullet_speed_min, 10.0);     // 最小弹速下限
+    EXPECT_DOUBLE_EQ(config.mcu->bullet_speed_max, 20.0);     // 最大弹速上限
 }
 
 /**
@@ -190,19 +189,19 @@ TEST(ConfigParse, InlineHelpersAndFormattersBehaveAsExpected) {
     EXPECT_DOUBLE_EQ(tracker_ptr->outpost.model.yaw_log_k, 0.005);
 
     // ========== 图像量化降噪滤波模块完整参数校验 ==========
-    EXPECT_TRUE(vision.quanta_filter.enable_denoise_luma); // 开启亮度降噪
-    EXPECT_EQ(vision.quanta_filter.denoise_luma.kernel_size, 5); // 5x5高斯核
+    EXPECT_TRUE(vision.quanta_filter.enable_denoise_luma);         // 开启亮度降噪
+    EXPECT_EQ(vision.quanta_filter.denoise_luma.kernel_size, 5);   // 5x5高斯核
     EXPECT_DOUBLE_EQ(vision.quanta_filter.denoise_luma.sigma_x, 1.0);
     EXPECT_DOUBLE_EQ(vision.quanta_filter.denoise_luma.sigma_y, 1.0);
-    EXPECT_TRUE(vision.quanta_filter.enable_denoise_chroma); // 开启色度降噪
+    EXPECT_TRUE(vision.quanta_filter.enable_denoise_chroma);       // 开启色度降噪
     EXPECT_EQ(vision.quanta_filter.denoise_chroma.kernel_size, 3); // 3x3色度核
     EXPECT_DOUBLE_EQ(vision.quanta_filter.denoise_chroma.sigma_x, 1.0);
     EXPECT_DOUBLE_EQ(vision.quanta_filter.denoise_chroma.sigma_y, 1.0);
-    EXPECT_TRUE(vision.quanta_filter.enable_luma_quantization); // 亮度量化压缩开启
-    EXPECT_EQ(vision.quanta_filter.luma_levels, 16); // 亮度量化16阶
+    EXPECT_TRUE(vision.quanta_filter.enable_luma_quantization);    // 亮度量化压缩开启
+    EXPECT_EQ(vision.quanta_filter.luma_levels, 16);               // 亮度量化16阶
 
     // ========== 视频码率控制参数校验 ==========
-    EXPECT_FALSE(vision.quanta.enVBR); // 关闭可变码率VBR，使用CBR恒定码率
+    EXPECT_FALSE(vision.quanta.enVBR);              // 关闭可变码率VBR，使用CBR恒定码率
     EXPECT_EQ(vision.quanta.target_bitrate, 45000); // 目标码率45000 kbps
     EXPECT_EQ(vision.quanta.min_bit_rate, 0);       // 码率下限无限制
     EXPECT_EQ(vision.quanta.max_bit_rate, 50000);   // 码率上限50000 kbps
@@ -244,15 +243,15 @@ TEST(ConfigParse, MutableAccessorsAndTrajectoryHelpersUseWrappedConfigFields) {
     // ========== 弹道求解器工厂测试：理想无空气阻力模型 ==========
     fcs::core::trajectory::TrajectoryConfig ideal{};
     ideal.model->type    = fcs::core::trajectory::model::ModelType::Ideal; // 理想质点模型
-    ideal.model->gravity = 9.81;                                         // 重力加速度9.81
+    ideal.model->gravity = 9.81;                                           // 重力加速度9.81
     // 工厂函数创建对应弹道求解器实例
-    auto ideal_solver    = fcs::core::trajectory::solver::create_solver(ideal);
+    auto ideal_solver = fcs::core::trajectory::solver::create_solver(ideal);
     ASSERT_NE(ideal_solver, nullptr); // 求解器指针不能为空，工厂创建成功
 
     // ========== 弹道求解器工厂测试：线性空气阻力模型 ==========
     fcs::core::trajectory::TrajectoryConfig linear{};
     linear.model->type       = fcs::core::trajectory::model::ModelType::LinearDrag; // 线性阻力模型
-    linear.model->gravity    = 9.79;    // 本地重力修正值
+    linear.model->gravity    = 9.79;   // 本地重力修正值
     linear.model->resistance = 0.001;  // 空气阻力系数
     auto linear_solver       = fcs::core::trajectory::solver::create_solver(linear);
     ASSERT_NE(linear_solver, nullptr); // 阻力模型求解器正常构造
@@ -276,28 +275,39 @@ TEST(ConfigParse, SetupL1CoversUsbMcuWrapperBranchesBeforeStubCameraFails) {
 
     // 分支1：原始配置 mcu_product_id 无值(std::optional空)
     {
-        // 构造全局世界资源容器World
-        talos::World world;
-        // World绑定调度器实例
-        talos::Scheduler scheduler(world);
-        // 执行L1底层硬件初始化：无硬件仿真环境，预期返回错误
-        auto result = fcs::runtime::setup_l1(world, scheduler, false, false, &hardware);
+        // 构造调度器（内部持有World），并取其World引用
+        talos::Scheduler scheduler;
+        auto& world = scheduler.world();
+        // 构造 Direct 分体硬件后端配置：camera_only=false → 走 MCU 初始化分支
+        // 注：局部变量 hardware 会隐藏 hardware:: 命名空间，故用完整限定名 fcs::hardware::
+        fcs::hardware::HardwareBackendConfig cfg = fcs::hardware::DirectConfig{
+            .camera_only = false,
+            .transport   = fcs::hardware::Transport::Direct,
+            .hardware    = hardware,
+        };
+        // 执行L1底层硬件初始化：无真实USB设备，预期返回错误
+        auto result = fcs::runtime::setup_l1(world, scheduler, cfg);
         // 强断言初始化一定失败
         ASSERT_FALSE(result.has_value());
-        // 错误信息必须包含MCU连接失败关键字，证明进入MCU连接失败分支
-        EXPECT_NE(result.error().find("failed connecting to mcu"), std::string::npos);
+        // 错误信息必须包含USB MCU连接失败关键字，证明进入MCU连接失败分支
+        EXPECT_NE(result.error().find("connect usb mcu"), std::string::npos);
     }
 
     // 分支2：手动给mcu_product_id赋值，覆盖PID存在的USB匹配分支
     hardware.mcu->mcu_product_id = 0x1234;
     {
-        talos::World world;
-        talos::Scheduler scheduler(world);
-        auto result = fcs::runtime::setup_l1(world, scheduler, false, false, &hardware);
+        talos::Scheduler scheduler;
+        auto& world                              = scheduler.world();
+        fcs::hardware::HardwareBackendConfig cfg = fcs::hardware::DirectConfig{
+            .camera_only = false,
+            .transport   = fcs::hardware::Transport::Direct,
+            .hardware    = hardware,
+        };
+        auto result = fcs::runtime::setup_l1(world, scheduler, cfg);
         ASSERT_FALSE(result.has_value());
         // 赋值PID后依旧报MCU连接失败，覆盖USB设备匹配全部分支
-        EXPECT_NE(result.error().find("failed connecting to mcu"), std::string::npos);
+        EXPECT_NE(result.error().find("connect usb mcu"), std::string::npos);
     }
 }
 
-} // namespace 匿名命名空间结束
+} // namespace
