@@ -1,4 +1,23 @@
+# ===========================================================================
+# 覆盖上级 talos-master/.clangd 的 CompilationDatabase 设置
+# ---------------------------------------------------------------------------
+# 上级 talos-master/.clangd 将编译数据库强制指向 talos 主项目的 build/，
+# 本项目尚未构建（无 build/compile_commands.json），clangd 无法从数据库
+# 获得 -I 路径。这里显式列出全部头文件搜索路径（与本项目 CMakeLists.txt
+# 的 target_include_directories 完全一致），保证未构建时也不飘红。
+#
+# 依赖头文件来源：
+#   at_gimbal 真实源码：crates/hardware/at_gimbal/src
+#   magic_enum         ：3dparty/magic_enum（仓库自带单头文件）
+#   fmt / spdlog       ：主项目构建缓存 build/_deps（构建过主项目即存在）
+#   libusb             ：主项目构建缓存 build/_deps/libusb-src（<libusb/libusb.h>）
+# ===========================================================================
 CompileFlags:
   CompilationDatabase: build
   Add:
-    - -std=gnu++2b
+    - -std=gnu++2b    # 显式锁定 C++23（GNU 扩展模式），与项目实际编译标准一致
+    - -I/home/pldx/Desktop/talos-master/crates/hardware/at_gimbal/src
+    - -I/home/pldx/Desktop/talos-master/3dparty/magic_enum
+    - -I/home/pldx/Desktop/talos-master/build/_deps/fmt-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/spdlog-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/libusb-src
