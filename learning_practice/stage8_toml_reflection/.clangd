@@ -1,4 +1,19 @@
+# ===========================================================================
+# 覆盖上级 talos-master/.clangd 的 CompilationDatabase 设置
+# ---------------------------------------------------------------------------
+# 本项目尚未构建（无 build/compile_commands.json），clangd 无法从数据库
+# 获得 -I 路径。这里显式列出头文件搜索路径（与 CMakeLists.txt 的
+# target_include_directories 一致），保证未构建时也不飘红。
+#   toml 真实源码   ：crates/toml/src
+#   magic_enum      ：3dparty/magic_enum
+#   toml++          ：主项目构建缓存 build/_deps/tomlplusplus-src/include
+#   boost.pfr       ：3dparty/boost-pfr/include（反射解析依赖）
+# ===========================================================================
 CompileFlags:
   CompilationDatabase: build
   Add:
-    - -std=gnu++2b
+    - -std=gnu++2b    # 显式锁定 C++23（GNU 扩展模式），与项目实际编译标准一致
+    - -I/home/pldx/Desktop/talos-master/crates/toml/src
+    - -I/home/pldx/Desktop/talos-master/3dparty/magic_enum
+    - -I/home/pldx/Desktop/talos-master/build/_deps/tomlplusplus-src/include
+    - -I/home/pldx/Desktop/talos-master/3dparty/boost-pfr/include

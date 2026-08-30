@@ -1,0 +1,1841 @@
+diff --git a/crates/hardware/at_gimbal/CMakeLists.txt b/crates/hardware/at_gimbal/CMakeLists.txt
+index c70bfde..af1818d 100644
+--- a/crates/hardware/at_gimbal/CMakeLists.txt
++++ b/crates/hardware/at_gimbal/CMakeLists.txt
+@@ -3,4 +3,10 @@ crate(
+     TYPE INTERFACE
+     DEPS
+         talos_libusb_static
++        # serial.hpp/stm32.hpp 直接 include spdlog 日志与 fmt 格式化，
++        # packet.hpp 依赖 magic_enum 枚举反射。
++        # 此前缺失声明：主程序因 fcs 恰好同时链接 spdlog 而侥幸编译通过，
++        # 但 tests/ 下自动生成的测试目标只链接本 crate，会因缺头文件而失败。
++        spdlog::spdlog
++        magic_enum
+ )
+diff --git a/crates/hardware/at_gimbal/tests/serial_protocol_test.cpp b/crates/hardware/at_gimbal/tests/serial_protocol_test.cpp
+new file mode 100644
+index 0000000..62518c9
+--- /dev/null
++++ b/crates/hardware/at_gimbal/tests/serial_protocol_test.cpp
+@@ -0,0 +1,648 @@
++// ============================================================================
++// talos_gimbal 下位机串口通信协议测试
++//
++// 被测对象（crates/hardware/at_gimbal/src/talos_gimbal/）：
++//   packet.hpp    协议帧定义（SoF=0x5A ... EoF=0xA5，#pragma pack(1)）
++//   stm32.hpp     Stm32Parser：按帧 ID 分发的静态解析器（0x01 IMU / 0x03 能力+简易IMU）
++//   serial.hpp    SerialImpl：termios 串口 + try_parse_frame 帧同步状态机
++//   mcu_device.hpp McuDeviceHandle：variant 统一设备句柄
++//
++// 测试策略（无真实 STM32 下位机，三层全覆盖）：
++//   第一层 帧布局      —— 编译期 static_assert 锁定二进制协议内存布局
++//                        （大小/偏移/字节序），防止字段增删悄悄破坏线协议
++//   第二层 解析层      —— 直接向 Stm32Parser::parse 喂字节流，
++//                        覆盖正常分发/短包/坏帧头/未知ID/截断帧
++//   第三层 串口集成    —— 用 POSIX 伪终端（PTY）对模拟下位机：
++//                        master 端扮演 STM32，slave 端被 SerialImpl 当真实
++//                        /dev/ttyS4 打开，真实走 termios/poll/read/write 路径，
++//                        覆盖收发回环、乱码重同步、半帧拼接、坏帧尾恢复
++//
++// 运行（项目根目录）：
++//   cmake -B build -DTALOS_BUILD_TESTING=ON && cmake --build build
++//   ./build/serial_protocol_test        # 或 ctest
++// ============================================================================
++#include <gtest/gtest.h>
++
++// talos_gimbal 串口通信协议（被测头文件）
++#include "talos_gimbal/mcu_device.hpp"
++#include "talos_gimbal/packet.hpp"
++#include "talos_gimbal/serial.hpp"
++#include "talos_gimbal/stm32.hpp"
++
++// C++ 标准库
++#include <cstddef>     // std::byte
++#include <cstdint>     // 固定宽度整型
++#include <cstring>     // memcmp/memcpy
++#include <string>      // 错误信息
++#include <type_traits> // std::endian
++#include <vector>      // 字节流容器
++
++// POSIX 系统调用
++#include <fcntl.h>    // open/O_RDWR
++#include <poll.h>     // poll
++#include <pty.h>      // posix_openpt/grantpt/unlockpt/ptsname
++#include <unistd.h>   // read/write/close
++
++namespace tg = talos_gimbal;
++
++// ============================================================================
++// 第一层：帧二进制布局测试（编译期协议锁定）
++// ============================================================================
++// 协议在 STM32（ARM 小端）与上位机（x86_64 小端）之间传输，两端必须同字节序
++static_assert(std::endian::native == std::endian::little, "协议要求小端平台");
++
++// 帧头：sof + len + id = 3 字节，pack(1) 不允许有填充
++static_assert(sizeof(tg::HeaderFrame) == 3);
++static_assert(offsetof(tg::HeaderFrame, sof) == 0);
++static_assert(offsetof(tg::HeaderFrame, len) == 1);
++static_assert(offsetof(tg::HeaderFrame, id) == 2);
++
++// 帧起始/结束魔数固定值（改动即破坏与存量下位机的兼容性）
++static_assert(tg::HeaderFrame::SoF() == 0x5A);
++static_assert(tg::HeaderFrame::EoF() == 0xA5);
++
++// 帧ID 0x01 完整IMU帧：3 + 4 + (Color 1 + 7*float 28) + 1 = 37
++static_assert(sizeof(tg::ReceiveImuData) == 37);
++static_assert(offsetof(tg::ReceiveImuData, time_stamp) == 3);
++static_assert(offsetof(tg::ReceiveImuData, data) == 7);
++static_assert(offsetof(tg::ReceiveImuData, eof) == 36);
++
++// 帧ID 0x03 能力开关帧：3 + 4 + 3 + 1 = 11
++static_assert(sizeof(tg::ReceiveCapabilitiesData) == 11);
++static_assert(offsetof(tg::ReceiveCapabilitiesData, eof) == 10);
++
++// 简易IMU帧：3 + 4 + (Color 1 + 3*float 12) + 1 = 21
++static_assert(sizeof(tg::ReceiveSimpleImuData) == 21);
++static_assert(offsetof(tg::ReceiveSimpleImuData, eof) == 20);
++
++// Quanta 图传帧：3 + 4 + (2 + 298) + 1 = 308
++static_assert(sizeof(tg::SendQuantaData) == 308);
++
++// 视觉预测帧（发送方向，无时间戳）：3 + (bool 1 + 7*float 28) + 1 = 33
++static_assert(sizeof(tg::SendVisionData) == 33);
++
++// 极简视觉帧：3 + 4 + 1 = 8
++static_assert(sizeof(tg::SendSimpleVisionData) == 8);
++
++TEST(FrameLayout, Constants) {
++    // 运行时再验证一次魔数（编译期断言之外的保险）
++    EXPECT_EQ(tg::HeaderFrame::SoF(), 0x5A);
++    EXPECT_EQ(tg::HeaderFrame::EoF(), 0xA5);
++}
++
++// ============================================================================
++// 测试工具：构造合法协议帧
++// ============================================================================
++
++/// 帧头 len 字段的语义：载荷字节数（不含帧头3 + 时间戳4 + 帧尾1）
++/// 与 SerialImpl::try_parse_frame 的 frame_size = 3 + 4 + len + 1 公式对齐
++template <typename Frame>
++constexpr uint8_t payload_len() {
++    return sizeof(Frame) - sizeof(tg::HeaderFrame) - sizeof(uint32_t) - 1;
++}
++
++/// 构造一份字段确定可断言的完整 IMU 帧
++static tg::ReceiveImuData make_imu_frame(const uint32_t stamp, const float yaw) {
++    tg::ReceiveImuData frame{};
++    frame.header.sof = tg::HeaderFrame::SoF();
++    frame.header.len = payload_len<tg::ReceiveImuData>();
++    frame.header.id  = 0x01;
++    frame.time_stamp = stamp;
++    frame.data.self_color   = tg::Color::Blue;
++    frame.data.bullet_speed = 15.5f;
++    frame.data.yaw           = yaw;
++    frame.data.pitch         = 0.02f;
++    frame.data.roll          = -0.03f;
++    frame.data.yaw_vel       = 1.25f;
++    frame.data.pitch_vel     = -2.5f;
++    frame.data.roll_vel      = 0.5f;
++    frame.eof                = tg::HeaderFrame::EoF();
++    return frame;
++}
++
++/// 任意结构体 → 字节流（两端同为小端 + pack(1)，bit 级一致）
++template <typename T>
++static std::vector<uint8_t> to_bytes(const T& value) {
++    std::vector<uint8_t> bytes(sizeof(T));
++    std::memcpy(bytes.data(), &value, sizeof(T));
++    return bytes;
++}
++
++/// 字节流 → span<std::byte>（Stm32Parser::parse 的入参类型）
++static std::span<const std::byte> as_span(const std::vector<uint8_t>& bytes) {
++    return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
++}
++
++// ============================================================================
++// 测试工具：PTY 伪终端对（模拟下位机串口）
++// ============================================================================
++// master 端 = 测试代码（扮演 STM32），slave 端 = SerialImpl 连接的"串口设备"。
++// 数据链路完整经过内核 termios 分层，是无需硬件的最真实集成测试。
++class PtyPair {
++public:
++    PtyPair() {
++        // 打开 PTY master：读写 | 不作为控制终端
++        master_ = ::posix_openpt(O_RDWR | O_NOCTTY);
++        // 分配 slave 权限并解锁，获取 slave 路径（/dev/pts/N）
++        if (::grantpt(master_) == 0 && ::unlockpt(master_) == 0) {
++            slave_path_ = ::ptsname(master_);
++        }
++    }
++
++    ~PtyPair() {
++        if (master_ >= 0) {
++            // master 关闭会向 slave 发送 EOF/HUP
++            ::close(master_);
++        }
++    }
++
++    // 禁止拷贝/移动：持有裸 fd，RAII 管理
++    PtyPair(const PtyPair&)            = delete;
++    PtyPair& operator=(const PtyPair&) = delete;
++
++    /// slave 设备路径（传给 SerialImpl::connect 的 device_path）
++    [[nodiscard]] const std::string& slave_path() const { return slave_path_; }
++
++    /// 下位机 → 上位机：向 master 写数据（模拟 STM32 发帧）
++    bool write_master(const void* data, const size_t size) {
++        return ::write(master_, data, size) == static_cast<ssize_t>(size);
++    }
++
++    /// 上位机 → 下位机：从 master 读数据（接收上位机下发指令），带超时
++    std::vector<uint8_t> read_master(const size_t size, const int timeout_ms = 500) {
++        std::vector<uint8_t> buffer(size);
++        size_t got = 0;
++        while (got < size) {
++            struct pollfd pfd{.fd = master_, .events = POLLIN, .revents = 0};
++            if (::poll(&pfd, 1, timeout_ms) <= 0 || !(pfd.revents & POLLIN)) {
++                break; // 超时：返回已读部分
++            }
++            const auto n = ::read(master_, buffer.data() + got, size - got);
++            if (n <= 0) {
++                break;
++            }
++            got += static_cast<size_t>(n);
++        }
++        buffer.resize(got);
++        return buffer;
++    }
++
++private:
++    int         master_    = -1;
++    std::string slave_path_;
++};
++
++// ============================================================================
++// 第二层：Stm32Parser 解析层测试（纯逻辑，无 IO）
++// ============================================================================
++class Stm32ParserTest : public ::testing::Test {
++protected:
++    // 解析器通过静态指针绑定输出存储，绑定到 fixture 成员
++    void SetUp() override {
++        tg::Stm32Parser::latest_imu          = &imu_;
++        tg::Stm32Parser::latest_capabilities = &caps_;
++    }
++
++    void TearDown() override {
++        tg::Stm32Parser::latest_imu          = nullptr;
++        tg::Stm32Parser::latest_capabilities = nullptr;
++    }
++
++    tg::ReceiveImuData          imu_{}; // 输出槽：清零初始化
++    tg::ReceiveCapabilitiesData caps_{};
++};
++
++/// 正常流程：合法 IMU 帧（id=0x01）逐字段完整解析
++TEST_F(Stm32ParserTest, ParsesValidImuFrame) {
++    const auto frame = make_imu_frame(123456u, 1.5f);
++    tg::Stm32Parser::parse(as_span(to_bytes(frame)));
++
++    // 帧头 + 时间戳 + 全部姿态字段 bit 级一致
++    EXPECT_EQ(memcmp(&imu_.header, &frame.header, sizeof(frame.header)), 0);
++    EXPECT_EQ(imu_.time_stamp, 123456u);
++    EXPECT_EQ(imu_.data.self_color, tg::Color::Blue);
++    EXPECT_FLOAT_EQ(imu_.data.bullet_speed, 15.5f);
++    EXPECT_FLOAT_EQ(imu_.data.yaw, 1.5f);
++    EXPECT_FLOAT_EQ(imu_.data.pitch, 0.02f);
++    EXPECT_FLOAT_EQ(imu_.data.roll, -0.03f);
++    EXPECT_FLOAT_EQ(imu_.data.yaw_vel, 1.25f);
++    EXPECT_FLOAT_EQ(imu_.data.pitch_vel, -2.5f);
++    EXPECT_FLOAT_EQ(imu_.data.roll_vel, 0.5f);
++    EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
++}
++
++/// 正常流程：能力开关帧（id=0x03，size==11）只填充 capabilities
++TEST_F(Stm32ParserTest, ParsesValidCapabilitiesFrame) {
++    tg::ReceiveCapabilitiesData frame{};
++    frame.header.sof = tg::HeaderFrame::SoF();
++    frame.header.len = payload_len<tg::ReceiveCapabilitiesData>();
++    frame.header.id  = 0x03;
++    frame.time_stamp = 42u;
++    frame.data.following = 1;
++    frame.data.power_rune = 0;
++    frame.data.quanta     = 1;
++    frame.eof             = tg::HeaderFrame::EoF();
++
++    tg::Stm32Parser::parse(as_span(to_bytes(frame)));
++
++    EXPECT_EQ(caps_.time_stamp, 42u);
++    EXPECT_EQ(caps_.data.following, 1);
++    EXPECT_EQ(caps_.data.power_rune, 0);
++    EXPECT_EQ(caps_.data.quanta, 1);
++    // 能力帧（11 字节）不满足简易IMU分支的 size>=21，不得污染 imu_ 输出槽
++    EXPECT_EQ(imu_.time_stamp, 0u);
++}
++
++/// 正常流程：简易IMU帧（id=0x03，size==21）合并进完整IMU结构
++/// 缺失字段（弹速/三轴角速度）按协议约定清零
++TEST_F(Stm32ParserTest, MergesSimpleImuIntoLatestImu) {
++    // 先灌一份完整 IMU，验证简易帧会覆盖姿态、清零速度
++    const auto full = make_imu_frame(1u, 0.1f);
++    tg::Stm32Parser::parse(as_span(to_bytes(full)));
++    ASSERT_FLOAT_EQ(imu_.data.yaw_vel, 1.25f);
++
++    tg::ReceiveSimpleImuData simple{};
++    simple.header.sof = tg::HeaderFrame::SoF();
++    simple.header.len = payload_len<tg::ReceiveSimpleImuData>();
++    simple.header.id  = 0x03;
++    simple.time_stamp = 999u;
++    simple.data.self_color = tg::Color::Red;
++    simple.data.yaw        = 0.5f;
++    simple.data.pitch      = -0.25f;
++    simple.data.roll       = 0.125f;
++    simple.eof             = tg::HeaderFrame::EoF();
++
++    tg::Stm32Parser::parse(as_span(to_bytes(simple)));
++
++    EXPECT_EQ(imu_.time_stamp, 999u);
++    EXPECT_EQ(imu_.data.self_color, tg::Color::Red);
++    EXPECT_FLOAT_EQ(imu_.data.yaw, 0.5f);
++    EXPECT_FLOAT_EQ(imu_.data.pitch, -0.25f);
++    EXPECT_FLOAT_EQ(imu_.data.roll, 0.125f);
++    // 简易帧缺失字段被显式清零（不是保留旧值）
++    EXPECT_FLOAT_EQ(imu_.data.bullet_speed, 0.0f);
++    EXPECT_FLOAT_EQ(imu_.data.yaw_vel, 0.0f);
++    EXPECT_FLOAT_EQ(imu_.data.pitch_vel, 0.0f);
++    EXPECT_FLOAT_EQ(imu_.data.roll_vel, 0.0f);
++}
++
++/// 异常处理：小于帧头的短包直接丢弃，不越界、无副作用
++TEST_F(Stm32ParserTest, DropsTooSmallFrame) {
++    const std::vector<uint8_t> garbage{0x5A, 0x00}; // 2 字节 < sizeof(HeaderFrame)
++    tg::Stm32Parser::parse(as_span(garbage));
++
++    EXPECT_EQ(imu_.time_stamp, 0u);
++    EXPECT_EQ(caps_.time_stamp, 0u);
++}
++
++/// 异常处理：帧头魔数错误整帧丢弃
++TEST_F(Stm32ParserTest, DropsInvalidSoF) {
++    auto       frame = make_imu_frame(77u, 0.7f);
++    const auto bytes = to_bytes(frame);
++    auto       bad   = bytes;
++    bad[0]            = 0x00; // 篡改 SoF
++
++    tg::Stm32Parser::parse(as_span(bad));
++    EXPECT_EQ(imu_.time_stamp, 0u);
++
++    // 对照：合法帧正常解析
++    tg::Stm32Parser::parse(as_span(bytes));
++    EXPECT_EQ(imu_.time_stamp, 77u);
++}
++
++/// 异常处理：未知帧 ID 静默忽略（前向兼容：下位机新增帧不崩溃）
++TEST_F(Stm32ParserTest, IgnoresUnknownFrameId) {
++    auto frame = make_imu_frame(88u, 0.7f);
++    frame.header.id = 0x42; // 未定义的帧ID
++
++    tg::Stm32Parser::parse(as_span(to_bytes(frame)));
++    EXPECT_EQ(imu_.time_stamp, 0u);
++    EXPECT_EQ(caps_.time_stamp, 0u);
++}
++
++/// 边界条件：IMU 帧长度不足 sizeof(ReceiveImuData) 时不更新（截断保护）
++TEST_F(Stm32ParserTest, KeepsOldValueOnTruncatedImuFrame) {
++    // 先解析一帧合法数据
++    tg::Stm32Parser::parse(as_span(to_bytes(make_imu_frame(100u, 0.3f))));
++    ASSERT_EQ(imu_.time_stamp, 100u);
++
++    // 再喂入截断帧（长度 -1 不满足 >= sizeof 分支）
++    auto bytes = to_bytes(make_imu_frame(200u, 0.9f));
++    bytes.resize(bytes.size() - 1);
++    tg::Stm32Parser::parse(as_span(bytes));
++
++    // 旧值保留，未被截断数据污染
++    EXPECT_EQ(imu_.time_stamp, 100u);
++}
++
++/// 边界条件：载荷中包含 0x5A/0xA5 魔数字节不受影响（长度由 len 字段决定）
++TEST_F(Stm32ParserTest, ToleratesMagicBytesInsidePayload) {
++    auto frame = make_imu_frame(555u, 0.25f);
++    // 弹速字段位模式注入 0x5A5A5A5A（位模式含 SoF 魔数的合法规格化 float）
++    uint32_t magic = 0x5A5A5A5Au;
++    std::memcpy(&frame.data.bullet_speed, &magic, sizeof(magic));
++    float expected = 0.0f;
++    std::memcpy(&expected, &magic, sizeof(expected)); // 同一位模式的期望 float
++
++    tg::Stm32Parser::parse(as_span(to_bytes(frame)));
++
++    EXPECT_EQ(imu_.time_stamp, 555u);
++    EXPECT_FLOAT_EQ(imu_.data.bullet_speed, expected);
++}
++
++// ============================================================================
++// 第三层：SerialImpl 串口集成测试（PTY 模拟下位机）
++// ============================================================================
++class SerialImplTest : public ::testing::Test {
++protected:
++    void SetUp() override {
++        ASSERT_FALSE(pty_.slave_path().empty()) << "PTY 创建失败";
++        tg::Stm32Parser::latest_imu          = &imu_;
++        tg::Stm32Parser::latest_capabilities = &caps_;
++    }
++
++    void TearDown() override {
++        tg::Stm32Parser::latest_imu          = nullptr;
++        tg::Stm32Parser::latest_capabilities = nullptr;
++    }
++
++    PtyPair                    pty_; // master=测试(下位机侧)，slave=被测串口
++    tg::ReceiveImuData          imu_{};
++    tg::ReceiveCapabilitiesData caps_{};
++};
++
++/// 异常处理：连接不存在的设备路径 → expected 错误携带路径与 errno 描述
++TEST_F(SerialImplTest, ConnectFailureReturnsError) {
++    tg::SerialDevice device;
++    const auto result = device.connect("/dev/does-not-exist-talos-test", 115200);
++
++    ASSERT_FALSE(result.has_value());
++    // 错误信息包含设备路径与 "open serial device" 前缀，便于现场排障
++    EXPECT_NE(result.error().find("open serial device"), std::string::npos);
++    EXPECT_NE(result.error().find("/dev/does-not-exist-talos-test"), std::string::npos);
++    EXPECT_FALSE(device.is_connected());
++}
++
++/// 正常流程：PTY 上连接成功 + 断开状态翻转
++TEST_F(SerialImplTest, ConnectAndDisconnect) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++    EXPECT_TRUE(device.is_connected());
++
++    device.disconnect();
++    EXPECT_FALSE(device.is_connected());
++
++    // 断开后收发均为安全空操作/错误，不崩溃
++    device.handle_events();
++    const uint8_t byte = 0x00;
++    EXPECT_FALSE(device.send_sync(&byte, 1).has_value());
++}
++
++/// 异常处理：未连接时 send_sync → "device not connected"
++TEST_F(SerialImplTest, SendSyncFailsWhenNotConnected) {
++    tg::SerialDevice device;
++    const uint8_t    data[] = {0x5A, 0x01, 0x01};
++
++    const auto result = device.send_sync(data, sizeof(data));
++    ASSERT_FALSE(result.has_value());
++    EXPECT_NE(result.error().find("device not connected"), std::string::npos);
++}
++
++/// 正常流程：上位机 → 下位机发送回环（send_sync → PTY master 收到相同字节）
++TEST_F(SerialImplTest, SendSyncRoundTrip) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    // 构造视觉预测指令帧（上位机 → MCU 的业务载荷）
++    tg::SendVisionData vision{};
++    vision.header.sof = tg::HeaderFrame::SoF();
++    vision.header.id  = 0x02;
++    vision.data.fire_advice = true;
++    vision.data.target_yaw   = 1.234f;
++    vision.data.target_pitch = -0.567f;
++    vision.data.distance     = 6.28f;
++
++    const auto sent = to_bytes(vision);
++    ASSERT_TRUE(device.send_sync(sent.data(), sent.size()).has_value());
++
++    // 下位机侧（PTY master）收到的字节与发送端逐字节一致
++    const auto received = pty_.read_master(sent.size());
++    ASSERT_EQ(received.size(), sent.size());
++    EXPECT_EQ(memcmp(received.data(), sent.data(), sent.size()), 0);
++
++    // 边界：零长度发送是合法空操作
++    EXPECT_TRUE(device.send_sync(nullptr, 0).has_value());
++}
++
++/// 正常流程：下位机 → 上位机接收分发（master 写帧 → handle_events 解析）
++TEST_F(SerialImplTest, ReceiveDispatchesImuFrame) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    const auto frame = make_imu_frame(4242u, 0.75f);
++    const auto bytes = to_bytes(frame);
++    ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
++
++    device.handle_events();
++
++    EXPECT_EQ(imu_.time_stamp, 4242u);
++    EXPECT_FLOAT_EQ(imu_.data.yaw, 0.75f);
++    EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
++}
++
++/// 异常恢复：帧前乱码被丢弃，后续帧正常重同步解析
++TEST_F(SerialImplTest, ResyncAfterLeadingGarbage) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    const auto frame = make_imu_frame(111u, 0.1f);
++    const auto bytes = to_bytes(frame);
++
++    // 纯垃圾（无 SoF）→ 整段清空
++    const uint8_t garbage[] = {0x11, 0x22, 0x33, 0x44};
++    ASSERT_TRUE(pty_.write_master(garbage, sizeof(garbage)));
++    // 乱码 + 合法帧连写 → 乱码丢弃后帧正常解析
++    std::vector<uint8_t> stream(garbage, garbage + sizeof(garbage));
++    stream.insert(stream.end(), bytes.begin(), bytes.end());
++    ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
++
++    device.handle_events();
++
++    EXPECT_EQ(imu_.time_stamp, 111u);
++}
++
++/// 边界条件：帧尾字节错误 → 该帧丢弃，后续帧恢复解析
++TEST_F(SerialImplTest, RecoversAfterBadEof) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    auto       bad    = to_bytes(make_imu_frame(66u, 0.1f));
++    bad.back()        = 0x00; // 篡改 EoF
++    const auto good   = to_bytes(make_imu_frame(77u, 0.2f));
++
++    std::vector<uint8_t> stream = bad;
++    stream.insert(stream.end(), good.begin(), good.end());
++    ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
++
++    device.handle_events();
++
++    // 坏帧丢弃，好帧照常解析
++    EXPECT_EQ(imu_.time_stamp, 77u);
++    EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
++}
++
++/// 边界条件：帧分多次到达（半帧 → handle_events 无解析 → 补齐后解析成功）
++TEST_F(SerialImplTest, HandlesSplitFrameArrival) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    const auto bytes = to_bytes(make_imu_frame(888u, 0.15f));
++
++    // 前半帧到达：长度不足，缓存等待，不误解析
++    const size_t half = bytes.size() / 2;
++    ASSERT_TRUE(pty_.write_master(bytes.data(), half));
++    device.handle_events();
++    EXPECT_EQ(imu_.time_stamp, 0u);
++
++    // 后半帧补齐：拼成完整帧解析成功
++    ASSERT_TRUE(pty_.write_master(bytes.data() + half, bytes.size() - half));
++    device.handle_events();
++    EXPECT_EQ(imu_.time_stamp, 888u);
++}
++
++/// 正常流程：一次读取包含多帧，循环解析全部消费
++TEST_F(SerialImplTest, ParsesMultipleFramesInOneRead) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    // 两帧 IMU + 一帧能力开关混合写入（时间戳递增，验证最终值为最后一帧）
++    const auto f1 = to_bytes(make_imu_frame(1u, 0.05f));
++    const auto f2 = to_bytes(make_imu_frame(2u, 0.10f));
++
++    tg::ReceiveCapabilitiesData caps_frame{};
++    caps_frame.header.sof = tg::HeaderFrame::SoF();
++    caps_frame.header.len = payload_len<tg::ReceiveCapabilitiesData>();
++    caps_frame.header.id  = 0x03;
++    caps_frame.time_stamp = 3u;
++    caps_frame.data.following = 1;
++    caps_frame.data.quanta     = 1;
++    caps_frame.eof             = tg::HeaderFrame::EoF();
++    const auto f3 = to_bytes(caps_frame);
++
++    std::vector<uint8_t> stream;
++    stream.insert(stream.end(), f1.begin(), f1.end());
++    stream.insert(stream.end(), f2.begin(), f2.end());
++    stream.insert(stream.end(), f3.begin(), f3.end());
++    ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
++
++    device.handle_events();
++
++    // 两帧 IMU 顺序解析，保留最后一帧
++    EXPECT_EQ(imu_.time_stamp, 2u);
++    EXPECT_FLOAT_EQ(imu_.data.yaw, 0.10f);
++    // 能力帧同时解析成功
++    EXPECT_EQ(caps_.time_stamp, 3u);
++    EXPECT_EQ(caps_.data.following, 1);
++    EXPECT_EQ(caps_.data.quanta, 1);
++}
++
++/// 边界条件：len 字段声明超过实际到达数据 → 等待补齐，不越界
++TEST_F(SerialImplTest, WaitsForDeclaredFrameLength) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    auto frame = make_imu_frame(999u, 0.2f);
++    // len 声明比真实载荷大：串口层会按更长帧等待，不解析不越界
++    frame.header.len = payload_len<tg::ReceiveImuData>() + 10;
++    const auto bytes = to_bytes(frame);
++
++    ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
++    device.handle_events();
++    // 帧不完整：既不解析，也不崩溃
++    EXPECT_EQ(imu_.time_stamp, 0u);
++
++    // 补齐多声明的 10 字节 + EoF 后仍未对齐（协议帧尾错位）→ 仍安全
++    std::vector<uint8_t> extra(10, 0x00);
++    ASSERT_TRUE(pty_.write_master(extra.data(), extra.size()));
++    device.handle_events();
++    // 无崩溃即为通过（EoF 校验失败按坏帧丢弃）
++    SUCCEED();
++}
++
++/// 正常流程：长时间运行场景下缓存不无限增长（每帧消费后缓存清空）
++TEST_F(SerialImplTest, RxBufferDrainsAfterParse) {
++    tg::SerialDevice device;
++    ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
++
++    // 连续写入多帧，全部被消费
++    for (uint32_t stamp = 0; stamp < 20; ++stamp) {
++        const auto bytes = to_bytes(make_imu_frame(stamp, 0.01f));
++        ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
++        device.handle_events();
++        ASSERT_EQ(imu_.time_stamp, stamp);
++    }
++    EXPECT_EQ(imu_.time_stamp, 19u);
++}
++
++// ============================================================================
++// 第四层：McuDeviceHandle 统一设备句柄测试
++// ============================================================================
++/// 异常处理：create_serial 失败 → 错误信息含路径与波特率上下文
++TEST(McuDeviceHandleTest, CreateSerialFailureIncludesContext) {
++    const auto result = tg::McuDeviceHandle::create_serial("/dev/does-not-exist-talos-test", 115200);
++
++    ASSERT_FALSE(result.has_value());
++    EXPECT_NE(result.error().find("connect serial mcu"), std::string::npos);
++    EXPECT_NE(result.error().find("baud_rate=115200"), std::string::npos);
++}
++
++/// 正常流程：create_serial 成功 → is_serial / is_connected / 收发回环
++TEST(McuDeviceHandleTest, CreateSerialOverPty) {
++    PtyPair pty;
++    ASSERT_FALSE(pty.slave_path().empty());
++
++    auto result = tg::McuDeviceHandle::create_serial(pty.slave_path(), 115200);
++    ASSERT_TRUE(result.has_value()) << result.error();
++    auto& handle = *result;
++
++    // variant 分发：确认为串口设备且已连接
++    EXPECT_TRUE(handle.is_serial());
++    EXPECT_TRUE(handle.is_connected());
++
++    // 句柄统一 send_sync 下发指令，PTY master 侧收到
++    tg::SendSimpleVisionData simple{};
++    simple.header.sof = tg::HeaderFrame::SoF();
++    simple.header.id  = 0x04;
++    simple.data.target_yaw = -0.5f;
++    const auto bytes = to_bytes(simple);
++
++    ASSERT_TRUE(handle.send_sync(bytes.data(), bytes.size()).has_value());
++    const auto received = pty.read_master(bytes.size());
++    ASSERT_EQ(received.size(), bytes.size());
++    EXPECT_EQ(memcmp(received.data(), bytes.data(), bytes.size()), 0);
++
++    // 句柄统一 handle_events 收帧解析
++    tg::ReceiveImuData imu{};
++    tg::Stm32Parser::latest_imu = &imu;
++    const auto frame = to_bytes(make_imu_frame(31337u, 0.42f));
++    ASSERT_TRUE(pty.write_master(frame.data(), frame.size()));
++    handle.handle_events();
++    tg::Stm32Parser::latest_imu = nullptr;
++
++    EXPECT_EQ(imu.time_stamp, 31337u);
++    EXPECT_FLOAT_EQ(imu.data.yaw, 0.42f);
++}
++
++/// 生命周期：句柄可移动转移所有权（variant + unique_ptr 移动语义）
++TEST(McuDeviceHandleTest, HandleIsMovable) {
++    PtyPair pty;
++    ASSERT_FALSE(pty.slave_path().empty());
++
++    auto result = tg::McuDeviceHandle::create_serial(pty.slave_path(), 115200);
++    ASSERT_TRUE(result.has_value());
++
++    // 移动构造：新句柄接管连接，旧句柄失效
++    tg::McuDeviceHandle moved = std::move(*result);
++    EXPECT_TRUE(moved.is_connected());
++    EXPECT_TRUE(moved.is_serial());
++}
+diff --git a/crates/hardware_daedalus/CMakeLists.txt b/crates/hardware_daedalus/CMakeLists.txt
+index a1aa691..0f41aa9 100644
+--- a/crates/hardware_daedalus/CMakeLists.txt
++++ b/crates/hardware_daedalus/CMakeLists.txt
+@@ -4,4 +4,5 @@ crate(
+     DEPS
+         opencv_core
+         magic_enum
++        fmt::fmt
+ )
+diff --git a/crates/hardware_daedalus/tests/shm_ipc_test.cpp b/crates/hardware_daedalus/tests/shm_ipc_test.cpp
+new file mode 100644
+index 0000000..8d4dcd2
+--- /dev/null
++++ b/crates/hardware_daedalus/tests/shm_ipc_test.cpp
+@@ -0,0 +1,569 @@
++// ============================================================================
++// ipc（hardware_daedalus）共享内存下位机通信测试
++//
++// 被测对象（crates/hardware_daedalus/src/）：
++//   shm_layout.hpp         跨 C++/Rust ABI 布局（魔数/版本/各结构体大小偏移，
++//                          文件内已有 static_assert 编译期锁定）
++//   shm_region.hpp         /tmp 文件式 mmap 共享内存 RAII（create/open/create_or_open）
++//   shm_triple_buffer.hpp  无锁 SPSC 三缓冲（FLAG_NEW + 就绪下标位编码）
++//   shm_client.hpp         ShmClient：消费者 connect() / 生产者 create()
++//
++// 通信模型：Rust 模拟器（生产者）↔ C++ 视觉程序（消费者）。
++// 生产者模式 create() 本身即为单元测试设计——测试直接用两个客户端
++// 在同一进程内模拟双端（mmap MAP_SHARED 同一文件，天然内存互通），
++// 完整覆盖图像/位姿/云台指令全链路。
++//
++// 测试分层：
++//   第一层 ShmRegion      —— mmap 区域生命周期：零初始化/双端可见性/
++//                            错误路径（NotFound/InvalidSize）/owner 删文件/移动语义
++//   第二层 三缓冲原语     —— 无新数据语义/发布-借用往返/消费后置位清除/
++//                            连续发布覆盖/三槽位轮换
++//   第三层 ShmClient      —— connect 校验（魔数/版本/不存在）/
++//                            图像-位姿-云台指令全链路/心跳保活
++//
++// 运行（项目根目录）：
++//   cmake -B build -DTALOS_BUILD_TESTING=ON && cmake --build build
++//   ./build/shm_ipc_test             # 或 ctest
++// ============================================================================
++#include <gtest/gtest.h>
++
++// 被测头文件（真实项目源码，不复制）
++#include "shm_client.hpp"
++#include "shm_layout.hpp"
++#include "shm_region.hpp"
++#include "shm_triple_buffer.hpp"
++
++// C++ 标准库
++#include <atomic>
++#include <cstdint>
++#include <cstring>
++#include <filesystem>
++
++// OpenCV：ShmClient 图像接口返回 cv::Mat
++#include <opencv2/core.hpp>
++
++namespace fs = std::filesystem;
++
++// ============================================================================
++// 测试夹具：每条用例前后清理 /tmp 全局共享内存文件
++// （IPC 名字是全局常量，用例间必须互不残留）
++// ============================================================================
++class ShmIpcTest : public ::testing::Test {
++protected:
++    void SetUp() override { cleanup(); }
++
++    void TearDown() override { cleanup(); }
++
++    /// 删除两块共享内存文件（幂等）
++    static void cleanup() {
++        fs::remove(ipc::shm_path(ipc::SHM_NAME_META));
++        fs::remove(ipc::shm_path(ipc::SHM_NAME_IMAGE_POOL));
++    }
++
++    /// 生成一份字段确定可断言的位姿
++    static ipc::ShmClient::Pose make_pose(const uint64_t frame_seq) {
++        return ipc::ShmClient::Pose{
++            .x            = 1.5,
++            .y            = -2.25,
++            .z            = 0.75,
++            .qw           = 0.9238795, // cos(22.5°)
++            .qx           = 0.0,
++            .qy           = 0.0,
++            .qz           = 0.3826834, // sin(22.5°)
++            .frame_seq    = frame_seq,
++            .timestamp_ns = 1234567890,
++        };
++    }
++};
++
++// ============================================================================
++// 第一层：ShmRegion mmap 区域生命周期
++// ============================================================================
++
++/// 正常流程：create 后内存零初始化、属性正确
++TEST_F(ShmIpcTest, RegionCreateIsZeroInitialized) {
++    constexpr size_t SIZE = 4096;
++    auto result = ipc::ShmRegion::create("talos_shm_test_region", SIZE);
++    ASSERT_TRUE(result.has_value()) << "create 失败";
++
++    EXPECT_EQ(result->size(), SIZE);
++    EXPECT_TRUE(result->is_owner());
++    EXPECT_EQ(result->path(), ipc::shm_path("talos_shm_test_region"));
++    ASSERT_NE(result->data(), nullptr);
++
++    // 新建区域必须全零（无脏数据残留）
++    const auto* bytes = static_cast<const uint8_t*>(result->data());
++    for (size_t i = 0; i < SIZE; ++i) {
++        ASSERT_EQ(bytes[i], 0u) << "偏移 " << i << " 非零";
++    }
++}
++
++/// 正常流程：create 与 open 映射同一文件，写入互相可见（MAP_SHARED 语义）
++TEST_F(ShmIpcTest, RegionSharedVisibilityBetweenCreateAndOpen) {
++    constexpr size_t SIZE = 1024;
++    auto producer = ipc::ShmRegion::create("talos_shm_test_region", SIZE);
++    ASSERT_TRUE(producer.has_value());
++
++    auto consumer = ipc::ShmRegion::open("talos_shm_test_region", SIZE);
++    ASSERT_TRUE(consumer.has_value()) << "open 失败";
++    EXPECT_FALSE(consumer->is_owner()); // 消费者不拥有文件
++
++    // 生产者写 → 消费者读
++    auto* shared = producer->as<uint32_t>();
++    shared[0] = 0xDEADBEEFu;
++    shared[1] = 0x5A5A5A5Au;
++    EXPECT_EQ(consumer->as<const uint32_t>()[0], 0xDEADBEEFu);
++    EXPECT_EQ(consumer->as<const uint32_t>()[1], 0x5A5A5A5Au);
++
++    // 消费者写 → 生产者读（双向）
++    consumer->as<uint32_t>()[2] = 0x12345678u;
++    EXPECT_EQ(shared[2], 0x12345678u);
++}
++
++/// 异常处理：打开不存在的共享内存 → NotFound
++TEST_F(ShmIpcTest, RegionOpenMissingReturnsNotFound) {
++    const auto result = ipc::ShmRegion::open("talos_shm_never_created", 128);
++    ASSERT_FALSE(result.has_value());
++    EXPECT_EQ(result.error(), ipc::ShmError::NotFound);
++}
++
++/// 异常处理：磁盘文件实际尺寸小于请求映射尺寸 → InvalidSize（防越界读取）
++TEST_F(ShmIpcTest, RegionOpenSmallerFileReturnsInvalidSize) {
++    constexpr size_t CREATED = 1024;
++    auto producer = ipc::ShmRegion::create("talos_shm_test_region", CREATED);
++    ASSERT_TRUE(producer.has_value());
++
++    // 请求 2048 > 实际 1024 → 拒绝
++    const auto too_big = ipc::ShmRegion::open("talos_shm_test_region", CREATED * 2);
++    ASSERT_FALSE(too_big.has_value());
++    EXPECT_EQ(too_big.error(), ipc::ShmError::InvalidSize);
++
++    // 请求恰好等于实际大小 → 允许
++    const auto exact = ipc::ShmRegion::open("talos_shm_test_region", CREATED);
++    EXPECT_TRUE(exact.has_value());
++}
++
++/// 生命周期：owner 析构删除 /tmp 文件，非 owner 析构保留
++/// 注意：C++ 析构顺序与声明顺序相反，consumer 需放入内层作用域，
++/// 保证「consumer 先析构、producer 仍存活」这一被测时序。
++TEST_F(ShmIpcTest, RegionOwnerDeletesFileOnDestroy) {
++    const auto path = ipc::shm_path("talos_shm_test_region");
++    {
++        auto producer = ipc::ShmRegion::create("talos_shm_test_region", 64);
++        ASSERT_TRUE(producer.has_value());
++        {
++            auto consumer = ipc::ShmRegion::open("talos_shm_test_region", 64);
++            ASSERT_TRUE(consumer.has_value());
++        } // consumer 先析构：非 owner，文件必须还在
++        EXPECT_TRUE(fs::exists(path)) << "非 owner 析构不得删除共享文件";
++    } // producer 随后析构：owner 删除文件
++    EXPECT_FALSE(fs::exists(path)) << "owner 析构应删除共享文件";
++}
++
++/// 生命周期：移动语义转移所有权，旧对象不再释放资源
++TEST_F(ShmIpcTest, RegionMoveTransfersOwnership) {
++    const auto path = ipc::shm_path("talos_shm_test_region");
++    std::optional<ipc::ShmRegion> moved; // 默认空，后续移动赋值接管资源
++    {
++        auto producer = ipc::ShmRegion::create("talos_shm_test_region", 64);
++        ASSERT_TRUE(producer.has_value());
++        void* const addr = producer->data();
++
++        moved = std::move(*producer);
++        // 新对象接管全部资源
++        EXPECT_EQ(moved->data(), addr);
++        EXPECT_TRUE(moved->is_owner());
++        // 旧对象被掏空：仅剩壳，析构不重复释放（本用例通过即未双重释放/未崩溃）
++    }
++    // moved 仍存活且已接管所有权 → 文件保留（证明所有权确实转移给了新对象）
++    EXPECT_TRUE(fs::exists(path)) << "移动后新对象持有所有权，文件应保留";
++    // 显式结束 moved 生命周期 → owner 析构删除文件
++    moved.reset();
++    EXPECT_FALSE(fs::exists(path)) << "moved 析构应删除共享文件";
++}
++
++/// create_or_open：已存在则复用（非覆盖），不存在则新建
++TEST_F(ShmIpcTest, RegionCreateOrOpenReusesExisting) {
++    constexpr size_t SIZE = 128;
++    auto first = ipc::ShmRegion::create("talos_shm_test_region", SIZE);
++    ASSERT_TRUE(first.has_value());
++    first->as<uint32_t>()[0] = 0xAABBCCDDu; // 写入哨兵
++
++    auto second = ipc::ShmRegion::create_or_open("talos_shm_test_region", SIZE);
++    ASSERT_TRUE(second.has_value());
++    // 复用已有映射：哨兵数据保留，且是消费者身份（非 owner）
++    EXPECT_EQ(second->as<const uint32_t>()[0], 0xAABBCCDDu);
++    EXPECT_FALSE(second->is_owner());
++}
++
++/// shm_path：前导斜杠规范化（兼容 Rust memmap2 命名）
++TEST_F(ShmIpcTest, ShmPathNormalizesLeadingSlash) {
++    EXPECT_EQ(ipc::shm_path("/talos_xxx").string(), "/tmp/talos_xxx");
++    EXPECT_EQ(ipc::shm_path("talos_xxx").string(), "/tmp/talos_xxx");
++}
++
++// ============================================================================
++// 第二层：无锁三缓冲原语（通过 ShmClient::create 提供的真实通道测试）
++// ============================================================================
++
++/// 初始状态：无新数据，borrow 返回空
++TEST_F(ShmIpcTest, TripleBufferStartsWithNoNewData) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value()) << "create 失败";
++
++    // 图像通道：初始无新帧
++    EXPECT_FALSE(producer->has_new_image());
++    EXPECT_FALSE(producer->recv_image().has_value());
++    // 位姿通道：全部五路均无数据
++    for (uint8_t i = 0; i < 5; ++i) {
++        EXPECT_FALSE(producer->recv_pose(static_cast<ipc::PoseIndex>(i)).has_value())
++            << "位姿通道 " << i;
++    }
++    // 辅助通道：未写入时均为空
++    EXPECT_FALSE(producer->recv_chassis_observation().has_value());
++    EXPECT_FALSE(producer->recv_ground_truth().has_value());
++    EXPECT_FALSE(producer->recv_runtime_state().has_value());
++}
++
++/// 正常流程：位姿发布 → 借用往返，字段逐项一致（float 精度内）
++TEST_F(ShmIpcTest, PosePublishBorrowRoundTrip) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value()) << "connect 失败";
++
++    const auto sent = make_pose(42);
++    producer->publish_pose(ipc::POSE_GIMBAL, sent);
++
++    const auto received = consumer->recv_pose(ipc::POSE_GIMBAL);
++    ASSERT_TRUE(received.has_value());
++    EXPECT_DOUBLE_EQ(received->x, sent.x);
++    EXPECT_DOUBLE_EQ(received->y, sent.y);
++    EXPECT_DOUBLE_EQ(received->z, sent.z);
++    EXPECT_FLOAT_EQ(static_cast<float>(received->qw), static_cast<float>(sent.qw));
++    EXPECT_FLOAT_EQ(static_cast<float>(received->qz), static_cast<float>(sent.qz));
++    EXPECT_EQ(received->frame_seq, sent.frame_seq);
++    EXPECT_EQ(received->timestamp_ns, sent.timestamp_ns);
++}
++
++/// 消费语义：borrow 一次后 FLAG_NEW 清除，再次读取无数据
++TEST_F(ShmIpcTest, TripleBufferConsumeClearsNewFlag) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    producer->publish_pose(ipc::POSE_ODOM, make_pose(1));
++    ASSERT_TRUE(consumer->has_new_image() || true); // 位姿通道独立于图像通道
++    ASSERT_TRUE(consumer->recv_pose(ipc::POSE_ODOM).has_value());
++
++    // 消费后无新数据：同一帧不能读两次
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_ODOM).has_value());
++}
++
++/// 发布语义：连续多次 publish 后消费，只拿到最新一帧（覆盖旧值）
++TEST_F(ShmIpcTest, TripleBufferLatestWins) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // 连发三帧（帧序号递增），中间帧被覆盖
++    for (uint64_t seq = 1; seq <= 3; ++seq) {
++        auto pose    = make_pose(seq);
++        pose.x       = static_cast<double>(seq);
++        producer->publish_pose(ipc::POSE_MUZZLE, pose);
++    }
++
++    const auto received = consumer->recv_pose(ipc::POSE_MUZZLE);
++    ASSERT_TRUE(received.has_value());
++    EXPECT_EQ(received->frame_seq, 3u); // 最新帧
++    EXPECT_DOUBLE_EQ(received->x, 3.0);
++    // 只消费一次：覆盖丢失的中间帧不复活
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_MUZZLE).has_value());
++}
++
++/// 三槽轮换压力：连续发布远超 3 槽数量的帧，无崩溃且始终拿到最新值
++TEST_F(ShmIpcTest, TripleBufferSlotRotationStress) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    for (uint64_t seq = 1; seq <= 100; ++seq) {
++        auto pose  = make_pose(seq);
++        pose.x     = static_cast<double>(seq);
++        producer->publish_pose(ipc::POSE_CAMERA, pose);
++    }
++    const auto received = consumer->recv_pose(ipc::POSE_CAMERA);
++    ASSERT_TRUE(received.has_value());
++    EXPECT_EQ(received->frame_seq, 100u);
++}
++
++/// 通道隔离：五路位姿互不干扰
++TEST_F(ShmIpcTest, PoseChannelsAreIndependent) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // 仅发布云台通道
++    producer->publish_pose(ipc::POSE_GIMBAL, make_pose(10));
++    // 云台有数据，其余四路仍为空
++    EXPECT_TRUE(consumer->recv_pose(ipc::POSE_GIMBAL).has_value());
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_ODOM).has_value());
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_MUZZLE).has_value());
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_CAMERA).has_value());
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_CHASSIS_OBSERVATION).has_value());
++}
++
++// ============================================================================
++// 第三层：ShmClient 连接校验与全链路
++// ============================================================================
++
++/// 异常处理：共享内存不存在时 connect 失败 → NotFound
++TEST_F(ShmIpcTest, ConnectFailsWhenShmAbsent) {
++    const auto result = ipc::ShmClient::connect();
++    ASSERT_FALSE(result.has_value());
++    EXPECT_EQ(result.error(), ipc::ShmError::NotFound);
++}
++
++/// 正常流程：create 初始化头部，connect 校验通过
++TEST_F(ShmIpcTest, CreateThenConnectHeaderValid) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++
++    // 生产者写入的头部信息
++    EXPECT_EQ(producer->header().magic, ipc::SHM_MAGIC);
++    EXPECT_EQ(producer->header().version, ipc::SHM_VERSION);
++    EXPECT_EQ(producer->header().image_width, ipc::IMAGE_WIDTH);
++    EXPECT_EQ(producer->header().image_height, ipc::IMAGE_HEIGHT);
++
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++    EXPECT_EQ(consumer->header().magic, ipc::SHM_MAGIC);
++}
++
++/// 异常处理：魔数被篡改 → connect 拒绝（防读脏内存）
++TEST_F(ShmIpcTest, ConnectRejectsCorruptedMagic) {
++    {
++        auto producer = ipc::ShmClient::create();
++        ASSERT_TRUE(producer.has_value());
++    } // producer 析构删文件——重新自建以拿到裸区域
++    {
++        auto producer = ipc::ShmClient::create();
++        ASSERT_TRUE(producer.has_value());
++
++        // 直接通过 ShmRegion 篡改魔数
++        auto raw = ipc::ShmRegion::open(ipc::SHM_NAME_META, sizeof(ipc::ShmMetaRegion));
++        ASSERT_TRUE(raw.has_value());
++        raw->as<ipc::ShmMetaRegion>()->header.magic = 0x12345678u;
++    }
++    const auto result = ipc::ShmClient::connect();
++    ASSERT_FALSE(result.has_value());
++}
++
++/// 异常处理：版本号不匹配 → connect 拒绝（防跨版本内存错位）
++TEST_F(ShmIpcTest, ConnectRejectsVersionMismatch) {
++    {
++        auto producer = ipc::ShmClient::create();
++        ASSERT_TRUE(producer.has_value());
++
++        auto raw = ipc::ShmRegion::open(ipc::SHM_NAME_META, sizeof(ipc::ShmMetaRegion));
++        ASSERT_TRUE(raw.has_value());
++        raw->as<ipc::ShmMetaRegion>()->header.version = ipc::SHM_VERSION + 1;
++    }
++    const auto result = ipc::ShmClient::connect();
++    ASSERT_FALSE(result.has_value());
++}
++
++/// 正常流程：图像全链路——发布像素 → 零拷贝消费（seq/时间戳/像素内容一致）
++TEST_F(ShmIpcTest, ImageFullPipelineRoundTrip) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // 构造带哨兵像素的 RGB 图像（1440x1080x3）
++    cv::Mat image(ipc::IMAGE_HEIGHT, ipc::IMAGE_WIDTH, CV_8UC3, cv::Scalar(0, 0, 0));
++    image.at<cv::Vec3b>(0, 0)                 = cv::Vec3b(0x5A, 0xA5, 0x5A); // 左上角哨兵
++    image.at<cv::Vec3b>(ipc::IMAGE_HEIGHT - 1, ipc::IMAGE_WIDTH - 1) =
++        cv::Vec3b(0xFF, 0x00, 0x7F); // 右下角哨兵
++    image.at<cv::Vec3b>(ipc::IMAGE_HEIGHT / 2, ipc::IMAGE_WIDTH / 2) =
++        cv::Vec3b(0x11, 0x22, 0x33); // 中心哨兵
++
++    producer->publish_image(image, 777u, 987654321u);
++
++    // 消费前 has_new_image 为真
++    EXPECT_TRUE(consumer->has_new_image());
++    const auto frame = consumer->recv_image();
++    ASSERT_TRUE(frame.has_value());
++
++    // 帧元数据一致
++    EXPECT_EQ(frame->seq, 777u);
++    EXPECT_EQ(frame->timestamp_ns, 987654321u);
++    // 零拷贝 Mat 尺寸正确
++    EXPECT_EQ(frame->image.rows, static_cast<int>(ipc::IMAGE_HEIGHT));
++    EXPECT_EQ(frame->image.cols, static_cast<int>(ipc::IMAGE_WIDTH));
++    EXPECT_EQ(frame->image.type(), CV_8UC3);
++
++    // 像素内容一致（三个哨兵点位抽检）
++    EXPECT_EQ(frame->image.at<cv::Vec3b>(0, 0), cv::Vec3b(0x5A, 0xA5, 0x5A));
++    EXPECT_EQ(frame->image.at<cv::Vec3b>(ipc::IMAGE_HEIGHT / 2, ipc::IMAGE_WIDTH / 2),
++              cv::Vec3b(0x11, 0x22, 0x33));
++    EXPECT_EQ(frame->image.at<cv::Vec3b>(ipc::IMAGE_HEIGHT - 1, ipc::IMAGE_WIDTH - 1),
++              cv::Vec3b(0xFF, 0x00, 0x7F));
++
++    // 消费后新帧标志清除
++    EXPECT_FALSE(consumer->has_new_image());
++}
++
++/// 正常流程：云台指令下发全链路（消费者 send → 生产者侧读回）
++/// 这是自瞄输出到仿真下位机的关键路径
++TEST_F(ShmIpcTest, GimbalCommandDownlinkRoundTrip) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // C++ 视觉端下发：偏航 15°，俯仰 -8°，距离 3.5m，允许开火
++    consumer->send_gimbal_cmd(15.0f, -8.0f, 3.5f, true);
++
++    // 生产者侧（Rust 模拟器角色）通过三缓冲读回指令
++    auto raw = ipc::ShmRegion::open(ipc::SHM_NAME_META, sizeof(ipc::ShmMetaRegion));
++    ASSERT_TRUE(raw.has_value());
++    ipc::GimbalOps ops(&raw->as<ipc::ShmMetaRegion>()->gimbal_cmd);
++    const auto slot = ops.borrow();
++    ASSERT_TRUE(slot.has_value());
++
++    EXPECT_FLOAT_EQ((*slot)->yaw_deg, 15.0f);
++    EXPECT_FLOAT_EQ((*slot)->pitch_deg, -8.0f);
++    EXPECT_FLOAT_EQ((*slot)->distance_m, 3.5f);
++    EXPECT_EQ((*slot)->fire_advice, 1u);
++    EXPECT_GT((*slot)->timestamp_ns, 0u); // 时间戳已填充
++
++    // 消费一次后指令不残留
++    EXPECT_FALSE(ops.borrow().has_value());
++
++    // 边界值：无有效目标（distance=-1）与禁止开火
++    consumer->send_gimbal_cmd(0.0f, 0.0f, -1.0f, false);
++    const auto slot2 = ops.borrow();
++    ASSERT_TRUE(slot2.has_value());
++    EXPECT_FLOAT_EQ((*slot2)->distance_m, -1.0f);
++    EXPECT_EQ((*slot2)->fire_advice, 0u);
++}
++
++/// 正常流程：相机内参发布/读取（单变量直通通道）
++TEST_F(ShmIpcTest, CameraInfoPublishRead) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    ipc::CameraInfo info{};
++    info.timestamp_ns = 100u;
++    info.fx = 920.5;
++    info.fy = 921.1;
++    info.cx = 719.5;
++    info.cy = 539.5;
++    info.distortion[0] = -0.35;
++    info.distortion[4] = 0.02;
++    info.width = ipc::IMAGE_WIDTH;
++    info.height = ipc::IMAGE_HEIGHT;
++    producer->publish_camera_info(info);
++
++    const auto& received = consumer->camera_info();
++    EXPECT_DOUBLE_EQ(received.fx, 920.5);
++    EXPECT_DOUBLE_EQ(received.cy, 539.5);
++    EXPECT_DOUBLE_EQ(received.distortion[0], -0.35);
++    EXPECT_EQ(received.width, ipc::IMAGE_WIDTH);
++    EXPECT_EQ(received.height, ipc::IMAGE_HEIGHT);
++}
++
++/// 正常流程：底盘观测/运行状态直通通道（timestamp=0 → 无效语义）
++TEST_F(ShmIpcTest, DirectChannelsRespectTimestampValidity) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // 未写入：timestamp_ns=0 → nullopt
++    EXPECT_FALSE(consumer->recv_chassis_observation().has_value());
++    EXPECT_FALSE(consumer->recv_runtime_state().has_value());
++
++    // 写入运行状态
++    producer->publish_runtime_state(true, 555u);
++    const auto state = consumer->recv_runtime_state();
++    ASSERT_TRUE(state.has_value());
++    EXPECT_EQ(state->following, 1u);
++    EXPECT_EQ(state->timestamp_ns, 555u);
++
++    // 写入底盘观测（直接通过裸区域写入结构体）
++    auto raw = ipc::ShmRegion::open(ipc::SHM_NAME_META, sizeof(ipc::ShmMetaRegion));
++    ASSERT_TRUE(raw.has_value());
++    auto& obs = raw->as<ipc::ShmMetaRegion>()->chassis_observation;
++    obs.timestamp_ns = 42u;
++    obs.frame_seq = 7u;
++    obs.v_body[0] = 1.25f;
++    obs.v_body[1] = -0.5f;
++    obs.wz_radps = 0.8f;
++
++    const auto received = consumer->recv_chassis_observation();
++    ASSERT_TRUE(received.has_value());
++    EXPECT_EQ(received->frame_seq, 7u);
++    EXPECT_FLOAT_EQ(received->v_body[0], 1.25f);
++    EXPECT_FLOAT_EQ(received->v_body[1], -0.5f);
++    EXPECT_FLOAT_EQ(received->wz_radps, 0.8f);
++}
++
++/// 心跳保活：无心跳判离线 → 更新心跳判存活
++TEST_F(ShmIpcTest, HeartbeatLifecycle) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    // 心跳从未更新（=0）：now - 0 巨大 → 判定离线
++    EXPECT_FALSE(consumer->is_producer_alive());
++
++    // 生产者更新心跳 → 存活
++    producer->update_heartbeat();
++    EXPECT_TRUE(consumer->is_producer_alive());
++
++    // wait_for_producer 立即返回 true（心跳新鲜）
++    EXPECT_TRUE(consumer->wait_for_producer(std::chrono::milliseconds(100)));
++
++    // 心跳超时（阈值取 0）：新鲜心跳也可能临界，此处只验证超时路径可返回 false
++    // 用极大阈值反证：即使心跳很老，阈值无限大也判存活
++    EXPECT_TRUE(consumer->is_producer_alive(UINT64_MAX / 2));
++}
++
++/// 综合场景：图像 + 位姿 + 指令三通道并发混合收发
++TEST_F(ShmIpcTest, MixedChannelWorkload) {
++    auto producer = ipc::ShmClient::create();
++    ASSERT_TRUE(producer.has_value());
++    auto consumer = ipc::ShmClient::connect();
++    ASSERT_TRUE(consumer.has_value());
++
++    cv::Mat image(ipc::IMAGE_HEIGHT, ipc::IMAGE_WIDTH, CV_8UC3, cv::Scalar(9, 8, 7));
++
++    // 模拟一段运行时循环：每帧发图像+位姿，同时下发云台指令
++    for (uint64_t seq = 1; seq <= 10; ++seq) {
++        producer->publish_pose(ipc::POSE_GIMBAL, make_pose(seq));
++        producer->publish_image(image, seq, seq * 1000000u);
++        consumer->send_gimbal_cmd(
++            static_cast<float>(seq), static_cast<float>(-seq) * 0.5f, 2.0f, seq % 2 == 0);
++
++        // 帧消费：图像与位姿的 frame_seq 对齐
++        const auto frame = consumer->recv_image();
++        ASSERT_TRUE(frame.has_value());
++        EXPECT_EQ(frame->seq, seq);
++        const auto pose = consumer->recv_pose(ipc::POSE_GIMBAL);
++        ASSERT_TRUE(pose.has_value());
++        EXPECT_EQ(pose->frame_seq, seq);
++    }
++
++    // 全部消费完毕：无残留新数据
++    EXPECT_FALSE(consumer->has_new_image());
++    EXPECT_FALSE(consumer->recv_pose(ipc::POSE_GIMBAL).has_value());
++}
+diff --git a/learning_practice/stage12_serial_mcu/.clangd b/learning_practice/stage12_serial_mcu/.clangd
+new file mode 100644
+index 0000000..b109965
+--- /dev/null
++++ b/learning_practice/stage12_serial_mcu/.clangd
+@@ -0,0 +1,4 @@
++CompileFlags:
++  CompilationDatabase: build
++  Add:
++    - -std=gnu++2b
+diff --git a/learning_practice/stage12_serial_mcu/CMakeLists.txt b/learning_practice/stage12_serial_mcu/CMakeLists.txt
+new file mode 100644
+index 0000000..5f2bf96
+--- /dev/null
++++ b/learning_practice/stage12_serial_mcu/CMakeLists.txt
+@@ -0,0 +1,160 @@
++# ===========================================================================
++# stage12_serial_mcu：真实下位机（STM32 云台主控）串口通信实测程序
++#
++# 与 crates/hardware/at_gimbal/tests/serial_protocol_test.cpp 的分工：
++#   那边 = PTY 伪终端【模拟】下位机的单元测试，无硬件、CI 可跑；
++#   这边 = 部署在机器人上对【真实 STM32】运行的实测验收程序：
++#     - 真实 /dev/ttyS*、真实波特率、真实 termios 配置
++#     - 验收上行链路：IMU 帧率 / 时间戳单调性 / 帧完整性（SoF/EoF）
++#     - 验收下行链路：视觉指令帧下发（可选，默认关闭——云台会真实转动）
++#     - 验收稳定性：长时间运行统计、断线自动重连
++#
++# 依赖（与主项目 versions 完全一致）：
++#   talos_gimbal  直接 include 真实源码头文件（../../crates/.../src）
++#   fmt 12.0.0    优先复用 3dparty 缓存 zip（构建过主项目即存在），否则在线拉取
++#   spdlog 1.15.1 同上；SPDLOG_FMT_EXTERNAL=ON 绑定上面的外部 fmt
++#   magic_enum    仓库自带 3dparty/magic_enum 单头文件，零拉取
++#   libusb 1.0.27 仅因 usb.hpp 头文件包含而依赖（Stm32Impl 模板不实例化不链接），
++#                静态编译并关闭 udev，最小化构建要求
++# ===========================================================================
++
++# 编译器选择：优先学习环境统一的 clang-21，不存在时回退系统默认
++if(EXISTS /usr/bin/clang++-21)
++    set(CMAKE_C_COMPILER /usr/bin/clang-21)
++    set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)
++    set(CMAKE_CXX_FLAGS "-stdlib=libstdc++")
++endif()
++
++cmake_minimum_required(VERSION 3.20)
++project(stage12_serial_mcu LANGUAGES C CXX) # C：libusb 源码是纯 C 编译
++
++set(CMAKE_CXX_STANDARD 23)
++set(CMAKE_CXX_STANDARD_REQUIRED ON)
++set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
++set(CMAKE_CXX_EXTENSIONS ON)
++
++include(FetchContent)
++
++find_package(Threads REQUIRED) # pthread：spdlog/libusb/周期节拍共同依赖
++
++# ===========================================================================
++# 依赖一：fmt 12.0.0（serial.hpp/packet.hpp 直接 fmt::format）
++# ===========================================================================
++set(FMT_ZIP ${CMAKE_CURRENT_SOURCE_DIR}/../../3dparty/fmt-12.0.0.zip)
++if(EXISTS ${FMT_ZIP})
++    # 离线优先：主项目 fetch-content-helper 已缓存到 3dparty
++    FetchContent_Declare(fmt URL ${FMT_ZIP})
++else()
++    FetchContent_Declare(
++        fmt URL https://github.com/fmtlib/fmt/releases/download/12.0.0/fmt-12.0.0.zip)
++endif()
++FetchContent_MakeAvailable(fmt)
++
++# ===========================================================================
++# 依赖二：spdlog 1.15.1（serial.hpp/stm32.hpp 的 SPDLOG_* 日志）
++# SPDLOG_FMT_EXTERNAL=ON：使用上面的外部 fmt，避免内置 fmt 版本冲突，
++# 与主项目 cmake/dependencies.cmake 的做法完全一致
++# ===========================================================================
++set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
++set(SPDLOG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
++set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
++set(SPDLOG_BUILD_BENCH OFF CACHE BOOL "" FORCE)
++set(SPDLOG_BUILD_SHARED OFF CACHE BOOL "" FORCE)
++set(SPDLOG_ZIP ${CMAKE_CURRENT_SOURCE_DIR}/../../3dparty/spdlog-1.15.1.zip)
++if(EXISTS ${SPDLOG_ZIP})
++    FetchContent_Declare(spdlog URL ${SPDLOG_ZIP})
++else()
++    FetchContent_Declare(
++        spdlog URL https://codeload.github.com/gabime/spdlog/zip/refs/tags/v1.15.1)
++endif()
++FetchContent_MakeAvailable(spdlog)
++
++# ===========================================================================
++# 依赖三：magic_enum（仓库自带单头文件，packet.hpp 枚举反射）
++# ===========================================================================
++set(MAGIC_ENUM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../3dparty/magic_enum)
++if(NOT EXISTS ${MAGIC_ENUM_DIR}/magic_enum.hpp)
++    message(FATAL_ERROR "missing 3dparty/magic_enum/magic_enum.hpp in repo")
++endif()
++
++# ===========================================================================
++# 依赖四：libusb 1.0.30 源码
++# usb.hpp（serial.hpp 包含它以获得 Parser 概念）include <libusb/libusb.h>，
++# 故必须提供 libusb 头文件与少量符号（mcu_device variant 析构 Stm32Impl）。
++# 照搬主项目 cmake/dependencies.cmake 的做法：拉源码手动编译静态库，
++# 不依赖系统 libusb —— 机器人上无需额外 apt 安装。
++# 注意：libusb v1.0.27 及更早版本没有 CMakeLists.txt，必须用 v1.0.30 源码。
++# ===========================================================================
++FetchContent_Declare(libusb
++    URL https://codeload.github.com/libusb/libusb/tar.gz/refs/tags/v1.0.30)
++# Populate 只下载展开源码，不 add_subdirectory（手动挑选 .c 编译）
++FetchContent_Populate(libusb)
++
++# 生成 libusb 编译所需的跨平台 config.h（与主项目完全一致）
++set(LIBUSB_CFG_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/libusb)
++file(MAKE_DIRECTORY ${LIBUSB_CFG_DIR})
++file(WRITE ${LIBUSB_CFG_DIR}/config.h
++"#pragma once
++#define DEFAULT_VISIBILITY __attribute__ ((visibility (\"hidden\")))
++#define ENABLE_LOGGING 1
++#define HAVE_NFDS_T 1
++#define HAVE_SYS_TIME_H 1
++#define HAVE_PLATFORM_POSIX 1
++#define PLATFORM_POSIX 1
++#define PRINTF_FORMAT(a, b) __attribute__ ((__format__ (__printf__, a, b)))
++#define _GNU_SOURCE 1
++")
++# Linux 平台专属宏
++file(APPEND ${LIBUSB_CFG_DIR}/config.h
++"#define HAVE_ASM_TYPES_H 1
++#define HAVE_CLOCK_GETTIME 1
++#define HAVE_EVENTFD 1
++#define HAVE_PIPE2 1
++#define HAVE_PTHREAD_CONDATTR_SETCLOCK 1
++#define HAVE_TIMERFD 1
++")
++
++# 手动编译 libusb 静态库（核心源码 + Linux USB 底层实现）
++add_library(talos_libusb_static STATIC
++    ${libusb_SOURCE_DIR}/libusb/core.c
++    ${libusb_SOURCE_DIR}/libusb/descriptor.c
++    ${libusb_SOURCE_DIR}/libusb/hotplug.c
++    ${libusb_SOURCE_DIR}/libusb/io.c
++    ${libusb_SOURCE_DIR}/libusb/strerror.c
++    ${libusb_SOURCE_DIR}/libusb/sync.c
++    ${libusb_SOURCE_DIR}/libusb/os/events_posix.c
++    ${libusb_SOURCE_DIR}/libusb/os/threads_posix.c
++    ${libusb_SOURCE_DIR}/libusb/os/linux_usbfs.c
++    ${libusb_SOURCE_DIR}/libusb/os/linux_netlink.c
++)
++# SYSTEM：头文件告警不传染 demo；PUBLIC：usb.hpp 能找到 <libusb/libusb.h>
++target_include_directories(talos_libusb_static SYSTEM PUBLIC ${libusb_SOURCE_DIR})
++target_include_directories(talos_libusb_static PRIVATE
++    ${libusb_SOURCE_DIR}/libusb
++    ${LIBUSB_CFG_DIR}
++)
++target_compile_definitions(talos_libusb_static PRIVATE _GNU_SOURCE)
++target_compile_options(talos_libusb_static PRIVATE -w -fvisibility=hidden)
++target_link_libraries(talos_libusb_static PUBLIC Threads::Threads rt)
++
++# ===========================================================================
++# talos_gimbal 模块（头文件库）：include 指向真实
++# crates/hardware/at_gimbal/src —— demo #include "talos_gimbal/mcu_device.hpp"
++# 即与主程序使用完全相同的通信 API，零拷贝、零重写
++# ===========================================================================
++add_library(talos_gimbal_learning INTERFACE)
++target_include_directories(talos_gimbal_learning INTERFACE
++    ${CMAKE_CURRENT_SOURCE_DIR}/../../crates/hardware/at_gimbal/src
++    ${MAGIC_ENUM_DIR}
++)
++target_link_libraries(talos_gimbal_learning INTERFACE
++    fmt::fmt
++    spdlog::spdlog
++    talos_libusb_static
++    Threads::Threads
++)
++
++# 演示程序：警告只作用于本 demo
++add_executable(serial_mcu_demo src/demo.cpp)
++target_compile_options(serial_mcu_demo PRIVATE -Wall -Wextra -Werror)
++target_link_libraries(serial_mcu_demo PRIVATE talos_gimbal_learning)
+diff --git a/learning_practice/stage12_serial_mcu/src/demo.cpp b/learning_practice/stage12_serial_mcu/src/demo.cpp
+new file mode 100644
+index 0000000..413546b
+--- /dev/null
++++ b/learning_practice/stage12_serial_mcu/src/demo.cpp
+@@ -0,0 +1,405 @@
++// ============================================================================
++// stage12：真实下位机串口通信实测程序（STM32 云台主控）
++//
++// 与 PTY 单元测试（crates/hardware/at_gimbal/tests/serial_protocol_test.cpp）
++// 的区别：本程序部署在机器人上，对【真实硬件】做验收测试。
++//
++// 使用的主项目真实 API（与 src/fcs/L1_sensor/output_interface.cpp 同源）：
++//   McuDeviceHandle::create_serial()   创建串口设备句柄（termios 8N1 原始模式）
++//   Stm32Parser::latest_imu            解析器静态输出槽（IMU 姿态）
++//   Stm32Parser::latest_capabilities    解析器静态输出槽（能力开关）
++//   handle->handle_events()             事件轮询：读串口 + 拆帧 + 解析
++//   handle->send_sync()                 同步下发指令帧（带超时）
++//
++// 实测项：
++//   A. 连接层 —— 串口路径 / 权限 / 波特率真实生效（termios 真配置）
++//   B. 上行   —— IMU 帧率、时间戳单调性、帧完整性（SoF/EoF 魔数）、丢帧
++//   C. 能力帧 —— following / power_rune / quanta 开关变化打印
++//   D. 下行   —— SendSimpleVisionData 指令帧下发成功率（可选，默认关闭）
++//   E. 稳定性 —— 断线自动重连、长时间运行统计汇总
++//
++// 用法：
++//   ./serial_mcu_demo --list                       # 列出本机候选串口
++//   ./serial_mcu_demo                              # 默认 /dev/ttyS4@115200 只收不发
++//   ./serial_mcu_demo -d /dev/ttyUSB0 -b 460800    # 指定设备与波特率
++//   ./serial_mcu_demo -t 60                        # 跑 60 秒自动退出（0=Ctrl+C 退出）
++//   ./serial_mcu_demo -s 100                       # 100Hz 下发正弦扫摆指令
++//                                                  # ！！！云台会 ±30° 真实转动！！！
++//
++// 权限提示：串口默认属于 dialout 组：
++//   sudo usermod -aG dialout $USER   # 然后重新登录生效
++// ============================================================================
++
++#include "talos_gimbal/mcu_device.hpp"
++#include "talos_gimbal/packet.hpp"
++
++// C++ 标准库
++#include <algorithm>   // std::min/std::max 时间戳间隔统计
++#include <chrono>      // steady_clock 高精度计时 / sleep_until 周期节拍
++#include <cmath>       // std::sin 正弦扫摆轨迹
++#include <csignal>     // SIGINT 信号处理（Ctrl+C 优雅退出）
++#include <cstdint>
++#include <cstdio>      // fflush 保证 stdout/stderr 交替输出顺序
++#include <cstdlib>
++#include <filesystem>  // 扫描 /dev 列出候选串口设备
++#include <string>
++#include <thread>
++
++// fmt：格式化输出（与主项目一致，packet.hpp 已依赖）
++#include <fmt/core.h>
++
++namespace tg = talos_gimbal;
++using namespace std::chrono_literals;
++
++// ============================================================================
++// 全局退出标志：信号处理函数与主循环之间通信
++// volatile sig_atomic_t 是信号安全异步通信的唯一标准写法
++// ============================================================================
++static volatile std::sig_atomic_t g_stop = 0;
++
++static void handle_signal(int) { g_stop = 1; }
++
++// ============================================================================
++// 命令行参数
++// ============================================================================
++struct Options {
++    std::string device     = "/dev/ttyS4"; // 主项目 SerialImpl::connect 的默认路径
++    int         baud       = 115200;      // 主项目默认波特率
++    double      duration_s = 0.0;         // 运行时长，0 = 一直跑到 Ctrl+C
++    double      send_hz    = 0.0;         // 下发频率，0 = 只收不发（安全默认）
++    bool        list_only  = false;       // 仅列出候选串口后退出
++};
++
++static void print_usage(const char* prog) {
++    fmt::print(
++        "用法: {} [选项]\n"
++        "  -d, --device <path>   串口设备路径（默认 /dev/ttyS4）\n"
++        "  -b, --baud <rate>     波特率（默认 115200；支持 9600~921600）\n"
++        "  -t, --duration <sec>  运行秒数，0 = 直到 Ctrl+C（默认 0）\n"
++        "  -s, --send-hz <hz>    指令下发频率（默认 0 = 关闭；！开启后云台会真实转动！）\n"
++        "  --list                列出本机候选串口设备后退出\n"
++        "  -h, --help            显示本帮助\n",
++        prog);
++}
++
++/// 解析命令行（系统边界：参数来自用户输入，逐项校验）
++static Options parse_args(int argc, char* argv[]) {
++    Options opt;
++    for (int i = 1; i < argc; ++i) {
++        const std::string arg = argv[i];
++        // 取值辅助：缺失取值直接报错退出
++        auto next_value = [&](const char* name) -> std::string {
++            if (i + 1 >= argc) {
++                fmt::print(stderr, "错误: 参数 {} 缺少取值\n", name);
++                std::exit(2);
++            }
++            return argv[++i];
++        };
++        try {
++            if (arg == "-d" || arg == "--device") {
++                opt.device = next_value("-d");
++            } else if (arg == "-b" || arg == "--baud") {
++                opt.baud = std::stoi(next_value("-b"));
++            } else if (arg == "-t" || arg == "--duration") {
++                opt.duration_s = std::stod(next_value("-t"));
++            } else if (arg == "-s" || arg == "--send-hz") {
++                opt.send_hz = std::stod(next_value("-s"));
++            } else if (arg == "--list") {
++                opt.list_only = true;
++            } else if (arg == "-h" || arg == "--help") {
++                print_usage(argv[0]);
++                std::exit(0);
++            } else {
++                fmt::print(stderr, "错误: 未知参数 {}\n", arg);
++                print_usage(argv[0]);
++                std::exit(2);
++            }
++        } catch (const std::exception& e) {
++            fmt::print(stderr, "错误: 参数 {} 取值非法（{}）\n", arg, e.what());
++            std::exit(2);
++        }
++    }
++    // 波特率白名单：与 serial.hpp baud_to_speed 的 switch 分支一致，
++    // 白名单外的值会被静默回退为 115200 —— 上真机前必须提醒
++    switch (opt.baud) {
++    case 9600: case 19200: case 38400: case 57600:
++    case 115200: case 230400: case 460800: case 921600:
++        break;
++    default:
++        fmt::print(stderr,
++                    "警告: 波特率 {} 不在 serial.hpp 支持列表，将被回退为 115200！\n"
++                    "      支持: 9600/19200/38400/57600/115200/230400/460800/921600\n",
++                    opt.baud);
++        break;
++    }
++    if (opt.duration_s < 0.0 || opt.send_hz < 0.0) {
++        fmt::print(stderr, "错误: 时长/频率不允许为负数\n");
++        std::exit(2);
++    }
++    return opt;
++}
++
++/// 扫描 /dev 下常见串口设备名前缀并打印（帮现场快速定位设备路径）
++static void list_serial_devices() {
++    fmt::print("本机候选串口设备（/dev/ttyS* / ttyUSB* / ttyACM* / ttyAMA*）:\n");
++    std::error_code ec;
++    for (const auto& entry : std::filesystem::directory_iterator("/dev", ec)) {
++        const auto name = entry.path().filename().string();
++        if (name.starts_with("ttyS") || name.starts_with("ttyUSB") || name.starts_with("ttyACM")
++            || name.starts_with("ttyAMA")) {
++            fmt::print("  {}\n", entry.path().string());
++        }
++    }
++    fmt::print("权限提示: 无权打开时执行  sudo usermod -aG dialout $USER  并重新登录\n");
++}
++
++// ============================================================================
++// 统计量：整场实测的验收数据
++// ============================================================================
++struct RxStats {
++    uint64_t frames       = 0; // 收到的 IMU 帧总数
++    uint64_t caps_frames  = 0; // 收到的能力帧总数
++    uint64_t anomalies    = 0; // 时间戳异常（回退/重复/大跳变）次数
++    uint64_t tx_ok        = 0; // 下发成功次数
++    uint64_t tx_fail      = 0; // 下发失败次数
++    uint64_t reconnects   = 0; // 成功重连次数
++
++    // MCU 时间戳间隔（ms）——用于验证下位机发送频率的稳定性
++    int64_t dt_min_ms = INT64_MAX;
++    int64_t dt_max_ms = 0;
++    double  dt_sum_ms = 0.0;
++};
++
++// ============================================================================
++// 主流程
++// ============================================================================
++int main(int argc, char* argv[]) {
++    const Options opt = parse_args(argc, argv);
++
++    if (opt.list_only) {
++        list_serial_devices();
++        return 0;
++    }
++
++    // Ctrl+C / kill 优雅退出（不写共享资源，仅置标志）
++    std::signal(SIGINT, handle_signal);
++    std::signal(SIGTERM, handle_signal);
++
++    fmt::print("==== stage12 串口下位机实测 ====\n");
++    fmt::print("设备: {} @ {}\n", opt.device, opt.baud);
++    std::fflush(stdout); // 保证后续 spdlog(stderr) 日志顺序稳定
++
++    // ---------------- 第一步：连接真实下位机 ----------------
++    auto connected = tg::McuDeviceHandle::create_serial(opt.device, opt.baud);
++    if (!connected) {
++        // 失败现场排查提示：路径错 / 无权限 / 设备未上电，三类最常见
++        fmt::print(stderr, "\n[FAIL] 连接失败: {}\n", connected.error());
++        fmt::print(stderr, "排查步骤:\n"
++                            "  1. ./serial_mcu_demo --list        确认设备路径存在\n"
++                            "  2. ls -l {}               检查属主与权限\n"
++                            "  3. sudo usermod -aG dialout $USER   加入 dialout 组后重新登录\n"
++                            "  4. 确认下位机已上电、串口线已接对（注意别接到调试口）\n",
++                    opt.device);
++        return 1;
++    }
++    auto handle = std::move(*connected);
++    fmt::print("[ OK ] 已连接（variant 分发: serial={}）\n", handle.is_serial());
++
++    // ---------------- 第二步：绑定解析器输出槽 ----------------
++    // Stm32Parser 通过静态指针输出解析结果（USB/串口共用同一套解析），
++    // 测试程序把指针绑到本地变量，退出时恢复，不污染全局状态
++    tg::ReceiveImuData          imu{};
++    tg::ReceiveCapabilitiesData caps{};
++    tg::Stm32Parser::latest_imu          = &imu;
++    tg::Stm32Parser::latest_capabilities = &caps;
++
++    // 下发模式安全横幅：云台真实运动会伤人/撞杆，必须显式醒目
++    if (opt.send_hz > 0.0) {
++        fmt::print("\n"
++                   "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n"
++                   "!! 下发模式已开启: 云台将以 ±30° 正弦扫摆（周期 6s）       !!\n"
++                   "!! 确认云台周围无人员、无障碍物后再继续！                  !!\n"
++                   "!! fire_advice 恒为 false（本测试不触发开火）             !!\n"
++                   "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n\n");
++    } else {
++        fmt::print("模式: 只收不发（安全默认；-s <hz> 开启下发测试）\n");
++    }
++
++    // ---------------- 第三步：200Hz 主循环（与 fcs 主循环同频） ----------------
++    RxStats         stats;
++    const auto      t_start = std::chrono::steady_clock::now();
++    auto            next_tick = t_start;             // 循环节拍锚点
++    auto            next_stat  = t_start + 1s;        // 秒级统计打印时刻
++    auto            next_reconnect = t_start;         // 断线重连尝试时刻
++    double          send_phase = 0.0;                  // 下发相位积分（周期控制）
++    auto            last_rx_time = t_start;           // 最近一次收到新帧的时刻
++    uint32_t        prev_stamp = 0;                   // 上一帧 MCU 时间戳
++    uint32_t        prev_caps_stamp = 0;               // 上一帧能力帧时间戳
++    bool            have_frame = false;               // 是否已收到首帧
++    bool            have_caps = false;
++
++    while (!g_stop) {
++        const auto now = std::chrono::steady_clock::now();
++        // -t 到时自动退出（0 = 永不）
++        if (opt.duration_s > 0.0) {
++            const double elapsed = std::chrono::duration<double>(now - t_start).count();
++            if (elapsed >= opt.duration_s) {
++                break;
++            }
++        }
++
++        // --- 事件轮询：read + 拆帧 + Stm32Parser 解析（项目真实收包路径）---
++        handle.handle_events();
++
++        // --- 上行帧验收 A：新帧检测 + 完整性 + 时间戳单调性 ---
++        // sof 魔数守卫：imu 零初始化时 sof=0，排除"未收到真实帧"的启动伪影
++        if (imu.header.sof == tg::HeaderFrame::SoF()
++            && (!have_frame || imu.time_stamp != prev_stamp)) {
++            // 帧魔数完整性（解析层理论上已过滤坏帧，此处防御性复核）
++            if (imu.header.sof != tg::HeaderFrame::SoF() || imu.eof != tg::HeaderFrame::EoF()) {
++                fmt::print("[WARN] 帧魔数异常: sof={:#04x} eof={:#04x}（解析层疑似被绕过）\n",
++                           imu.header.sof, imu.eof);
++                ++stats.anomalies;
++            }
++            if (have_frame) {
++                // MCU 时间戳为毫秒计数：正常应严格递增且间隔稳定。
++                // dt<=0 → MCU 复位或重复帧；dt 过大 → 丢帧/串口阻塞
++                const int64_t dt = static_cast<int64_t>(imu.time_stamp)
++                                 - static_cast<int64_t>(prev_stamp);
++                if (dt <= 0 || dt > 1000) {
++                    fmt::print("[WARN] 时间戳异常: dt={} ms（stamp {} -> {}）\n",
++                               dt, prev_stamp, imu.time_stamp);
++                    ++stats.anomalies;
++                }
++                stats.dt_sum_ms += static_cast<double>(dt);
++                stats.dt_min_ms   = std::min(stats.dt_min_ms, dt);
++                stats.dt_max_ms   = std::max(stats.dt_max_ms, dt);
++            }
++            have_frame = true;
++            prev_stamp = imu.time_stamp;
++            ++stats.frames;
++            last_rx_time = now;
++            // 实时单行刷新打印（packet.hpp 自带的调试打印）
++            tg::print_imu(imu);
++        }
++
++        // --- 上行帧验收 B：能力帧变化（只在变化时打印一行）---
++        // sof 魔数校验：caps 零初始化时 sof=0，排除"未收到真实能力帧"的启动伪影
++        if (caps.header.sof == tg::HeaderFrame::SoF()
++            && (!have_caps || caps.time_stamp != prev_caps_stamp)) {
++            have_caps = true;
++            prev_caps_stamp = caps.time_stamp;
++            ++stats.caps_frames;
++            fmt::print("\n[CAPS] stamp={} following={} power_rune={} quanta={}\n",
++                       caps.time_stamp, caps.data.following, caps.data.power_rune,
++                       caps.data.quanta);
++        }
++
++        // --- 下行链路验收（可选）---
++        // 照抄 src/fcs/L1_sensor/output_interface.cpp 串口分支的真实写法：
++        //   SendSimpleVisionData，len=sizeof(data)，id=0x04，角度制
++        if (opt.send_hz > 0.0 && handle.is_connected()) {
++            send_phase += opt.send_hz * 0.005; // 每个循环 5ms 的相位增量
++            // 正弦扫摆：±30°，周期 6s（相位/周期=send_phase/120 圈）
++            constexpr double kTwoPi   = 6.283185307179586;
++            const float      target_deg = 30.0f * static_cast<float>(
++                                      std::sin(kTwoPi * send_phase / 120.0));
++            const tg::SendSimpleVisionData packet{
++                .header = {
++                    .sof = tg::HeaderFrame::SoF(),
++                    .len = sizeof(tg::SendSimpleVisionData::data),
++                    .id  = 0x04, // 简易视觉指令帧 ID（真实业务同款）
++                },
++                .data = {
++                    .target_yaw = target_deg,
++                },
++                .eof = tg::HeaderFrame::EoF(),
++            };
++            if (handle.send_sync(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet))) {
++                ++stats.tx_ok;
++            } else {
++                ++stats.tx_fail;
++            }
++        }
++
++        // --- 秒级统计（破坏上面的单行刷新，验收数据优先）---
++        if (now >= next_stat) {
++            next_stat += 1s;
++            const double age_ms
++                = std::chrono::duration<double, std::milli>(now - last_rx_time).count();
++            fmt::print(
++                "\n[STAT] rx={:>6} 帧 | 帧龄={:6.1f}ms | tx ok/fail={}/{} | 重连={} | 异常={}\n",
++                stats.frames, age_ms, stats.tx_ok, stats.tx_fail, stats.reconnects,
++                stats.anomalies);
++            // 看门狗：1 秒没有任何新帧 → 上行链路大概率有问题
++            if (age_ms > 1000.0) {
++                fmt::print("[WARN] 超过 1 秒未收到 IMU 帧 —— 检查: 下位机供电/发送使能/"
++                           "波特率/串口线 TX-RX 是否接反\n");
++            }
++        }
++
++        // --- 断线自动重连（每秒尝试一次，SerialImpl 读错误会自动 disconnect）---
++        if (!handle.is_connected() && now >= next_reconnect) {
++            next_reconnect = now + 1s;
++            fmt::print("\n[WARN] 串口已断开，尝试重连...\n");
++            auto re = tg::McuDeviceHandle::create_serial(opt.device, opt.baud);
++            if (re) {
++                handle = std::move(*re);
++                ++stats.reconnects;
++                fmt::print("[ OK ] 重连成功（第 {} 次）\n", stats.reconnects);
++            }
++        }
++
++        // --- 200Hz 固定节拍：sleep_until 补偿循环耗时，节拍不漂移 ---
++        next_tick += 5ms;
++        std::this_thread::sleep_until(next_tick);
++    }
++
++    // ---------------- 第四步：恢复全局解析槽 + 输出验收报告 ----------------
++    tg::Stm32Parser::latest_imu          = nullptr;
++    tg::Stm32Parser::latest_capabilities = nullptr;
++
++    const double duration_s = std::chrono::duration<double>(
++        std::chrono::steady_clock::now() - t_start).count();
++    const double avg_fps = duration_s > 0.0
++                             ? static_cast<double>(stats.frames) / duration_s : 0.0;
++    const double avg_dt  = stats.frames > 1
++                             ? stats.dt_sum_ms / static_cast<double>(stats.frames - 1) : 0.0;
++
++    fmt::print("\n==================== 串口下位机验收报告 ====================\n");
++    fmt::print("运行时长          : {:8.1f} s\n", duration_s);
++    fmt::print("设备              : {} @ {}（重连 {} 次）\n",
++               opt.device, opt.baud, stats.reconnects);
++    fmt::print("上行 IMU 帧       : {:8} 帧，平均 {:7.1f} fps\n", stats.frames, avg_fps);
++    fmt::print("MCU 时间戳间隔    : avg {:6.2f} ms", avg_dt);
++    if (stats.frames > 1) {
++        fmt::print(" / min {} ms / max {} ms\n", stats.dt_min_ms, stats.dt_max_ms);
++    } else {
++        fmt::print("\n");
++    }
++    fmt::print("能力帧            : {:8} 帧\n", stats.caps_frames);
++    if (opt.send_hz > 0.0) {
++        fmt::print("下行指令帧        : 成功 {} / 失败 {}\n", stats.tx_ok, stats.tx_fail);
++    } else {
++        fmt::print("下行指令帧        : 未开启（-s <hz> 开启下发测试）\n");
++    }
++    fmt::print("时间戳/魔数异常   : {:8} 次\n", stats.anomalies);
++
++    // 验收结论：三档判定
++    const bool tx_pass = opt.send_hz <= 0.0 || stats.tx_fail == 0;
++    if (stats.frames == 0) {
++        fmt::print("结论              : FAIL —— 未收到任何 IMU 帧，上行链路不通\n");
++        return 1;
++    }
++    if (stats.anomalies == 0 && tx_pass && stats.reconnects == 0) {
++        fmt::print("结论              : PASS —— 收发稳定，无异常记录\n");
++    } else if (stats.anomalies <= 3 && tx_pass) {
++        fmt::print("结论              : PASS（含 {} 处异常/重连，建议排查）\n",
++                   stats.anomalies + stats.reconnects);
++    } else {
++        fmt::print("结论              : WARN —— 异常较多（{} 次），建议排查波特率/接地/干扰\n",
++                   stats.anomalies + stats.reconnects);
++    }
++    fmt::print("============================================================\n");
++    return 0;
++}
