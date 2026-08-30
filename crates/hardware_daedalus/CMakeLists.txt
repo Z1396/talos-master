@@ -4,4 +4,5 @@ crate(
     DEPS
         opencv_core
         magic_enum
+        fmt::fmt
 )
