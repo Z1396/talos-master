@@ -1,13 +1,22 @@
 # ===========================================================================
 # 覆盖上级 talos-master/.clangd 的 CompilationDatabase 设置
 # ---------------------------------------------------------------------------
-# 上级 talos-master/.clangd 将编译数据库强制指向 talos 主项目的 build/，
-# 导致本项目源文件在其中找不到编译记录，clangd 退回盲猜模式、
-# 缺失 -I 头文件路径，从而 #include "frame.hpp" 等全部飘红。
-# 这里把编译数据库重新指向本项目自己的 build/compile_commands.json。
-# 本项目是 C++23（CDB 命令自带 -std=gnu++2b），显式锁定标准版本。
+# 本项目尚未构建（无 build/compile_commands.json），clangd 无法从数据库
+# 获得 -I 路径。这里显式列出头文件搜索路径（与 CMakeLists.txt 的
+# target_include_directories 一致），保证未构建时也不飘红。
+#   fast_tf 真实源码 ：crates/fast_tf/src
+#   math（euler.hpp） ：crates/math/src + 3dparty/lieplusplus
+#   compat           ：本 stage 自带 opencv2 替身（cv::Vec）
+#   Eigen / fmt      ：主项目构建缓存 build/_deps
+#   oneTBB           ：系统头文件 /usr/include/tbb（默认搜索路径，无需 -I）
 # ===========================================================================
 CompileFlags:
   CompilationDatabase: build
   Add:
     - -std=gnu++2b    # 显式锁定 C++23（GNU 扩展模式），与项目实际编译标准一致
+    - -I/home/pldx/Desktop/talos-master/crates/fast_tf/src
+    - -I/home/pldx/Desktop/talos-master/crates/math/src
+    - -I/home/pldx/Desktop/talos-master/3dparty/lieplusplus
+    - -I/home/pldx/Desktop/talos-master/learning_practice/stage9_fast_tf/compat
+    - -I/home/pldx/Desktop/talos-master/build/_deps/eigen-src/include
+    - -I/home/pldx/Desktop/talos-master/build/_deps/fmt-src/include

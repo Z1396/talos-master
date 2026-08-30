@@ -10,17 +10,15 @@
 // ===========================================================================
 #pragma once
 
-#include <cstddef>
-
 namespace cv {
 
-/// 固定长度数值向量（对齐 OpenCV cv::Vec<_Tp, n> 的最小子集）
-template <typename _Tp, int n>
+/// 固定长度数值向量（对齐 OpenCV cv::Vec<Tp, n> 的最小子集）
+template <typename Tp, int n>
 struct Vec {
-    _Tp val[n]{};
+    Tp val[n]{};
 
-    _Tp operator[](int i) const { return val[i]; }
-    _Tp& operator[](int i) { return val[i]; }
+    Tp operator[](int i) const { return val[i]; }
+    Tp& operator[](int i) { return val[i]; }
 
     static constexpr int channels = n;
 };
