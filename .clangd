@@ -9,6 +9,8 @@ CompileFlags:
     - -I/home/pldx/Desktop/talos-master/crates/fast_tf/src
     - -I/home/pldx/Desktop/talos-master/crates/math/src
     - -I/home/pldx/Desktop/talos-master/crates/log/src
+    - -I/home/pldx/Desktop/talos-master/crates/hardware/at_gimbal/src
+    - -I/home/pldx/Desktop/talos-master/build/_deps/libusb-src
     - -I/home/pldx/Desktop/talos-master/src
     - -I/home/pldx/Desktop/talos-master/src/fcs_visualization
     - -I/home/pldx/Desktop/talos-master/3dparty/boost-pfr/include
