@@ -26,22 +26,21 @@
 // talos_gimbal 串口通信协议（被测头文件）
 #include "talos_gimbal/mcu_device.hpp"
 #include "talos_gimbal/packet.hpp"
-#include "talos_gimbal/serial.hpp"
 #include "talos_gimbal/stm32.hpp"
 
 // C++ 标准库
-#include <cstddef>     // std::byte
-#include <cstdint>     // 固定宽度整型
-#include <cstring>     // memcmp/memcpy
-#include <string>      // 错误信息
-#include <type_traits> // std::endian
-#include <vector>      // 字节流容器
+#include <bit>     // std::endian 字节序检测
+#include <cstddef> // std::byte
+#include <cstdint> // 固定宽度整型
+#include <cstring> // memcmp/memcpy
+#include <string>  // 错误信息
+#include <vector>  // 字节流容器
 
 // POSIX 系统调用
-#include <fcntl.h>    // open/O_RDWR
-#include <poll.h>     // poll
-#include <pty.h>      // posix_openpt/grantpt/unlockpt/ptsname
-#include <unistd.h>   // read/write/close
+#include <fcntl.h>  // open/O_RDWR
+#include <poll.h>   // poll
+#include <pty.h>    // posix_openpt/grantpt/unlockpt/ptsname
+#include <unistd.h> // read/write/close
 
 namespace tg = talos_gimbal;
 
@@ -52,7 +51,29 @@ namespace tg = talos_gimbal;
 static_assert(std::endian::native == std::endian::little, "协议要求小端平台");
 
 // 帧头：sof + len + id = 3 字节，pack(1) 不允许有填充
+/*如果断言失败会发生什么？
+error: static assertion failed
+note: the comparison reduces to '4 == 3'
+编译立即停止，防止生成与 STM32 下位机不兼容的可执行文件。*/
 static_assert(sizeof(tg::HeaderFrame) == 3);
+/*# offsetof
+#include <cstddef>
+**`offsetof(T, member)`**：得到结构体成员相对于结构体起始地址的**字节偏移量（size_t）**。
+> 是宏，不是函数；编译期可以求值（普通标准布局类型）。
+struct S {
+    char a;     // 0
+    int  b;     // 4  (因为对齐，a占1，填充3字节)
+    short c;    // 8
+};
+// 获取成员偏移
+size_t off_a = offsetof(S, a); // 0
+size_t off_b = offsetof(S, b); // 4
+size_t off_c = offsetof(S, c); // 8
+内存布局：
+| 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| a | pad | pad | pad | b(0‑3) | b | b | b | c | c |
+`offsetof(S,b)` = 4：从 `S*` 起始地址，加 4 字节才到 `b`。*/
 static_assert(offsetof(tg::HeaderFrame, sof) == 0);
 static_assert(offsetof(tg::HeaderFrame, len) == 1);
 static_assert(offsetof(tg::HeaderFrame, id) == 2);
@@ -104,19 +125,19 @@ constexpr uint8_t payload_len() {
 /// 构造一份字段确定可断言的完整 IMU 帧
 static tg::ReceiveImuData make_imu_frame(const uint32_t stamp, const float yaw) {
     tg::ReceiveImuData frame{};
-    frame.header.sof = tg::HeaderFrame::SoF();
-    frame.header.len = payload_len<tg::ReceiveImuData>();
-    frame.header.id  = 0x01;
-    frame.time_stamp = stamp;
+    frame.header.sof        = tg::HeaderFrame::SoF();
+    frame.header.len        = payload_len<tg::ReceiveImuData>();
+    frame.header.id         = 0x01;
+    frame.time_stamp        = stamp;
     frame.data.self_color   = tg::Color::Blue;
     frame.data.bullet_speed = 15.5f;
-    frame.data.yaw           = yaw;
-    frame.data.pitch         = 0.02f;
-    frame.data.roll          = -0.03f;
-    frame.data.yaw_vel       = 1.25f;
-    frame.data.pitch_vel     = -2.5f;
-    frame.data.roll_vel      = 0.5f;
-    frame.eof                = tg::HeaderFrame::EoF();
+    frame.data.yaw          = yaw;
+    frame.data.pitch        = 0.02f;
+    frame.data.roll         = -0.03f;
+    frame.data.yaw_vel      = 1.25f;
+    frame.data.pitch_vel    = -2.5f;
+    frame.data.roll_vel     = 0.5f;
+    frame.eof               = tg::HeaderFrame::EoF();
     return frame;
 }
 
@@ -129,6 +150,10 @@ static std::vector<uint8_t> to_bytes(const T& value) {
 }
 
 /// 字节流 → span<std::byte>（Stm32Parser::parse 的入参类型）
+/*std::span<const std::byte>	C++20 连续内存视图，只读字节序列
+reinterpret_cast<const std::byte*>	将 const uint8_t* 强制转为 const std::byte*
+bytes.data()	获取 vector 内部数组首地址
+bytes.size()	元素个数（字节数）*/
 static std::span<const std::byte> as_span(const std::vector<uint8_t>& bytes) {
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
@@ -164,7 +189,7 @@ public:
     [[nodiscard]] const std::string& slave_path() const { return slave_path_; }
 
     /// 下位机 → 上位机：向 master 写数据（模拟 STM32 发帧）
-    bool write_master(const void* data, const size_t size) {
+    bool write_master(const void* data, const size_t size) const {
         return ::write(master_, data, size) == static_cast<ssize_t>(size);
     }
 
@@ -188,7 +213,7 @@ public:
     }
 
 private:
-    int         master_    = -1;
+    int master_ = -1;
     std::string slave_path_;
 };
 
@@ -208,7 +233,7 @@ protected:
         tg::Stm32Parser::latest_capabilities = nullptr;
     }
 
-    tg::ReceiveImuData          imu_{}; // 输出槽：清零初始化
+    tg::ReceiveImuData imu_{}; // 输出槽：清零初始化
     tg::ReceiveCapabilitiesData caps_{};
 };
 
@@ -234,11 +259,11 @@ TEST_F(Stm32ParserTest, ParsesValidImuFrame) {
 /// 正常流程：能力开关帧（id=0x03，size==11）只填充 capabilities
 TEST_F(Stm32ParserTest, ParsesValidCapabilitiesFrame) {
     tg::ReceiveCapabilitiesData frame{};
-    frame.header.sof = tg::HeaderFrame::SoF();
-    frame.header.len = payload_len<tg::ReceiveCapabilitiesData>();
-    frame.header.id  = 0x03;
-    frame.time_stamp = 42u;
-    frame.data.following = 1;
+    frame.header.sof      = tg::HeaderFrame::SoF();
+    frame.header.len      = payload_len<tg::ReceiveCapabilitiesData>();
+    frame.header.id       = 0x03;
+    frame.time_stamp      = 42u;
+    frame.data.following  = 1;
     frame.data.power_rune = 0;
     frame.data.quanta     = 1;
     frame.eof             = tg::HeaderFrame::EoF();
@@ -262,10 +287,10 @@ TEST_F(Stm32ParserTest, MergesSimpleImuIntoLatestImu) {
     ASSERT_FLOAT_EQ(imu_.data.yaw_vel, 1.25f);
 
     tg::ReceiveSimpleImuData simple{};
-    simple.header.sof = tg::HeaderFrame::SoF();
-    simple.header.len = payload_len<tg::ReceiveSimpleImuData>();
-    simple.header.id  = 0x03;
-    simple.time_stamp = 999u;
+    simple.header.sof      = tg::HeaderFrame::SoF();
+    simple.header.len      = payload_len<tg::ReceiveSimpleImuData>();
+    simple.header.id       = 0x03;
+    simple.time_stamp      = 999u;
     simple.data.self_color = tg::Color::Red;
     simple.data.yaw        = 0.5f;
     simple.data.pitch      = -0.25f;
@@ -297,10 +322,10 @@ TEST_F(Stm32ParserTest, DropsTooSmallFrame) {
 
 /// 异常处理：帧头魔数错误整帧丢弃
 TEST_F(Stm32ParserTest, DropsInvalidSoF) {
-    auto       frame = make_imu_frame(77u, 0.7f);
+    auto frame       = make_imu_frame(77u, 0.7f);
     const auto bytes = to_bytes(frame);
-    auto       bad   = bytes;
-    bad[0]            = 0x00; // 篡改 SoF
+    auto bad         = bytes;
+    bad[0]           = 0x00; // 篡改 SoF
 
     tg::Stm32Parser::parse(as_span(bad));
     EXPECT_EQ(imu_.time_stamp, 0u);
@@ -312,7 +337,7 @@ TEST_F(Stm32ParserTest, DropsInvalidSoF) {
 
 /// 异常处理：未知帧 ID 静默忽略（前向兼容：下位机新增帧不崩溃）
 TEST_F(Stm32ParserTest, IgnoresUnknownFrameId) {
-    auto frame = make_imu_frame(88u, 0.7f);
+    auto frame      = make_imu_frame(88u, 0.7f);
     frame.header.id = 0x42; // 未定义的帧ID
 
     tg::Stm32Parser::parse(as_span(to_bytes(frame)));
@@ -366,8 +391,8 @@ protected:
         tg::Stm32Parser::latest_capabilities = nullptr;
     }
 
-    PtyPair                    pty_; // master=测试(下位机侧)，slave=被测串口
-    tg::ReceiveImuData          imu_{};
+    PtyPair pty_; // master=测试(下位机侧)，slave=被测串口
+    tg::ReceiveImuData imu_{};
     tg::ReceiveCapabilitiesData caps_{};
 };
 
@@ -401,7 +426,7 @@ TEST_F(SerialImplTest, ConnectAndDisconnect) {
 /// 异常处理：未连接时 send_sync → "device not connected"
 TEST_F(SerialImplTest, SendSyncFailsWhenNotConnected) {
     tg::SerialDevice device;
-    const uint8_t    data[] = {0x5A, 0x01, 0x01};
+    const uint8_t data[] = {0x5A, 0x01, 0x01};
 
     const auto result = device.send_sync(data, sizeof(data));
     ASSERT_FALSE(result.has_value());
@@ -415,9 +440,9 @@ TEST_F(SerialImplTest, SendSyncRoundTrip) {
 
     // 构造视觉预测指令帧（上位机 → MCU 的业务载荷）
     tg::SendVisionData vision{};
-    vision.header.sof = tg::HeaderFrame::SoF();
-    vision.header.id  = 0x02;
-    vision.data.fire_advice = true;
+    vision.header.sof        = tg::HeaderFrame::SoF();
+    vision.header.id         = 0x02;
+    vision.data.fire_advice  = true;
     vision.data.target_yaw   = 1.234f;
     vision.data.target_pitch = -0.567f;
     vision.data.distance     = 6.28f;
@@ -476,9 +501,9 @@ TEST_F(SerialImplTest, RecoversAfterBadEof) {
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
-    auto       bad    = to_bytes(make_imu_frame(66u, 0.1f));
-    bad.back()        = 0x00; // 篡改 EoF
-    const auto good   = to_bytes(make_imu_frame(77u, 0.2f));
+    auto bad        = to_bytes(make_imu_frame(66u, 0.1f));
+    bad.back()      = 0x00; // 篡改 EoF
+    const auto good = to_bytes(make_imu_frame(77u, 0.2f));
 
     std::vector<uint8_t> stream = bad;
     stream.insert(stream.end(), good.begin(), good.end());
@@ -520,14 +545,14 @@ TEST_F(SerialImplTest, ParsesMultipleFramesInOneRead) {
     const auto f2 = to_bytes(make_imu_frame(2u, 0.10f));
 
     tg::ReceiveCapabilitiesData caps_frame{};
-    caps_frame.header.sof = tg::HeaderFrame::SoF();
-    caps_frame.header.len = payload_len<tg::ReceiveCapabilitiesData>();
-    caps_frame.header.id  = 0x03;
-    caps_frame.time_stamp = 3u;
+    caps_frame.header.sof     = tg::HeaderFrame::SoF();
+    caps_frame.header.len     = payload_len<tg::ReceiveCapabilitiesData>();
+    caps_frame.header.id      = 0x03;
+    caps_frame.time_stamp     = 3u;
     caps_frame.data.following = 1;
-    caps_frame.data.quanta     = 1;
-    caps_frame.eof             = tg::HeaderFrame::EoF();
-    const auto f3 = to_bytes(caps_frame);
+    caps_frame.data.quanta    = 1;
+    caps_frame.eof            = tg::HeaderFrame::EoF();
+    const auto f3             = to_bytes(caps_frame);
 
     std::vector<uint8_t> stream;
     stream.insert(stream.end(), f1.begin(), f1.end());
@@ -589,7 +614,8 @@ TEST_F(SerialImplTest, RxBufferDrainsAfterParse) {
 // ============================================================================
 /// 异常处理：create_serial 失败 → 错误信息含路径与波特率上下文
 TEST(McuDeviceHandleTest, CreateSerialFailureIncludesContext) {
-    const auto result = tg::McuDeviceHandle::create_serial("/dev/does-not-exist-talos-test", 115200);
+    const auto result =
+        tg::McuDeviceHandle::create_serial("/dev/does-not-exist-talos-test", 115200);
 
     ASSERT_FALSE(result.has_value());
     EXPECT_NE(result.error().find("connect serial mcu"), std::string::npos);
@@ -611,10 +637,10 @@ TEST(McuDeviceHandleTest, CreateSerialOverPty) {
 
     // 句柄统一 send_sync 下发指令，PTY master 侧收到
     tg::SendSimpleVisionData simple{};
-    simple.header.sof = tg::HeaderFrame::SoF();
-    simple.header.id  = 0x04;
+    simple.header.sof      = tg::HeaderFrame::SoF();
+    simple.header.id       = 0x04;
     simple.data.target_yaw = -0.5f;
-    const auto bytes = to_bytes(simple);
+    const auto bytes       = to_bytes(simple);
 
     ASSERT_TRUE(handle.send_sync(bytes.data(), bytes.size()).has_value());
     const auto received = pty.read_master(bytes.size());
@@ -624,7 +650,7 @@ TEST(McuDeviceHandleTest, CreateSerialOverPty) {
     // 句柄统一 handle_events 收帧解析
     tg::ReceiveImuData imu{};
     tg::Stm32Parser::latest_imu = &imu;
-    const auto frame = to_bytes(make_imu_frame(31337u, 0.42f));
+    const auto frame            = to_bytes(make_imu_frame(31337u, 0.42f));
     ASSERT_TRUE(pty.write_master(frame.data(), frame.size()));
     handle.handle_events();
     tg::Stm32Parser::latest_imu = nullptr;
