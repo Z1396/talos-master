@@ -2,6 +2,9 @@
 #include <gtest/gtest.h>
 // L3能量机关简易跟踪器顶层头文件（运动学模型+EKF+状态机封装）
 #include "L3_estimation/ldm_naive/ldm_tracker.hpp"
+// 机器人跟踪器（TrackerNew/TrackerConfig/RobotEkfMotionModel/ArmorMeasurementBatch）
+#include "L3_estimation/tracker/new_tracker.hpp"
+#include "L3_estimation/tracker/types.hpp"
 
 // Eigen线性代数库：矩阵、旋转、向量运算
 #include <Eigen/Core>
@@ -14,9 +17,9 @@
 
 namespace {
 // 别名简化长类型书写
-using Model   = fcs::L3::ldm::LdmKinematic;       // LDM大符SE(3)运动学模型
-using Nominal = Model::Nominal;                  // SE(3)名义状态：R(旋转)+t(平移/速度)
-using CovXi   = Model::CovXi;                    // 李群切空间协方差矩阵
+using Model   = fcs::L3::ldm::LdmKinematic; // LDM大符SE(3)运动学模型
+using Nominal = Model::Nominal;             // SE(3)名义状态：R(旋转)+t(平移/速度)
+using CovXi   = Model::CovXi;               // 李群切空间协方差矩阵
 
 /**
  * @brief 构造SE(3)名义状态Nominal
@@ -75,7 +78,27 @@ Model::PoseMeasurement
     return Model::PoseMeasurement{.R_world_body = R, .p_world_body = position};
 }
 
-} // 匿名工具命名空间结束
+/**
+ * @brief 生成单帧装甲观测测量值（与 aimer_phase_test.cpp 同源实现）
+ * @param armor_pose 装甲位姿 [x,y,z,yaw]
+ * @param name 装甲类型编号
+ * @param image_center_distance 装甲离图像中心距离，用于选择权重
+ */
+fcs::ArmorMeasurement make_measurement(
+    const Eigen::Vector4d& armor_pose, fcs::ArmorName name, float image_center_distance = 0.0f) {
+    fcs::ArmorMeasurement measurement;
+    measurement.transform = fcs::ArmorMeasurement::Transform::from_rpy(
+        0.0, 0.0, armor_pose[3], armor_pose[0], armor_pose[1], armor_pose[2]);
+    measurement.name                     = name;
+    measurement.color                    = fcs::ArmorColor::Blue;
+    measurement.type                     = fcs::ArmorType::Small;
+    measurement.confidence               = 1.0f;
+    measurement.distance_to_image_center = image_center_distance;
+    measurement.timestamp_ns             = 0;
+    return measurement;
+}
+
+} // namespace
 
 //=====================================================================================
 // 一、底层运动学模型 LdmKinematic 纯数学单元测试
@@ -332,7 +355,8 @@ TEST(LdmTracker, MissingMeasurementEntersTempLostAndTimesOut) {
 }
 
 /**
- * 测试3：检测阶段（Detecting）丢一帧观测直接退回Idle，不保留临时状态
+ * 测试3：检测阶段（Detecting）丢一帧观测保持 Detecting，不退回 Idle
+ * 状态机语义：Detecting 的丢帧分支为空（保持状态），仅 TempLost 超时才回退 Idle
  */
 TEST(LdmTracker, DetectingDropsToIdleOnMissingMeasurement) {
     fcs::L3::ldm::NaiveLdmConfig config;
@@ -344,10 +368,12 @@ TEST(LdmTracker, DetectingDropsToIdleOnMissingMeasurement) {
     tracker.update(1'000'000, z);
     ASSERT_EQ(tracker.status(), fcs::L3::TrackerStatus::Detecting);
 
-    // 下一帧无观测，直接清空进入空闲
+    // 下一帧无观测：Detecting 状态保持（state_machine_ 中 Detecting 的丢帧分支
+    // 不做任何转移，仅在连续检测达阈值后进入 Tracking；回退 Idle 只发生在 TempLost 超时）
     tracker.update(2'000'000, std::nullopt);
-    EXPECT_EQ(tracker.status(), fcs::L3::TrackerStatus::Idle);
-    EXPECT_FALSE(tracker.get_output().has_value());
+    EXPECT_EQ(tracker.status(), fcs::L3::TrackerStatus::Detecting);
+    // Detecting 阶段输出有效（仅 Idle 状态 get_output 无值）
+    EXPECT_TRUE(tracker.get_output().has_value());
 }
 
 /**
@@ -371,8 +397,10 @@ TEST(LdmTracker, OutputVelocityWorldMatchesBodyVelocityThroughRotation) {
     const auto output = tracker.get_output();
     ASSERT_TRUE(output.has_value());
     // 世界速度 = R × 机体速度，误差趋近0
+    // LdmState 的访问器是函数：velocity_world()/velocity_body()/rotation()
     EXPECT_NEAR(
-        (output->velocity_world - output->R_world_body * output->velocity_body).norm(), 0.0, 1e-12);
+        (output->velocity_world() - output->rotation() * output->velocity_body()).norm(), 0.0,
+        1e-12);
 }
 
 /**

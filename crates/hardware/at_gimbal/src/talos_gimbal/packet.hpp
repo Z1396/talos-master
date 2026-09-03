@@ -31,6 +31,11 @@ enum class Color : uint8_t {
 // 串口/网口二进制通信必须开启，保证结构体内存布局和协议帧格式完全一致
 struct HeaderFrame {
     // 帧头静态常量函数，返回帧起始标识字节 0x5A
+    // 这行代码定义了一个静态常量成员函数，返回协议帧的起始标志（Start of Frame）魔数 0x5A。
+    /*static	属于类本身，无需实例化即可调用 HeaderFrame::SoF()
+    constexpr	编译期求值，可用于 static_assert、数组大小等编译期上下文
+    uint8_t	    返回类型，无符号8位整数（0~255）
+    0x5A	    十六进制值，ASCII 字符 'Z'*/
     static constexpr uint8_t SoF() { return 0x5A; }
     // 帧尾静态常量函数，返回帧结束标识字节 0xA5
     static constexpr uint8_t EoF() { return 0xA5; }
