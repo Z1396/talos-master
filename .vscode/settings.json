@@ -17,8 +17,4 @@
     ],
     "editor.formatOnSave": true,
     "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-    "files.exclude": {
-        "**/3dparty/**": true,
-        "**/build/_deps/**": true
-    }
 }
