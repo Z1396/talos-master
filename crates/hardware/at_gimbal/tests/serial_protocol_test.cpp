@@ -166,9 +166,26 @@ static std::span<const std::byte> as_span(const std::vector<uint8_t>& bytes) {
 class PtyPair {
 public:
     PtyPair() {
-        // 打开 PTY master：读写 | 不作为控制终端
+        /*- 打开一个 PTY master 伪终端。
+        - `O_RDWR`：可读可写。
+        - `O_NOCTTY`：**不要把这个 PTY 设置成当前进程的控制终端**（非常关键，否则信号行为会错乱）。
+        - 返回值：成功返回 master fd；失败返回 `-1`。
+        > ⚠️ 代码这里没有判断 `master_ < 0` 的错误处理，生产要补；测试环境一般没问题。*/
         master_ = ::posix_openpt(O_RDWR | O_NOCTTY);
-        // 分配 slave 权限并解锁，获取 slave 路径（/dev/pts/N）
+        /*2. **`grantpt(int fd)`**
+        int grantpt(int fd);
+        设置 PTY‑slave 设备文件权限、属主。必须调用，否则 slave 打不开。返回 0 成功，‑1 失败。
+
+        3. **`unlockpt(int fd)`**
+        int unlockpt(int fd);
+        解锁 slave 设备。**在使用 slave 之前必须解锁**。grantpt 之后一定要 unlockpt。返回 0 成功。
+
+        4. **`ptsname(int fd)`**
+        char* ptsname(int fd);
+        返回 master 对应的 slave 设备路径字符串，例如 `"/dev/pts/5"`。
+        > 返回的指针是库内部静态缓冲区，**必须立刻拷贝出来**，所以代码存入 `slave_path_`。
+        > 调用顺序硬性规定：
+        > `posix_openpt()` → `grantpt()` → `unlockpt()` → `ptsname()`，顺序不能乱。*/
         if (::grantpt(master_) == 0 && ::unlockpt(master_) == 0) {
             slave_path_ = ::ptsname(master_);
         }
@@ -195,22 +212,53 @@ public:
 
     /// 上位机 → 下位机：从 master 读数据（接收上位机下发指令），带超时
     std::vector<uint8_t> read_master(const size_t size, const int timeout_ms = 500) {
+        // 预分配一块缓冲区，最大准备接收 size 字节；vector初始全部填0
         std::vector<uint8_t> buffer(size);
+
+        // got：记录已经成功读到多少字节，初始0
         size_t got = 0;
-        while (got < size) {
+
+        // 循环：还没有读到期望的size字节就继续循环
+        while (got < size)
+        {
+            // 定义pollfd结构体，用来告诉poll要监听哪个fd、关心什么事件
+            // fd：要监听的文件描述符，这里是pty master的fd
+            // events：我们关心的事件，POLLIN = 有数据可读
+            // revents：输出参数，poll系统调用返回后，由内核填充实际发生的事件
             struct pollfd pfd{.fd = master_, .events = POLLIN, .revents = 0};
-            if (::poll(&pfd, 1, timeout_ms) <= 0 || !(pfd.revents & POLLIN)) {
-                break; // 超时：返回已读部分
+
+            // poll(fds数组, fds数量, 超时毫秒)
+            // 返回值：>0 有就绪事件；0 超时；-1 系统调用出错
+            // 条件判断：poll<=0 代表超时/出错；或者revents里面没有POLLIN（没有可读数据）
+            if (::poll(&pfd, 1, timeout_ms) <= 0 || !(pfd.revents & POLLIN))
+            {
+                break; // 超时 / 出错 / 没有可读数据，直接跳出读循环，返回目前已经读到的部分
             }
+
+            // poll确认有数据可读，调用read系统调用读取字节
+            // buffer.data() + got：写到buffer里面“已经读到位置”的后面，追加写入
+            // size - got：剩余还想要读的字节数（缓冲区剩余空间）
+            // 返回n：实际读到的字节数；n>0正常读到；n=0代表EOF对端挂断；n=-1出错
             const auto n = ::read(master_, buffer.data() + got, size - got);
-            if (n <= 0) {
+
+            // n <= 0：EOF或者系统调用出错，直接退出循环，不再继续读
+            if (n <= 0)
+            {
                 break;
             }
+
+            // 累加已经读到的字节数量，n是ssize_t有符号，转成无符号size_t存入got
             got += static_cast<size_t>(n);
         }
+
+        // buffer原本分配了size大小；现在resize裁剪为实际读到got字节。
+        // 如果什么都没读到 got=0，返回空vector。
         buffer.resize(got);
+
+        // 返回读到的数据（可能不足size字节，超时就返回已读到的片段）
         return buffer;
     }
+
 
 private:
     int master_ = -1;
@@ -237,141 +285,266 @@ protected:
     tg::ReceiveCapabilitiesData caps_{};
 };
 
-/// 正常流程：合法 IMU 帧（id=0x01）逐字段完整解析
+// ============================================================================
+// 测试套件：Stm32ParserTest
+// 测试目标：Stm32Parser 静态解析器的帧解析逻辑
+// 测试策略：直接向解析器喂入字节流，验证解析结果
+// 测试环境：无真实硬件，纯内存操作
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 测试用例 1：正常流程 - 完整 IMU 帧（ID=0x01）逐字段解析
+// 验证解析器能正确解析完整 IMU 帧的所有字段
+// ----------------------------------------------------------------------------
 TEST_F(Stm32ParserTest, ParsesValidImuFrame) {
+    // 1. 构造一个完整的 IMU 帧
+    //    make_imu_frame() 创建 ReceiveImuData 结构体，填充：
+    //    - 帧头：SoF=0x5A, len=30, id=0x01
+    //    - 时间戳：123456
+    //    - 颜色：Blue
+    //    - 弹速：15.5 m/s
+    //    - 姿态：yaw=1.5, pitch=0.02, roll=-0.03
+    //    - 角速度：yaw_vel=1.25, pitch_vel=-2.5, roll_vel=0.5
+    //    - 帧尾：EoF=0xA5
     const auto frame = make_imu_frame(123456u, 1.5f);
+    
+    // 2. 序列化 + 解析
+    //    to_bytes(frame)    ：结构体 → vector<uint8_t> 字节流
+    //    as_span(...)       ：vector<uint8_t> → span<const std::byte>
+    //    Stm32Parser::parse ：解析字节流，结果存入 imu_（通过全局指针）
     tg::Stm32Parser::parse(as_span(to_bytes(frame)));
 
-    // 帧头 + 时间戳 + 全部姿态字段 bit 级一致
+    // 3. 验证：帧头完全一致
+    //    memcmp 比较 imu_.header 和 frame.header 的内存
+    //    返回 0 表示完全相同（3 字节：sof, len, id）
     EXPECT_EQ(memcmp(&imu_.header, &frame.header, sizeof(frame.header)), 0);
+    
+    // 4. 验证：时间戳正确
     EXPECT_EQ(imu_.time_stamp, 123456u);
+    
+    // 5. 验证：颜色正确（Blue = 1）
     EXPECT_EQ(imu_.data.self_color, tg::Color::Blue);
+    
+    // 6. 验证：弹速正确（使用 EXPECT_FLOAT_EQ 处理浮点误差）
     EXPECT_FLOAT_EQ(imu_.data.bullet_speed, 15.5f);
+    
+    // 7. 验证：偏航角正确
     EXPECT_FLOAT_EQ(imu_.data.yaw, 1.5f);
+    
+    // 8. 验证：俯仰角正确
     EXPECT_FLOAT_EQ(imu_.data.pitch, 0.02f);
+    
+    // 9. 验证：横滚角正确
     EXPECT_FLOAT_EQ(imu_.data.roll, -0.03f);
+    
+    // 10. 验证：偏航角速度正确
     EXPECT_FLOAT_EQ(imu_.data.yaw_vel, 1.25f);
+    
+    // 11. 验证：俯仰角速度正确
     EXPECT_FLOAT_EQ(imu_.data.pitch_vel, -2.5f);
+    
+    // 12. 验证：横滚角速度正确
     EXPECT_FLOAT_EQ(imu_.data.roll_vel, 0.5f);
+    
+    // 13. 验证：帧尾魔数正确
     EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
 }
 
-/// 正常流程：能力开关帧（id=0x03，size==11）只填充 capabilities
-TEST_F(Stm32ParserTest, ParsesValidCapabilitiesFrame) {
-    tg::ReceiveCapabilitiesData frame{};
-    frame.header.sof      = tg::HeaderFrame::SoF();
-    frame.header.len      = payload_len<tg::ReceiveCapabilitiesData>();
-    frame.header.id       = 0x03;
-    frame.time_stamp      = 42u;
-    frame.data.following  = 1;
-    frame.data.power_rune = 0;
-    frame.data.quanta     = 1;
-    frame.eof             = tg::HeaderFrame::EoF();
 
+// ----------------------------------------------------------------------------
+// 测试用例 2：正常流程 - 能力开关帧（ID=0x03，size=11）
+// 验证解析器能正确解析能力开关帧，且不污染 IMU 输出槽
+// ----------------------------------------------------------------------------
+TEST_F(Stm32ParserTest, ParsesValidCapabilitiesFrame) {
+    // 1. 构造能力开关帧
+    //    帧 ID 0x03，总大小 11 字节
+    //    包含：帧头(3) + 时间戳(4) + 能力标志(3) + 帧尾(1)
+    tg::ReceiveCapabilitiesData frame{};
+    frame.header.sof      = tg::HeaderFrame::SoF();  // 0x5A
+    frame.header.len      = payload_len<tg::ReceiveCapabilitiesData>();  // 4 字节载荷
+    frame.header.id       = 0x03;                    // 能力帧 ID
+    frame.time_stamp      = 42u;                     // 时间戳
+    frame.data.following  = 1;                       // 跟随模式：开启
+    frame.data.power_rune = 0;                       // 能量机关：关闭
+    frame.data.quanta     = 1;                       // 图传模式：开启
+    frame.eof             = tg::HeaderFrame::EoF();  // 0xA5
+
+    // 2. 序列化并解析
     tg::Stm32Parser::parse(as_span(to_bytes(frame)));
 
+    // 3. 验证：能力帧的输出槽 caps_ 被正确填充
     EXPECT_EQ(caps_.time_stamp, 42u);
     EXPECT_EQ(caps_.data.following, 1);
     EXPECT_EQ(caps_.data.power_rune, 0);
     EXPECT_EQ(caps_.data.quanta, 1);
-    // 能力帧（11 字节）不满足简易IMU分支的 size>=21，不得污染 imu_ 输出槽
+    
+    // 4. 验证：能力帧不会污染 IMU 输出槽 imu_
+    //    因为能力帧只有 11 字节，不满足简易 IMU 的 size>=21 条件
+    //    所以 imu_ 应保持初始值 0
     EXPECT_EQ(imu_.time_stamp, 0u);
 }
 
-/// 正常流程：简易IMU帧（id=0x03，size==21）合并进完整IMU结构
-/// 缺失字段（弹速/三轴角速度）按协议约定清零
+
+// ----------------------------------------------------------------------------
+// 测试用例 3：正常流程 - 简易 IMU 帧合并到完整 IMU 结构
+// 验证 ID=0x03 且 size=21 的帧被识别为简易 IMU，合并到 imu_
+// ----------------------------------------------------------------------------
 TEST_F(Stm32ParserTest, MergesSimpleImuIntoLatestImu) {
-    // 先灌一份完整 IMU，验证简易帧会覆盖姿态、清零速度
+    // 1. 先解析一帧完整 IMU，让 imu_ 有旧数据
+    //    时间戳=1，偏航角=0.1，角速度=1.25
     const auto full = make_imu_frame(1u, 0.1f);
     tg::Stm32Parser::parse(as_span(to_bytes(full)));
+    
+    // 2. 确认 imu_ 有旧数据（偏航角速度 = 1.25）
+    //    ASSERT_FLOAT_EQ 使用 ASSERT，如果失败立即终止测试
     ASSERT_FLOAT_EQ(imu_.data.yaw_vel, 1.25f);
 
+    // 3. 构造简易 IMU 帧（ID=0x03，size=21）
+    //    简易 IMU 只包含：时间戳 + 颜色 + yaw/pitch/roll
+    //    不包含：弹速、三轴角速度
     tg::ReceiveSimpleImuData simple{};
     simple.header.sof      = tg::HeaderFrame::SoF();
-    simple.header.len      = payload_len<tg::ReceiveSimpleImuData>();
-    simple.header.id       = 0x03;
-    simple.time_stamp      = 999u;
-    simple.data.self_color = tg::Color::Red;
-    simple.data.yaw        = 0.5f;
-    simple.data.pitch      = -0.25f;
-    simple.data.roll       = 0.125f;
+    simple.header.len      = payload_len<tg::ReceiveSimpleImuData>();  // 12 字节载荷
+    simple.header.id       = 0x03;                     // 同一 ID：0x03
+    simple.time_stamp      = 999u;                     // 新时间戳
+    simple.data.self_color = tg::Color::Red;           // 红方
+    simple.data.yaw        = 0.5f;                     // 新偏航角
+    simple.data.pitch      = -0.25f;                   // 新俯仰角
+    simple.data.roll       = 0.125f;                   // 新横滚角
     simple.eof             = tg::HeaderFrame::EoF();
 
+    // 4. 解析简易 IMU 帧
+    //    解析器检测到 ID=0x03 且 size=21，走简易 IMU 分支
+    //    将简易帧数据合并到 imu_ 结构体
     tg::Stm32Parser::parse(as_span(to_bytes(simple)));
 
+    // 5. 验证：时间戳被更新
     EXPECT_EQ(imu_.time_stamp, 999u);
+    
+    // 6. 验证：颜色被更新为 Red
     EXPECT_EQ(imu_.data.self_color, tg::Color::Red);
+    
+    // 7. 验证：姿态角被更新
     EXPECT_FLOAT_EQ(imu_.data.yaw, 0.5f);
     EXPECT_FLOAT_EQ(imu_.data.pitch, -0.25f);
     EXPECT_FLOAT_EQ(imu_.data.roll, 0.125f);
-    // 简易帧缺失字段被显式清零（不是保留旧值）
+    
+    // 8. 验证：简易帧缺失的字段被清零，而不是保留旧值
+    //    这是协议设计的关键行为：未收到的字段 = 0
     EXPECT_FLOAT_EQ(imu_.data.bullet_speed, 0.0f);
     EXPECT_FLOAT_EQ(imu_.data.yaw_vel, 0.0f);
     EXPECT_FLOAT_EQ(imu_.data.pitch_vel, 0.0f);
     EXPECT_FLOAT_EQ(imu_.data.roll_vel, 0.0f);
 }
 
-/// 异常处理：小于帧头的短包直接丢弃，不越界、无副作用
+
+// ----------------------------------------------------------------------------
+// 测试用例 4：异常处理 - 小于帧头的短包直接丢弃
+// 验证解析器不会因为短包而越界访问
+// ----------------------------------------------------------------------------
 TEST_F(Stm32ParserTest, DropsTooSmallFrame) {
-    const std::vector<uint8_t> garbage{0x5A, 0x00}; // 2 字节 < sizeof(HeaderFrame)
+    // 1. 准备一个只有 2 字节的数据（正常帧头需要 3 字节）
+    const std::vector<uint8_t> garbage{0x5A, 0x00};
+    
+    // 2. 尝试解析
     tg::Stm32Parser::parse(as_span(garbage));
 
+    // 3. 验证：两个输出槽都保持初始值 0
+    //    解析器检测到数据 < sizeof(HeaderFrame)，直接返回
     EXPECT_EQ(imu_.time_stamp, 0u);
     EXPECT_EQ(caps_.time_stamp, 0u);
 }
 
-/// 异常处理：帧头魔数错误整帧丢弃
-TEST_F(Stm32ParserTest, DropsInvalidSoF) {
-    auto frame       = make_imu_frame(77u, 0.7f);
-    const auto bytes = to_bytes(frame);
-    auto bad         = bytes;
-    bad[0]           = 0x00; // 篡改 SoF
 
+// ----------------------------------------------------------------------------
+// 测试用例 5：异常处理 - 帧头魔数错误整帧丢弃
+// 验证解析器能识别并丢弃 SoF 错误的帧
+// ----------------------------------------------------------------------------
+TEST_F(Stm32ParserTest, DropsInvalidSoF) {
+    // 1. 构造一个合法帧
+    auto frame = make_imu_frame(77u, 0.7f);
+    const auto bytes = to_bytes(frame);
+    
+    // 2. 复制一份，篡改第一个字节（SoF）
+    auto bad = bytes;
+    bad[0] = 0x00;  // 正确应为 0x5A
+
+    // 3. 解析坏帧：应被丢弃，imu_ 保持 0
     tg::Stm32Parser::parse(as_span(bad));
     EXPECT_EQ(imu_.time_stamp, 0u);
 
-    // 对照：合法帧正常解析
+    // 4. 对照实验：解析合法帧，应成功
     tg::Stm32Parser::parse(as_span(bytes));
     EXPECT_EQ(imu_.time_stamp, 77u);
 }
 
-/// 异常处理：未知帧 ID 静默忽略（前向兼容：下位机新增帧不崩溃）
-TEST_F(Stm32ParserTest, IgnoresUnknownFrameId) {
-    auto frame      = make_imu_frame(88u, 0.7f);
-    frame.header.id = 0x42; // 未定义的帧ID
 
+// ----------------------------------------------------------------------------
+// 测试用例 6：异常处理 - 未知帧 ID 静默忽略
+// 验证解析器支持前向兼容：下位机新增帧类型不会导致崩溃
+// ----------------------------------------------------------------------------
+TEST_F(Stm32ParserTest, IgnoresUnknownFrameId) {
+    // 1. 构造一个帧，但把 ID 改为未知值 0x42
+    auto frame = make_imu_frame(88u, 0.7f);
+    frame.header.id = 0x42;  // 未定义的帧 ID
+
+    // 2. 解析未知帧：应静默忽略
     tg::Stm32Parser::parse(as_span(to_bytes(frame)));
+    
+    // 3. 验证：两个输出槽都保持 0
+    //    解析器找不到 ID=0x42 的分支，直接返回
     EXPECT_EQ(imu_.time_stamp, 0u);
     EXPECT_EQ(caps_.time_stamp, 0u);
 }
 
-/// 边界条件：IMU 帧长度不足 sizeof(ReceiveImuData) 时不更新（截断保护）
-TEST_F(Stm32ParserTest, KeepsOldValueOnTruncatedImuFrame) {
-    // 先解析一帧合法数据
-    tg::Stm32Parser::parse(as_span(to_bytes(make_imu_frame(100u, 0.3f))));
-    ASSERT_EQ(imu_.time_stamp, 100u);
 
-    // 再喂入截断帧（长度 -1 不满足 >= sizeof 分支）
+// ----------------------------------------------------------------------------
+// 测试用例 7：边界条件 - IMU 帧截断保护
+// 验证长度不足 sizeof(ReceiveImuData) 时，保留旧值不被污染
+// ----------------------------------------------------------------------------
+TEST_F(Stm32ParserTest, KeepsOldValueOnTruncatedImuFrame) {
+    // 1. 先解析一帧合法数据，让 imu_ 有旧值
+    tg::Stm32Parser::parse(as_span(to_bytes(make_imu_frame(100u, 0.3f))));
+    ASSERT_EQ(imu_.time_stamp, 100u);  // 确认旧值存在
+
+    // 2. 构造一个新帧，但截断最后一个字节
     auto bytes = to_bytes(make_imu_frame(200u, 0.9f));
-    bytes.resize(bytes.size() - 1);
+    bytes.resize(bytes.size() - 1);  // 删除 EoF，变成不完整帧
+
+    // 3. 解析截断帧
     tg::Stm32Parser::parse(as_span(bytes));
 
-    // 旧值保留，未被截断数据污染
+    // 4. 验证：旧值保留，没有被截断数据污染
+    //    解析器检测到 size < sizeof(ReceiveImuData)，直接返回
     EXPECT_EQ(imu_.time_stamp, 100u);
 }
 
-/// 边界条件：载荷中包含 0x5A/0xA5 魔数字节不受影响（长度由 len 字段决定）
+
+// ----------------------------------------------------------------------------
+// 测试用例 8：边界条件 - 载荷中的魔数字节不受影响
+// 验证解析器按 len 字段解析，不会把载荷中的 0x5A/0xA5 误判为帧头/帧尾
+// ----------------------------------------------------------------------------
 TEST_F(Stm32ParserTest, ToleratesMagicBytesInsidePayload) {
+    // 1. 构造一个帧
     auto frame = make_imu_frame(555u, 0.25f);
-    // 弹速字段位模式注入 0x5A5A5A5A（位模式含 SoF 魔数的合法规格化 float）
+    
+    // 2. 在弹速字段中注入魔数 0x5A5A5A5A
+    //    注意：这不是合法浮点数，但我们只测试字节模式
     uint32_t magic = 0x5A5A5A5Au;
     std::memcpy(&frame.data.bullet_speed, &magic, sizeof(magic));
+    
+    // 3. 计算期望的浮点值（同一字节模式解释为 float）
     float expected = 0.0f;
-    std::memcpy(&expected, &magic, sizeof(expected)); // 同一位模式的期望 float
+    std::memcpy(&expected, &magic, sizeof(expected));
 
+    // 4. 解析帧
     tg::Stm32Parser::parse(as_span(to_bytes(frame)));
 
+    // 5. 验证：时间戳正确
     EXPECT_EQ(imu_.time_stamp, 555u);
+    
+    // 6. 验证：弹速字段被解析为 float，值是同一字节模式解释的结果
+    //    即使这个值看起来很奇怪，但解析器应该原样保留
     EXPECT_FLOAT_EQ(imu_.data.bullet_speed, expected);
 }
 
@@ -381,6 +554,7 @@ TEST_F(Stm32ParserTest, ToleratesMagicBytesInsidePayload) {
 class SerialImplTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        //ASSERT_FALSE 是 Google Test 提供的断言宏，用于断言某个条件为假，如果条件为真则立即终止当前测试用例。
         ASSERT_FALSE(pty_.slave_path().empty()) << "PTY 创建失败";
         tg::Stm32Parser::latest_imu          = &imu_;
         tg::Stm32Parser::latest_capabilities = &caps_;
@@ -396,154 +570,283 @@ protected:
     tg::ReceiveCapabilitiesData caps_{};
 };
 
-/// 异常处理：连接不存在的设备路径 → expected 错误携带路径与 errno 描述
+// ============================================================================
+// 测试套件：SerialImplTest
+// 测试目标：SerialImpl 串口通信类的完整功能
+// 测试策略：使用 PTY 伪终端对模拟真实串口设备
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 测试用例 1：连接不存在的设备 → 返回包含错误上下文的信息
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, ConnectFailureReturnsError) {
+    // 1. 创建串口设备对象（未连接状态）
     tg::SerialDevice device;
+    
+    // 2. 尝试连接一个明确不存在的设备路径
+    //    返回值类型：tl::expected<void, std::string>
+    //    - 成功：std::nullopt（无值，表示成功）
+    //    - 失败：包含错误信息字符串
     const auto result = device.connect("/dev/does-not-exist-talos-test", 115200);
 
+    // 3. 断言：连接应该失败（result 没有值）
+    //    ASSERT_FALSE：如果 result.has_value() 为 true，测试立即终止
     ASSERT_FALSE(result.has_value());
-    // 错误信息包含设备路径与 "open serial device" 前缀，便于现场排障
+    
+    // 4. 验证错误信息包含 "open serial device" 前缀
+    //    这说明错误来自 open() 系统调用失败
+    //    std::string::find() 返回位置，std::string::npos 表示未找到
     EXPECT_NE(result.error().find("open serial device"), std::string::npos);
+    
+    // 5. 验证错误信息包含了尝试连接的设备路径
+    //    便于排障时确认是哪个设备出了问题
     EXPECT_NE(result.error().find("/dev/does-not-exist-talos-test"), std::string::npos);
+    
+    // 6. 验证设备状态标志为"未连接"
+    //    is_connected() 检查内部文件描述符是否有效
     EXPECT_FALSE(device.is_connected());
 }
 
-/// 正常流程：PTY 上连接成功 + 断开状态翻转
+// ----------------------------------------------------------------------------
+// 测试用例 2：连接 PTY 成功 → 断开 → 断开后操作安全
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, ConnectAndDisconnect) {
+    // 1. 创建串口设备对象
     tg::SerialDevice device;
+    
+    // 2. 连接 PTY slave 端（模拟真实串口设备）
+    //    ASSERT_TRUE：连接失败则立即终止测试
+    //    has_value() 检查 tl::expected 是否包含值
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
+    
+    // 3. 验证：连接状态为 true
     EXPECT_TRUE(device.is_connected());
 
+    // 4. 主动断开连接
+    //    disconnect() 内部会：
+    //    - 关闭文件描述符
+    //    - 重置内部状态
     device.disconnect();
+    
+    // 5. 验证：断开后状态为 false
     EXPECT_FALSE(device.is_connected());
 
-    // 断开后收发均为安全空操作/错误，不崩溃
+    // 6. 验证：断开后调用 handle_events() 不会崩溃
+    //    内部应有 fd < 0 的守卫判断，直接返回
     device.handle_events();
+    
+    // 7. 验证：断开后调用 send_sync() 返回错误而非崩溃
     const uint8_t byte = 0x00;
     EXPECT_FALSE(device.send_sync(&byte, 1).has_value());
+    // 预期错误信息："device not connected"
 }
 
-/// 异常处理：未连接时 send_sync → "device not connected"
+// ----------------------------------------------------------------------------
+// 测试用例 3：未连接时发送数据 → 返回 "device not connected" 错误
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, SendSyncFailsWhenNotConnected) {
+    // 1. 创建串口设备对象（默认未连接）
     tg::SerialDevice device;
+    
+    // 2. 准备要发送的数据（任意数据，这里准备了一个帧头）
     const uint8_t data[] = {0x5A, 0x01, 0x01};
 
+    // 3. 尝试发送数据（此时设备未连接）
     const auto result = device.send_sync(data, sizeof(data));
+    
+    // 4. 断言：发送应该失败
     ASSERT_FALSE(result.has_value());
+    
+    // 5. 验证错误信息包含 "device not connected"
+    //    确保错误信息明确指出了失败原因
     EXPECT_NE(result.error().find("device not connected"), std::string::npos);
 }
 
-/// 正常流程：上位机 → 下位机发送回环（send_sync → PTY master 收到相同字节）
+// ----------------------------------------------------------------------------
+// 测试用例 4：上位机 → 下位机 发送回环测试
+// 验证 send_sync 正确地将数据写入串口
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, SendSyncRoundTrip) {
+    // 1. 创建串口设备并连接到 PTY slave
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
-    // 构造视觉预测指令帧（上位机 → MCU 的业务载荷）
+    // 2. 构造一个视觉预测指令帧（上位机 → MCU）
+    //    帧 ID 0x02：视觉预测帧，包含开火建议/目标角度/距离
     tg::SendVisionData vision{};
-    vision.header.sof        = tg::HeaderFrame::SoF();
-    vision.header.id         = 0x02;
-    vision.data.fire_advice  = true;
-    vision.data.target_yaw   = 1.234f;
-    vision.data.target_pitch = -0.567f;
-    vision.data.distance     = 6.28f;
+    vision.header.sof        = tg::HeaderFrame::SoF();  // 帧起始 0x5A
+    vision.header.id         = 0x02;                    // 帧类型 ID
+    vision.data.fire_advice  = true;                    // 建议开火
+    vision.data.target_yaw   = 1.234f;                  // 目标偏航角
+    vision.data.target_pitch = -0.567f;                 // 目标俯仰角
+    vision.data.distance     = 6.28f;                   // 目标距离
 
+    // 3. 序列化：结构体 → 字节流
     const auto sent = to_bytes(vision);
+    
+    // 4. 通过串口发送数据
+    //    send_sync 内部调用 write() 写入 /dev/pts/N
     ASSERT_TRUE(device.send_sync(sent.data(), sent.size()).has_value());
 
-    // 下位机侧（PTY master）收到的字节与发送端逐字节一致
+    // 5. 从 PTY master 端读取数据（模拟下位机接收）
+    //    read_master 内部用 poll + read 从 master fd 读取
+    //    超时 500ms：如果收不到数据，返回已读部分
     const auto received = pty_.read_master(sent.size());
+    
+    // 6. 验证：收到数据的字节数等于发送的字节数
     ASSERT_EQ(received.size(), sent.size());
+    
+    // 7. 验证：收到数据的内容与发送的完全一致
+    //    memcmp 返回 0 表示两段内存完全相同
     EXPECT_EQ(memcmp(received.data(), sent.data(), sent.size()), 0);
 
-    // 边界：零长度发送是合法空操作
+    // 8. 边界测试：零长度发送是合法空操作
+    //    不应返回错误
     EXPECT_TRUE(device.send_sync(nullptr, 0).has_value());
 }
 
-/// 正常流程：下位机 → 上位机接收分发（master 写帧 → handle_events 解析）
+// ----------------------------------------------------------------------------
+// 测试用例 5：下位机 → 上位机 接收分发测试
+// 验证 handle_events 正确地从串口读取并解析帧
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, ReceiveDispatchesImuFrame) {
+    // 1. 创建串口设备并连接到 PTY slave
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
+    // 2. 构造一个完整的 IMU 帧（时间戳 4242，偏航角 0.75 rad）
     const auto frame = make_imu_frame(4242u, 0.75f);
+    
+    // 3. 序列化为字节流
     const auto bytes = to_bytes(frame);
+    
+    // 4. 模拟下位机发送数据：向 PTY master 端写入
+    //    数据通过内核 PTY 驱动出现在 slave 端
     ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
 
+    // 5. 调用事件处理函数
+    //    handle_events 内部流程：
+    //    a. 从串口 read() 读取数据
+    //    b. try_parse_frame() 帧同步状态机
+    //    c. Stm32Parser::parse() 按 ID 分发解析
+    //    d. 结果存入 imu_（通过全局指针 latest_imu）
     device.handle_events();
 
+    // 6. 验证：解析结果正确
+    //    时间戳应为 4242
     EXPECT_EQ(imu_.time_stamp, 4242u);
+    
+    // 7. 验证：偏航角正确
     EXPECT_FLOAT_EQ(imu_.data.yaw, 0.75f);
+    
+    // 8. 验证：帧尾魔数正确
     EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
 }
 
-/// 异常恢复：帧前乱码被丢弃，后续帧正常重同步解析
+// ----------------------------------------------------------------------------
+// 测试用例 6：帧前有乱码 → 乱码丢弃，后续帧正常解析
+// 验证帧同步（resync）能力
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, ResyncAfterLeadingGarbage) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
+    // 2. 构造合法 IMU 帧
     const auto frame = make_imu_frame(111u, 0.1f);
     const auto bytes = to_bytes(frame);
 
-    // 纯垃圾（无 SoF）→ 整段清空
+    // 3. 准备乱码数据（不包含 SoF 0x5A）
     const uint8_t garbage[] = {0x11, 0x22, 0x33, 0x44};
+    
+    // 4. 先发送乱码，再发送合法帧
+    //    模拟串口上先收到干扰数据，再收到有效数据
     ASSERT_TRUE(pty_.write_master(garbage, sizeof(garbage)));
-    // 乱码 + 合法帧连写 → 乱码丢弃后帧正常解析
     std::vector<uint8_t> stream(garbage, garbage + sizeof(garbage));
     stream.insert(stream.end(), bytes.begin(), bytes.end());
     ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
 
+    // 5. 处理事件
+    //    try_parse_frame 会扫描数据，丢弃乱码，找到 SoF 后开始解析
     device.handle_events();
 
+    // 6. 验证：合法帧被正确解析（乱码被丢弃）
     EXPECT_EQ(imu_.time_stamp, 111u);
 }
 
-/// 边界条件：帧尾字节错误 → 该帧丢弃，后续帧恢复解析
+// ----------------------------------------------------------------------------
+// 测试用例 7：帧尾错误 → 坏帧丢弃，后续好帧恢复解析
+// 验证 EoF 校验和恢复能力
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, RecoversAfterBadEof) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
-    auto bad        = to_bytes(make_imu_frame(66u, 0.1f));
-    bad.back()      = 0x00; // 篡改 EoF
+    // 2. 构造坏帧：EoF 被篡改为 0x00（正确应为 0xA5）
+    auto bad = to_bytes(make_imu_frame(66u, 0.1f));
+    bad.back() = 0x00;  // 篡改帧尾
+    
+    // 3. 构造好帧（EoF 正确）
     const auto good = to_bytes(make_imu_frame(77u, 0.2f));
 
+    // 4. 先发坏帧，再发好帧
     std::vector<uint8_t> stream = bad;
     stream.insert(stream.end(), good.begin(), good.end());
     ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
 
+    // 5. 处理事件
     device.handle_events();
 
-    // 坏帧丢弃，好帧照常解析
+    // 6. 验证：坏帧被丢弃，好帧被正确解析
     EXPECT_EQ(imu_.time_stamp, 77u);
     EXPECT_EQ(imu_.eof, tg::HeaderFrame::EoF());
 }
 
-/// 边界条件：帧分多次到达（半帧 → handle_events 无解析 → 补齐后解析成功）
+// ----------------------------------------------------------------------------
+// 测试用例 8：帧分多次到达（半帧拼接）
+// 验证串口层缓存和帧重组能力
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, HandlesSplitFrameArrival) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
+    // 2. 构造完整 IMU 帧
     const auto bytes = to_bytes(make_imu_frame(888u, 0.15f));
 
-    // 前半帧到达：长度不足，缓存等待，不误解析
+    // 3. 只发送前半帧（长度不足一帧）
     const size_t half = bytes.size() / 2;
     ASSERT_TRUE(pty_.write_master(bytes.data(), half));
+    
+    // 4. 处理事件：因为帧不完整，不应解析出数据
     device.handle_events();
-    EXPECT_EQ(imu_.time_stamp, 0u);
+    EXPECT_EQ(imu_.time_stamp, 0u);  // 保持旧值（初始为 0）
 
-    // 后半帧补齐：拼成完整帧解析成功
+    // 5. 发送后半帧（补齐完整帧）
     ASSERT_TRUE(pty_.write_master(bytes.data() + half, bytes.size() - half));
+    
+    // 6. 再次处理事件：现在有完整帧，应解析成功
     device.handle_events();
+    
+    // 7. 验证：完整帧被正确解析
     EXPECT_EQ(imu_.time_stamp, 888u);
 }
 
-/// 正常流程：一次读取包含多帧，循环解析全部消费
+// ----------------------------------------------------------------------------
+// 测试用例 9：一次读取包含多帧 → 循环解析全部消费
+// 验证一个 read 缓冲区包含多帧时，循环解析能全部取出
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, ParsesMultipleFramesInOneRead) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
-    // 两帧 IMU + 一帧能力开关混合写入（时间戳递增，验证最终值为最后一帧）
+    // 2. 构造两帧 IMU（时间戳 1 和 2）
     const auto f1 = to_bytes(make_imu_frame(1u, 0.05f));
     const auto f2 = to_bytes(make_imu_frame(2u, 0.10f));
 
+    // 3. 构造一帧能力开关帧（时间戳 3）
     tg::ReceiveCapabilitiesData caps_frame{};
     caps_frame.header.sof     = tg::HeaderFrame::SoF();
     caps_frame.header.len     = payload_len<tg::ReceiveCapabilitiesData>();
@@ -552,60 +855,90 @@ TEST_F(SerialImplTest, ParsesMultipleFramesInOneRead) {
     caps_frame.data.following = 1;
     caps_frame.data.quanta    = 1;
     caps_frame.eof            = tg::HeaderFrame::EoF();
-    const auto f3             = to_bytes(caps_frame);
+    const auto f3 = to_bytes(caps_frame);
 
+    // 4. 拼接三帧，一次性全部写入 PTY master
     std::vector<uint8_t> stream;
     stream.insert(stream.end(), f1.begin(), f1.end());
     stream.insert(stream.end(), f2.begin(), f2.end());
     stream.insert(stream.end(), f3.begin(), f3.end());
     ASSERT_TRUE(pty_.write_master(stream.data(), stream.size()));
 
+    // 5. 一次性处理所有数据
+    //    try_parse_frame 会在循环中反复解析，直到缓冲区耗尽
     device.handle_events();
 
-    // 两帧 IMU 顺序解析，保留最后一帧
+    // 6. 验证：IMU 输出槽保留了最后一帧（时间戳 2）
+    //    因为两帧 IMU 先后覆盖，最后保留的是第二帧
     EXPECT_EQ(imu_.time_stamp, 2u);
     EXPECT_FLOAT_EQ(imu_.data.yaw, 0.10f);
-    // 能力帧同时解析成功
+    
+    // 7. 验证：能力帧也被正确解析
     EXPECT_EQ(caps_.time_stamp, 3u);
     EXPECT_EQ(caps_.data.following, 1);
     EXPECT_EQ(caps_.data.quanta, 1);
 }
 
-/// 边界条件：len 字段声明超过实际到达数据 → 等待补齐，不越界
+// ----------------------------------------------------------------------------
+// 测试用例 10：len 字段声明超过实际数据 → 等待补齐，不越界
+// 验证串口层能正确处理"声称长度 > 实际长度"的异常情况
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, WaitsForDeclaredFrameLength) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
+    // 2. 构造一个帧，但故意把 len 字段改大
     auto frame = make_imu_frame(999u, 0.2f);
-    // len 声明比真实载荷大：串口层会按更长帧等待，不解析不越界
+    // 正常 len = 30，这里改为 40（多声明 10 字节）
     frame.header.len = payload_len<tg::ReceiveImuData>() + 10;
     const auto bytes = to_bytes(frame);
 
+    // 3. 发送这个"声明过大"的帧（实际字节数不足）
     ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
+    
+    // 4. 处理事件：帧不完整（还差 10 字节），不应解析
     device.handle_events();
-    // 帧不完整：既不解析，也不崩溃
-    EXPECT_EQ(imu_.time_stamp, 0u);
+    EXPECT_EQ(imu_.time_stamp, 0u);  // 未解析
 
-    // 补齐多声明的 10 字节 + EoF 后仍未对齐（协议帧尾错位）→ 仍安全
+    // 5. 补齐 10 字节额外数据
+    //    注意：这些额外数据不是 EoF，所以帧尾错位，最终会因 EoF 校验失败丢弃
     std::vector<uint8_t> extra(10, 0x00);
     ASSERT_TRUE(pty_.write_master(extra.data(), extra.size()));
+    
+    // 6. 再次处理事件
+    //    帧尾错位 → EoF 校验失败 → 整帧丢弃 → 无崩溃
     device.handle_events();
-    // 无崩溃即为通过（EoF 校验失败按坏帧丢弃）
+    
+    // 7. SUCCEED() 显式标记测试通过
+    //    只要没有崩溃/断言失败，这个测试就通过
     SUCCEED();
 }
 
-/// 正常流程：长时间运行场景下缓存不无限增长（每帧消费后缓存清空）
+// ----------------------------------------------------------------------------
+// 测试用例 11：长时间运行 → 缓存不无限增长
+// 验证每帧消费后，接收缓冲区被正确清空
+// ----------------------------------------------------------------------------
 TEST_F(SerialImplTest, RxBufferDrainsAfterParse) {
+    // 1. 连接串口
     tg::SerialDevice device;
     ASSERT_TRUE(device.connect(pty_.slave_path(), 115200).has_value());
 
-    // 连续写入多帧，全部被消费
+    // 2. 连续发送 20 帧，逐帧验证
     for (uint32_t stamp = 0; stamp < 20; ++stamp) {
+        // 发送一帧 IMU（时间戳 = stamp）
         const auto bytes = to_bytes(make_imu_frame(stamp, 0.01f));
         ASSERT_TRUE(pty_.write_master(bytes.data(), bytes.size()));
+        
+        // 处理事件
         device.handle_events();
+        
+        // 验证：解析结果的时间戳 = stamp
+        // 如果缓存没清空，可能会有旧帧残留
         ASSERT_EQ(imu_.time_stamp, stamp);
     }
+    
+    // 3. 最终验证：最后一帧的时间戳是 19
     EXPECT_EQ(imu_.time_stamp, 19u);
 }
 
@@ -613,62 +946,183 @@ TEST_F(SerialImplTest, RxBufferDrainsAfterParse) {
 // 第四层：McuDeviceHandle 统一设备句柄测试
 // ============================================================================
 /// 异常处理：create_serial 失败 → 错误信息含路径与波特率上下文
+// ============================================================================
+// 测试套件：McuDeviceHandleTest
+// 测试目标：McuDeviceHandle 统一设备句柄的创建、通信、移动语义
+// ============================================================================
+// ----------------------------------------------------------------------------
+// 测试用例 1：create_serial 失败时返回包含上下文信息的错误
+// ----------------------------------------------------------------------------
 TEST(McuDeviceHandleTest, CreateSerialFailureIncludesContext) {
+    // 1. 调用 create_serial 尝试连接一个明确不存在的设备路径
+    //    参数1：不存在的串口设备路径
+    //    参数2：波特率 115200
+    //    返回值类型：tl::expected<McuDeviceHandle, std::string>
+    //    - 成功：包含 McuDeviceHandle 对象
+    //    - 失败：包含错误信息字符串
     const auto result =
         tg::McuDeviceHandle::create_serial("/dev/does-not-exist-talos-test", 115200);
 
+    // 2. 断言：result 应该没有值（即连接失败）
+    //    ASSERT_FALSE：如果 result.has_value() 为 true，测试立即终止并报失败
+    //    这里用 ASSERT 而非 EXPECT，因为后续代码依赖 result 是失败状态
     ASSERT_FALSE(result.has_value());
+
+    // 3. 验证错误信息中是否包含 "connect serial mcu" 字符串
+    //    result.error() 返回 std::string 类型的错误描述
+    //    std::string::find() 返回查找位置，如果找不到返回 std::string::npos
+    //    EXPECT_NE(... npos) 期望能找到该子串
+    //    这确保错误信息说明了操作上下文（连接串口MCU）
     EXPECT_NE(result.error().find("connect serial mcu"), std::string::npos);
+
+    // 4. 验证错误信息中是否包含 "baud_rate=115200" 字符串
+    //    这确保错误信息包含了波特率参数，方便调试时确认配置
     EXPECT_NE(result.error().find("baud_rate=115200"), std::string::npos);
 }
 
-/// 正常流程：create_serial 成功 → is_serial / is_connected / 收发回环
+// ----------------------------------------------------------------------------
+// 测试用例 2：create_serial 成功 → 验证完整收发回环
+// ----------------------------------------------------------------------------
 TEST(McuDeviceHandleTest, CreateSerialOverPty) {
+    // 1. 创建 PTY 伪终端对
+    //    - master 端：测试代码使用（模拟下位机 STM32）
+    //    - slave 端：被测代码使用（模拟真实串口设备 /dev/pts/N）
     PtyPair pty;
+
+    // 2. 断言：PTY 创建成功，slave 设备路径不为空
+    //    如果路径为空，说明 posix_openpt/grantpt/unlockpt 失败
+    //    后续测试无法进行，所以用 ASSERT_FALSE 立即终止
     ASSERT_FALSE(pty.slave_path().empty());
 
+    // 3. 通过 McuDeviceHandle 的工厂方法创建串口设备句柄
+    //    传入 PTY 的 slave 路径和波特率
+    //    create_serial 内部会：
+    //    - 打开 /dev/pts/N 设备文件
+    //    - 配置 termios（波特率/数据位/停止位/校验位等）
+    //    - 返回 McuDeviceHandle 对象（内部持有 SerialDevice）
     auto result = tg::McuDeviceHandle::create_serial(pty.slave_path(), 115200);
+
+    // 4. 断言：创建成功
+    //    ASSERT_TRUE：如果 result 没有值，测试立即终止
+    //    << result.error()：如果失败，输出错误信息到测试日志
     ASSERT_TRUE(result.has_value()) << result.error();
+
+    // 5. 获取句柄的引用（result 是 tl::expected，*result 返回 McuDeviceHandle&）
     auto& handle = *result;
 
-    // variant 分发：确认为串口设备且已连接
+    // 6. 验证：句柄识别为串口设备
+    //    is_serial() 检查 variant 中存储的是 SerialDevice 类型
+    //    如果是其他设备类型（如虚拟设备），返回 false
     EXPECT_TRUE(handle.is_serial());
+
+    // 7. 验证：句柄已连接
+    //    is_connected() 检查内部文件描述符是否有效
     EXPECT_TRUE(handle.is_connected());
 
-    // 句柄统一 send_sync 下发指令，PTY master 侧收到
-    tg::SendSimpleVisionData simple{};
-    simple.header.sof      = tg::HeaderFrame::SoF();
-    simple.header.id       = 0x04;
-    simple.data.target_yaw = -0.5f;
-    const auto bytes       = to_bytes(simple);
+    // ========== 测试方向1：上位机 → 下位机（发送指令） ==========
 
+    // 8. 构造一个"极简视觉帧"（上位机 → MCU 的指令）
+    //    帧 ID 0x04：极简视觉帧，只包含目标偏航角
+    tg::SendSimpleVisionData simple{};
+    simple.header.sof      = tg::HeaderFrame::SoF();  // 帧起始 0x5A
+    simple.header.id       = 0x04;                    // 帧类型 ID
+    simple.data.target_yaw = -0.5f;                   // 目标偏航角
+
+    // 9. 序列化：结构体 → 字节流
+    //    to_bytes() 用 memcpy 将结构体原始内存拷贝到 vector<uint8_t>
+    const auto bytes = to_bytes(simple);
+
+    // 10. 通过句柄发送数据（上位机 → 下位机）
+    //     send_sync 内部调用 write() 写入串口设备
+    //     ASSERT_TRUE：发送失败则终止测试
     ASSERT_TRUE(handle.send_sync(bytes.data(), bytes.size()).has_value());
+
+    // 11. PTY master 端读取数据（模拟下位机接收）
+    //     read_master 内部用 poll + read 从 master fd 读取
+    //     参数 bytes.size()：期望读取的字节数
+    //     超时 500ms：如果下位机没收到数据，返回已读部分
     const auto received = pty.read_master(bytes.size());
+
+    // 12. 验证：读取到的数据大小等于发送的数据大小
+    //     如果大小不匹配，说明数据在传输中丢失或 PTY 配置有问题
     ASSERT_EQ(received.size(), bytes.size());
+
+    // 13. 验证：读取到的数据内容与发送的逐字节一致
+    //     memcmp 返回 0 表示两段内存完全相同
+    //     这验证了 send_sync 正确地将数据写入了串口
     EXPECT_EQ(memcmp(received.data(), bytes.data(), bytes.size()), 0);
 
-    // 句柄统一 handle_events 收帧解析
+    // ========== 测试方向2：下位机 → 上位机（接收数据） ==========
+
+    // 14. 准备一个 IMU 数据帧的接收缓冲区
+    //     这个结构体将被 Stm32Parser 填充
     tg::ReceiveImuData imu{};
+
+    // 15. 设置全局解析器输出指针（指向 imu 缓冲区）
+    //     Stm32Parser 是静态解析器，通过全局指针输出解析结果
+    //     这是测试 Fixture 中 SetUp/TearDown 的手动版
     tg::Stm32Parser::latest_imu = &imu;
-    const auto frame            = to_bytes(make_imu_frame(31337u, 0.42f));
+
+    // 16. 构造一个完整的 IMU 帧（时间戳 31337，偏航角 0.42 rad）
+    //     make_imu_frame 填充所有字段：帧头/时间戳/颜色/姿态/角速度/帧尾
+    const auto frame = to_bytes(make_imu_frame(31337u, 0.42f));
+
+    // 17. 模拟下位机发送数据：通过 PTY master 端写入
+    //     数据会通过内核 PTY 驱动出现在 slave 端（/dev/pts/N）
+    //     被测的 SerialImpl 从 slave 端读取
     ASSERT_TRUE(pty.write_master(frame.data(), frame.size()));
+
+    // 18. 调用句柄的事件处理函数
+    //     handle_events 内部流程：
+    //     a. 从串口设备 read() 读取所有可用数据
+    //     b. 将数据喂给 try_parse_frame() 帧同步状态机
+    //     c. 完整帧交给 Stm32Parser::parse() 解析
+    //     d. 解析结果存入 latest_imu 指向的缓冲区
     handle.handle_events();
+
+    // 19. 清理：解除全局指针绑定，防止后续测试误用
     tg::Stm32Parser::latest_imu = nullptr;
 
+    // 20. 验证：解析结果正确
+    //     imu.time_stamp 应该等于 31337
     EXPECT_EQ(imu.time_stamp, 31337u);
+
+    // 21. 验证：偏航角正确（使用 EXPECT_FLOAT_EQ 处理浮点误差）
     EXPECT_FLOAT_EQ(imu.data.yaw, 0.42f);
+    // 其他字段（颜色/弹速/俯仰/横滚/角速度）由于 make_imu_frame 的默认值
+    // 也会正确解析，但此处只验证最关键的两个字段
 }
 
-/// 生命周期：句柄可移动转移所有权（variant + unique_ptr 移动语义）
+// ----------------------------------------------------------------------------
+// 测试用例 3：句柄支持移动语义（move constructor / move assignment）
+// ----------------------------------------------------------------------------
 TEST(McuDeviceHandleTest, HandleIsMovable) {
+    // 1. 创建 PTY 伪终端对
     PtyPair pty;
     ASSERT_FALSE(pty.slave_path().empty());
 
+    // 2. 创建串口设备句柄
     auto result = tg::McuDeviceHandle::create_serial(pty.slave_path(), 115200);
     ASSERT_TRUE(result.has_value());
 
-    // 移动构造：新句柄接管连接，旧句柄失效
+    // 3. 移动构造：将 result 中的句柄移动到 moved
+    //    std::move(*result) 将左值转为右值引用
+    //    触发 McuDeviceHandle 的移动构造函数
+    //    移动后：
+    //    - moved 接管了内部的 unique_ptr 和文件描述符
+    //    - result 中的原句柄变为"空"状态（类似 nullptr）
     tg::McuDeviceHandle moved = std::move(*result);
+
+    // 4. 验证：移动后的新句柄仍然连接
+    //     因为资源所有权已转移，moved 持有有效的文件描述符
     EXPECT_TRUE(moved.is_connected());
+
+    // 5. 验证：移动后的新句柄仍然是串口类型
+    //     variant 中存储的 active type 仍然是 SerialDevice
     EXPECT_TRUE(moved.is_serial());
+
+    // 注意：这里没有验证原句柄 result 的状态，因为：
+    // - 移动后的对象处于"有效但未指定"状态（valid but unspecified）
+    // - 通常 is_connected() 返回 false，但不强制要求
+    // - 实际项目中，移动后的对象不应再被使用
 }
