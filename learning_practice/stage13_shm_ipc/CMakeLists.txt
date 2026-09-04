@@ -77,6 +77,9 @@ target_link_libraries(talos_ipc_learning INTERFACE
 # 三个可执行目标：警告只作用于本 demo 源码
 add_executable(ipc_demo src/ipc_demo.cpp)
 target_compile_options(ipc_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# ipc_demo 用 assert 做断言：Release 构建默认 -DNDEBUG 会把断言整个编译掉，
+# 测试"假通过"。生成器表达式仅在 Release 配置注入 -UNDEBUG 强制保留断言
+target_compile_options(ipc_demo PRIVATE $<$<CONFIG:Release>:-UNDEBUG>)
 target_link_libraries(ipc_demo PRIVATE talos_ipc_learning)
 
 add_executable(sim_producer src/sim_producer.cpp)
