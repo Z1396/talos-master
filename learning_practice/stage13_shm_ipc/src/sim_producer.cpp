@@ -19,7 +19,6 @@
 #include "shm_triple_buffer.hpp"
 
 // C++ 标准库
-#include <atomic>  // 原子退出标志（信号处理与主循环共享）
 #include <chrono>  // steady_clock 计时 / 纳秒时间戳 / sleep_until 周期节拍
 #include <cmath>   // std::sin 正弦轨迹
 #include <csignal> // SIGINT/SIGTERM 优雅退出
@@ -37,10 +36,25 @@
 using namespace std::chrono_literals;
 
 // Ctrl+C 退出标志：信号处理函数只做置位，无锁安全
+/*sig_atomic_t：专门为信号处理器设计的轻量级原子类型
+std::atomic：通用的多线程原子操作，功能强大但可能有额外开销
+信号处理器中必须使用 sig_atomic_t（或 std::atomic with signal）
+多线程中必须使用 std::atomic（sig_atomic_t 不安全）
+
+黄金法则：
+信号处理器 → sig_atomic_t
+多线程 → std::atomic
+两者都需要 → std::atomic（C++11 保证信号安全）*/
 static volatile std::sig_atomic_t g_stop = 0;
 static void handle_signal(int) { g_stop = 1; }
 
 /// 系统时钟纳秒时间戳（与 ShmClient::update_heartbeat 内部实现一致）
+/*static vs inline vs 匿名命名空间
+方式	       符号可见性	是否可能重复定义	    推荐程度
+static	       文件内部	    否（各自独立）	        ⚠️ C语言风格
+匿名命名空间	文件内部	否（各自独立）	        ✅ C++推荐
+inline	       外部可见	    可重复定义（链接时合并）	✅ 头文件
+普通全局	   外部可见	    否（只能一处定义）	    ❌ 易冲突*/
 static uint64_t now_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                      std::chrono::system_clock::now().time_since_epoch())
@@ -80,6 +94,13 @@ int main() {
     // {:.1f} 定点小数输出；写成 {:.1} 会被 fmt 按默认浮点格式转成科学计数法（1e+01）
     fmt::print(
         "共享内存: {} + {}（各 {:.1f} MB）\n", ipc::shm_path(ipc::SHM_NAME_META).string(),
+        /*计算机内存/文件大小通常用二进制（2的幂次）：
+        1 KB = 1024 Bytes（2¹⁰）
+        1 MB = 1024 KB（2²⁰）
+        1 GB = 1024 MB（2³⁰）
+        存储设备（硬盘/SSD）通常用十进制：
+        1 KB = 1000 Bytes（SI标准）
+        1 MB = 1000 KB*/
         ipc::shm_path(ipc::SHM_NAME_IMAGE_POOL).string(), ipc::IMAGE_POOL_SIZE / 1024.0 / 1024.0);
     std::fflush(stdout);
 
