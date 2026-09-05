@@ -206,6 +206,12 @@ static_assert(sizeof(RuntimeState) == 64, "RuntimeState must be 64 bytes");
  * 严格按 CacheLine 64字节对齐，解决CPU伪共享
  * 三缓冲模型：生产者写缓冲、消费者读缓冲、中间就绪缓冲，无锁并发
  */
+ /*地址点	内容	为什么在这里？
+0	state 开始	alignas(64) 强制
+64	write_idx 开始	state 占满 64 字节
+65	read_idx 开始	连续排列
+66	_pad1 开始	连续排列
+128	slots 开始	下一个 64 字节边界（因为前面用了 64 字节）*/
 struct alignas(CACHE_LINE_SIZE) ImageTripleBuffer {
     // 原子状态单独占一整条缓存行，避免读写时CPU缓存互相失效
     alignas(CACHE_LINE_SIZE) std::atomic<uint8_t> state{1}; // 初始就绪下标1，无新数据

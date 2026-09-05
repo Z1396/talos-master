@@ -173,6 +173,11 @@ public:
         }
 
         // ftruncate 将文件磁盘占用扩展到size字节，mmap必须依赖文件实际空间
+        /*1. ftruncate(fd, size) 的作用
+        int ftruncate(int fd, off_t length);
+        // 将 fd 指向的文件截断/扩展到 length 字节
+        // 成功：返回 0
+        // 失败：返回 -1，设置 errno*/
         if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
             // 扩容失败，先关闭fd、删除残留空文件，再返回错误
             close(fd);

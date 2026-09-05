@@ -19,21 +19,24 @@
 
 # 编译器选择：优先学习环境统一的 clang-21，不存在时回退系统默认
 if(EXISTS /usr/bin/clang++-21)
-    set(CMAKE_C_COMPILER /usr/bin/clang-21)
-    set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)
-    set(CMAKE_CXX_FLAGS "-stdlib=libstdc++")
+    set(CMAKE_C_COMPILER /usr/bin/clang-21)      # C 编译器
+    set(CMAKE_CXX_COMPILER /usr/bin/clang++-21)  # C++ 编译器
+    set(CMAKE_CXX_FLAGS "-stdlib=libstdc++")     # 使用 GNU 标准库（而非 libc++）
 endif()
 
+# 指定 CMake 最低版本为 3.20，项目名称，仅使用 C++ 语言
 cmake_minimum_required(VERSION 3.20)
 project(stage13_shm_ipc LANGUAGES CXX)
 
+# 强制使用 C++23 标准，且必须支持
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_EXTENSIONS ON)           # 允许编译器扩展（如 GNU 扩展）
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # 生成 compile_commands.json 供工具使用
 
-include(FetchContent)
+include(FetchContent)  # 用于自动下载依赖
 
+# 查找系统依赖：线程库和 OpenCV（仅需 core 组件）
 find_package(Threads REQUIRED)
 find_package(OpenCV REQUIRED COMPONENTS core)
 
@@ -43,18 +46,21 @@ find_package(OpenCV REQUIRED COMPONENTS core)
 # ===========================================================================
 set(FMT_ZIP ${CMAKE_CURRENT_SOURCE_DIR}/../../3dparty/fmt-12.0.0.zip)
 if(EXISTS ${FMT_ZIP})
+    # 如果本地已有 zip 包，直接用本地文件（加速构建）
     FetchContent_Declare(fmt URL ${FMT_ZIP})
 else()
+    # 否则从 GitHub 官方仓库下载
     FetchContent_Declare(
         fmt URL https://github.com/fmtlib/fmt/releases/download/12.0.0/fmt-12.0.0.zip)
 endif()
-FetchContent_MakeAvailable(fmt)
+FetchContent_MakeAvailable(fmt)  # 下载并构建 fmt 库
 
 # ===========================================================================
 # 依赖二：magic_enum（仓库自带单头文件，ShmError 枚举反射打印）
 # ===========================================================================
 set(MAGIC_ENUM_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../3dparty/magic_enum)
 if(NOT EXISTS ${MAGIC_ENUM_DIR}/magic_enum.hpp)
+    # 如果缺失关键头文件，立即报错终止配置
     message(FATAL_ERROR "missing 3dparty/magic_enum/magic_enum.hpp in repo")
 endif()
 
@@ -64,28 +70,35 @@ endif()
 # 使用完全相同的 IPC API。SYSTEM：头文件内部告警不传染 demo 的 -Werror
 # ===========================================================================
 add_library(talos_ipc_learning INTERFACE)
+# INTERFACE 库：只提供头文件和链接依赖，不生成编译产物
 target_include_directories(talos_ipc_learning SYSTEM INTERFACE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../crates/hardware_daedalus/src
-    ${MAGIC_ENUM_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../crates/hardware_daedalus/src  # IPC 头文件路径
+    ${MAGIC_ENUM_DIR}  # magic_enum 头文件路径
 )
 target_link_libraries(talos_ipc_learning INTERFACE
-    fmt::fmt
-    ${OpenCV_LIBS}
-    Threads::Threads
+    fmt::fmt              # 格式化库
+    ${OpenCV_LIBS}        # OpenCV 库（cv::Mat 所需）
+    Threads::Threads      # 线程库（用于同步原语）
 )
 
 # 三个可执行目标：警告只作用于本 demo 源码
+# ---------- demo1: 单进程功能自测 ----------
 add_executable(ipc_demo src/ipc_demo.cpp)
+# 开启严格编译警告，并将警告视为错误（确保代码质量）
 target_compile_options(ipc_demo PRIVATE -Wall -Wextra -Wpedantic -Werror)
 # ipc_demo 用 assert 做断言：Release 构建默认 -DNDEBUG 会把断言整个编译掉，
 # 测试"假通过"。生成器表达式仅在 Release 配置注入 -UNDEBUG 强制保留断言
+# 解释：$<$<CONFIG:Release>:-UNDEBUG> 表示如果配置是 Release，添加 -UNDEBUG 编译选项
+# 这会覆盖默认的 -DNDEBUG，确保 assert 在 Release 下也生效
 target_compile_options(ipc_demo PRIVATE $<$<CONFIG:Release>:-UNDEBUG>)
 target_link_libraries(ipc_demo PRIVATE talos_ipc_learning)
 
+# ---------- demo2: 双进程生产者 ----------
 add_executable(sim_producer src/sim_producer.cpp)
 target_compile_options(sim_producer PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(sim_producer PRIVATE talos_ipc_learning)
 
+# ---------- demo3: 双进程消费者 ----------
 add_executable(vision_consumer src/vision_consumer.cpp)
 target_compile_options(vision_consumer PRIVATE -Wall -Wextra -Wpedantic -Werror)
 target_link_libraries(vision_consumer PRIVATE talos_ipc_learning)
