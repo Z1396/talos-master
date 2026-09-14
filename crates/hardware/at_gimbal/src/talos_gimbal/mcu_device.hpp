@@ -57,20 +57,40 @@ public:
     }
 
     /**
-     * @brief 创建串口TTL模式云台设备
-     * @param device_path 串口路径 /dev/ttyUSB0 /dev/ttyACM0
-     * @param baud_rate 波特率 115200/460800等
-     * @return 成功返回句柄，失败返回错误字符串
-     */
+    * @brief 通过串口创建MCU设备句柄的工厂方法
+    * 
+    * 该方法负责初始化串口连接并返回MCU设备句柄。采用RAII设计模式，
+    * 使用std::unique_ptr管理SerialDevice生命周期，确保资源安全释放。
+    * 
+    * @param device_path 串口设备路径（例如："/dev/ttyUSB0" 或 "COM3"）
+    * @param baud_rate 串口波特率（例如：115200, 9600等）
+    * @return std::expected<McuDeviceHandle, std::string> 
+    *         - 成功：包含McuDeviceHandle对象的expected
+    *         - 失败：包含错误信息字符串的unexpected
+    * 
+    * @note 该函数被标记为noexcept，保证不抛出异常，所有错误通过返回值传递
+    * @note [[nodiscard]] 属性强制调用者检查返回值，避免忽略错误
+    */
     [[nodiscard]] static std::expected<McuDeviceHandle, std::string>
-        create_serial(const std::string& device_path, int baud_rate) noexcept {
+    create_serial(const std::string& device_path, int baud_rate) noexcept {
+        // 1. 创建SerialDevice对象，使用unique_ptr管理（自动析构）
         auto device = std::make_unique<SerialDevice>();
+        
+        // 2. 尝试连接串口设备
+        // 使用if初始化语句，将连接结果存储在result中
         if (auto result = device->connect(device_path, baud_rate); !result) {
+            // 3. 连接失败：构造错误信息并返回unexpected
+            // 使用fmt::format格式化错误消息，包含设备路径、波特率和具体错误原因
+            // std::move(result).error() 提取错误信息（移动语义避免拷贝）
             return std::unexpected(
                 fmt::format(
-                    "connect serial mcu(path={}, baud_rate={}): {}", device_path, baud_rate,
+                    "connect serial mcu(path={}, baud_rate={}): {}", 
+                    device_path, baud_rate,
                     std::move(result).error()));
         }
+        
+        // 4. 连接成功：转移device所有权到McuDeviceHandle
+        // McuDeviceHandle将负责后续的串口操作和资源释放
         return McuDeviceHandle(std::move(device));
     }
 
