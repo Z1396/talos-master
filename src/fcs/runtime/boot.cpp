@@ -241,6 +241,14 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
         // 传入variant变体变量，visit自动分发匹配分支
         config.backend);
 
+    /*World
+    │
+    ├── FoxgloveConfig
+    │
+    ├── CoordinateSystem
+    │
+    └── bullet_speed_data*/
+
     // ========== 步骤4：注入视觉层全局静态配置资源 ==========
     // 1. 敌方识别颜色（红/蓝队伍）存入全局资源
     world.insert_resource(config.vision.detect_color);
@@ -255,6 +263,18 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // 5. L2层检测结果缓存资源，存放单帧装甲检测数据
     world.insert_resource(L2::TrackerReadbackCache{});
 
+    /*World
+    │
+    ├── FoxgloveConfig
+    ├── CoordinateSystem
+    ├── bullet_speed_data
+    │
+    ├── DetectColor
+    ├── CapabilityState
+    ├── FollowingState
+    ├── ArmorROI
+    └── TrackerReadbackCache*/
+
     // 打印启动日志，快速核对视觉基础配置是否加载正确
     // fmt格式化打印识别颜色
     SPDLOG_INFO("detect color: {}", config.vision.detect_color);
@@ -265,6 +285,10 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // runtime::setup_l1：底层硬件统一初始化函数
     // 内部逻辑：打开相机设备、初始化MCU串口、创建图像SPMC输入无锁通道
     // 返回stdexpected：成功携带相机配置；失败携带错误字符串
+    /*Camera
+    MCU
+    通信
+    图像通道*/
     auto setup_result = runtime::setup_l1(world, scheduler, config.backend);
     // 判断硬件初始化失败分支
     if (!setup_result) {
@@ -274,6 +298,10 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
 
     // ===================== 步骤6：创建L2装甲推理后端、PnP解算器 =====================
     // 调用工厂函数创建YOLO/ONNX/TensorRT推理引擎句柄
+    /*ONNX
+    TensorRT
+    CPU
+    GPU*/
     auto backend_handle_result = L2::create_detector_backend_handle(config.vision.armor.get());
     // 推理引擎创建失败，返回错误终止启动
     if (!backend_handle_result) {
@@ -291,6 +319,22 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // ===================== 步骤7：注册弹道解算全局资源 =====================
     // 弹道配置移动传入注册函数，存入全局资源容器
     core::trajectory::register_resource(scheduler, std::move(config.vision.trajectory));
+    /*World
+    │
+    ├── FoxgloveConfig
+    ├── CoordinateSystem
+    ├── BulletSpeed
+    ├── DetectColor
+    ├── CapabilityState
+    ├── FollowingState
+    ├── ArmorROI
+    ├── TrackerReadbackCache
+    ├── Camera resources
+    ├── MCU resources
+    ├── Image channels
+    ├── DetectorBackend
+    ├── PnPSolver
+    └── Trajectory resources*/
     // 读取全局弹速资源并打印，启动校验弹速参数
     SPDLOG_INFO(
         "bullet initial speed = {:.3f} m/s",
@@ -298,20 +342,34 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
 
     // ===================== 步骤8：自上而下分层注册全部ECS业务系统 =====================
     // L2感知层：装甲检测、LDM大符、Rune旋转能量机关图像任务
+    /*L2
+    ├── Armor Detection
+    ├── LDM
+    └── Rune Detection*/
     L2::register_detection_systems(scheduler);
     L2::ldm::register_ldm_systems(
         scheduler, std::move(config.vision.ldm), setup_result.value().camera_config);
     rune::register_rune_detection_systems(scheduler, std::move(config.vision.rune_detector));
 
     // L3估计层：卡尔曼多目标跟踪、简易LDM滤波、能量机关角速度估计
+    /*L3
+    ├── Tracker
+    ├── Naive LDM
+    └── Energy Meter*/
     L3::register_tracker_systems(scheduler, std::move(config.vision.l3->tracker));
     L3::ldm::register_naive_ldm_systems(scheduler, config.vision.naive_ldm);
     energy_meter::register_energy_meter_systems(scheduler, std::move(config.vision.energy_meter));
 
     // L4规划层：目标运动预测、MPC云台角度补偿、最优瞄准轨迹计算
+    /*L4
+    =
+    瞄准规划*/
     L4::register_l4_planning_systems(scheduler, std::move(config.vision.l4.get()));
 
     // L5武器顶层：弹道最终解算、摩擦轮调速、发射判定逻辑任务
+    /*L5
+    =
+    最终武器决策*/
     L5::register_enhanced_weapon_system(scheduler, std::move(config.vision.l5.get()));
 
     // ===================== 步骤9：手性功能条件注册 =====================
@@ -327,7 +385,17 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     quanta_cfg.filter                          = config.vision.quanta_filter;  //补充图像滤波参数
     // 从硬件初始化结果读取相机分辨率
     const auto& stream_camera_config = setup_result.value().camera_config;
-    // 注册H.265编码、Foxglove WebSocket推流ECS任务
+
+    // 注册离线Mcap录制任务：抓取图像/跟踪/调试消息离线保存
+    /*Camera
+    ↓
+    Encoder
+    ↓
+    H.265
+    ↓
+    WebSocket
+    ↓
+    Foxglove*/
     auto quanta_stream_result        = runtime::register_quanta_stream_systems(
         world, scheduler, quanta_cfg,
         static_cast<int>(stream_camera_config.width),
@@ -337,8 +405,11 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
         return std::unexpected(
             fmt::format("注册Quanta高速数据流系统失败: {}", quanta_stream_result.error()));
     }
-
-    // 注册离线Mcap录制任务：抓取图像/跟踪/调试消息离线保存
+    /*运行数据
+    ↓
+    Capturer System
+    ↓
+    MCAP*/
     runtime::register_runtime_capturer_system(scheduler, config.capturer, config.launch);
 
     // ===================== 步骤11：调度器构建拓扑，冻结运行环境 =====================
@@ -353,7 +424,55 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     }
 
     // 所有初始化步骤无任何错误，返回空expected代表启动成功
+    /*所以最终运行时可能是：
+            Camera
+                ↓
+          Detection
+                ↓
+           Tracking
+                ↓
+            Planning
+                ↓
+           Weapon
+
+    同时：
+
+    Camera ─────→ Quanta ─────→ Foxglove
+
+    Tracking ────→ Capturer ───→ MCAP*/
     return {};
 }
 
 } // fcs顶层命名空间结束
+/*所以 boot.cpp 的最核心逻辑其实只有这 6 行
+
+如果把 300 多行压缩成伪代码：
+
+boot(scheduler, config)
+{
+    auto& world = scheduler.world();
+
+    // ① 准备全局资源
+    world.insert_resource(...);
+    world.emplace_resource(...);
+
+    // ② 根据硬件类型初始化
+    std::visit(...);
+
+    // ③ 初始化 L1
+    setup_l1(...);
+
+    // ④ 创建 L2/L3/L4/L5 所需要的资源
+    create_detector();
+    create_pnp();
+    create_trajectory();
+
+    // ⑤ 注册所有 System
+    register_L2();
+    register_L3();
+    register_L4();
+    register_L5();
+
+    // ⑥ 建立最终调度拓扑
+    scheduler.build();
+}*/
