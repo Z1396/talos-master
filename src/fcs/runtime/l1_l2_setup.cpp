@@ -620,6 +620,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                     return std::unexpected(
                         fmt::format("init daedalus input: {}", input_result.error()));
                 }
+                
                 SPDLOG_INFO("initializing daedalus output interface...");
                 // 创建仿真武器输出接口（发射指令写入共享内存给仿真器）
                 auto out_result = fcs::L1::OutputInterface::create_ipc(ipc_device);
@@ -637,7 +638,6 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 imu_ready = true; // IMU就绪标记置true，后面会注册IMU、武器系统
                 return {}; // 成功，返回空expected<void>
             },
-
             // ========== 分支2：Direct分体实物硬件（MCU+海康相机，支持串口/USB HID/Chiral私有云台） ==========
             [&camera, &output, &imu,&imu_ready](hardware::DirectConfig cfg) -> std::expected<void, std::string> {
                 // 全局静态缓冲区清零：存放MCU上报IMU数据、云台能力数据
@@ -738,6 +738,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 return {}; // Direct硬件初始化成功
             }},
         cfg); // std::visit传入variant变量cfg
+
     // ==============================================
     // 上面硬件分支初始化失败 → 直接向上返回错误字符串
     if (!result) {

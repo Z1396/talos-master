@@ -223,7 +223,7 @@ public:
     // name：共享内存名字；size：期望打开的共享内存字节大小
     [[nodiscard]] static std::expected<ShmRegion, ShmError>
     open(const std::string_view name, const size_t size) {
-        // shm_path()：内部工具函数，把共享内存name拼接成 /dev/shm/xxx 文件路径
+        // shm_path()：内部工具函数，把共享内存name拼接成/tmp/xxx 文件路径
         const auto path = shm_path(name);
 
         // std::filesystem::exists：C++17文件系统库，判断路径文件是否存在
