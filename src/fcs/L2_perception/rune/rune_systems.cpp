@@ -17,8 +17,8 @@
 // DAG任务调度器 talos
 #include "scheduler/scheduler.hpp"
 
-#include <magic_enum.hpp>    // 枚举转字符串，打印状态码
-#include <spdlog/spdlog.h>   // 日志系统
+#include <magic_enum.hpp>         // 枚举转字符串，打印状态码
+#include <spdlog/spdlog.h>        // 日志系统
 
 #include <opencv2/core/eigen.hpp> // Eigen矩阵 ↔ OpenCV Mat互相转换
 #include <opencv2/imgcodecs.hpp>  // imencode JPEG压缩
@@ -54,9 +54,7 @@ namespace {
 }
 
 /// @brief 纳秒时间戳转为秒，用于解算时序计算
-[[nodiscard]] auto ns_to_sec(uint64_t ns) -> double {
-    return static_cast<double>(ns) * 1e-9;
-}
+[[nodiscard]] auto ns_to_sec(uint64_t ns) -> double { return static_cast<double>(ns) * 1e-9; }
 
 } // namespace
 
@@ -90,8 +88,7 @@ void register_rune_detection_systems(talos::Scheduler& scheduler, RuneDetectorCo
             // 当前己方颜色（红/蓝）
             core::detecting_color color,
             // TF坐标变换系统：camera ↔ odom里程计坐标系转换
-            talos::res<fast_tf::CoordinateSystem> tf_system) mutable
-        {
+            talos::res<fast_tf::CoordinateSystem> tf_system) mutable {
             // 能力判断：如果运行配置关闭了小符识别，直接退出，不执行检测
             if (!core::capable(*cap, core::Capability::Rune)) {
                 return;

@@ -6,8 +6,6 @@
 // ECS调度器资源组件基础：res<T> 只读资源、res_mut<T> 可写资源包装器
 #include "scheduler/system/components.hpp"
 
-// 标准算法库（遍历、查找等）
-#include <algorithm>
 // 定长数组，固定容量容器
 #include <array>
 // 原子变量，多线程无锁同步
@@ -79,8 +77,8 @@ struct ControlResourceSnapshot {
     // 四类固定静态坐标变换（fast_tf外参标定值）
     ControlTransformSnapshot odom_to_gimbal_pitch{};   // 里程计系 → 云台俯仰
     ControlTransformSnapshot gimbal_to_camera_link{};  // 云台 → 相机机械安装架
-    ControlTransformSnapshot odom_to_camera_optical{};  // 里程计 → 相机光学成像坐标系
-    ControlTransformSnapshot odom_to_muzzle{};          // 里程计 → 枪口发射坐标系
+    ControlTransformSnapshot odom_to_camera_optical{}; // 里程计 → 相机光学成像坐标系
+    ControlTransformSnapshot odom_to_muzzle{};         // 里程计 → 枪口发射坐标系
 };
 
 // 导入调度器资源组件命名空间，简化 res / res_mut 书写
@@ -88,7 +86,7 @@ using namespace talos::scheduler::system;
 
 // ========== IMU状态 ECS资源别名 ==========
 // res<T>：全局只读资源，多线程共享读取，不可修改
-using imu_state     = res<ImuState>;
+using imu_state = res<ImuState>;
 // res_mut<T>：全局可写资源，仅初始化/硬件采集系统拥有写入权限
 using imu_state_mut = res_mut<ImuState>;
 
@@ -102,10 +100,10 @@ using detecting_color_mut = res_mut<ArmorColor>;
  * 比赛场景可关闭无用模块降低CPU负载
  */
 enum Capability {
-    Armor  = 0,  // 装甲板识别跟踪模块
-    Rune   = 1,  // 旋转能量机关Rune检测
-    Ldm    = 2,  // 大符LDM能量机关光斑检测
-    Quanta = 3,  // Foxglove高速视频流可视化推流
+    Armor  = 0, // 装甲板识别跟踪模块
+    Rune   = 1, // 旋转能量机关Rune检测
+    Ldm    = 2, // 大符LDM能量机关光斑检测
+    Quanta = 3, // Foxglove高速视频流可视化推流
 };
 
 // 能力掩码底层存储类型：8位无符号整数，最多支持8个功能开关

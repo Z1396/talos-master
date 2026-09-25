@@ -28,33 +28,33 @@
 
 #include "L4_planning/aimer/aimer_systems.hpp"
 #include "L3_estimation/ldm_naive/types.hpp"          // LDM吊射滤波结果结构体
-#include "L4_planning/aimer/aimer.hpp"                 // 瞄准核心类Aimer，负责弹道解算
-#include "L4_planning/aimer/armor_target_decider.hpp"  // 装甲目标决策器(有人/无人模式)
-#include "L4_planning/aimer/fsm.hpp"                   // 瞄准阶段状态机
+#include "L4_planning/aimer/aimer.hpp"                // 瞄准核心类Aimer，负责弹道解算
+#include "L4_planning/aimer/armor_target_decider.hpp" // 装甲目标决策器(有人/无人模式)
+#include "L4_planning/aimer/fsm.hpp"                  // 瞄准阶段状态机
 
-#include "L2_perception/armor/readback_roi.hpp"        // L2感知ROI回读配置、缓存
-#include "L3_estimation/energy_meter/types.hpp"         // 能量机关L3输出结构体
-#include "L3_estimation/tracker/types.hpp"              // 装甲跟踪器输出
+#include "L2_perception/armor/readback_roi.hpp"       // L2感知ROI回读配置、缓存
+#include "L3_estimation/energy_meter/types.hpp"       // 能量机关L3输出结构体
+#include "L3_estimation/tracker/types.hpp"            // 装甲跟踪器输出
 #include "L4_planning/aimer/types.hpp"
-#include "L4_planning/common/transform_utils.hpp"       // TF坐标变换工具
-#include "L4_planning/config.hpp"                      // L4全局配置
-#include "L4_planning/control_intent.hpp"              // 控制指令：TrackCommand/ShotCommand/HoldCommand
-#include "L4_planning/plan_source.hpp"                  // 目标来源枚举(装甲/符/LDM)
-#include "L4_planning/selected_target_snapshot.hpp"    // 选中目标快照
-#include "L4_planning/target_selection_trace.hpp"       // 目标选择诊断日志
-#include "L4_planning/trajectory_builder.hpp"           // 轨迹生成器
+#include "L4_planning/common/transform_utils.hpp"     // TF坐标变换工具
+#include "L4_planning/config.hpp"                     // L4全局配置
+#include "L4_planning/control_intent.hpp" // 控制指令：TrackCommand/ShotCommand/HoldCommand
+#include "L4_planning/plan_source.hpp"    // 目标来源枚举(装甲/符/LDM)
+#include "L4_planning/selected_target_snapshot.hpp" // 选中目标快照
+#include "L4_planning/target_selection_trace.hpp"   // 目标选择诊断日志
+#include "L4_planning/trajectory_builder.hpp"       // 轨迹生成器
 #include "camera_config.hpp"
-#include "core/channel_topics.hpp"                     // 总线Topic定义
+#include "core/channel_topics.hpp"                  // 总线Topic定义
 #include "core/runtime.hpp"
-#include "core/target_key.hpp"                         // 目标唯一标识(颜色+装甲ID)
-#include "core/time.hpp"                               // 高精度时钟
-#include "core/trajectory/resource.hpp"                // 弹道求解器全局资源
+#include "core/target_key.hpp"                      // 目标唯一标识(颜色+装甲ID)
+#include "core/time.hpp"                            // 高精度时钟
+#include "core/trajectory/resource.hpp"             // 弹道求解器全局资源
 #include "euler.hpp"
-#include "scheduler/scheduler.hpp"                     // Talos调度器
+#include "scheduler/scheduler.hpp"                  // Talos调度器
 
 #include <algorithm>
 #include <cmath>
-#include <expected>           // C++23 错误处理，替代异常
+#include <expected>                                 // C++23 错误处理，替代异常
 #include <frame.hpp>
 #include <functional>
 #include <limits>
@@ -66,7 +66,7 @@
 
 namespace fcs::L4 {
 
-namespace { // 匿名命名空间，仅本编译单元可见
+namespace {                                         // 匿名命名空间，仅本编译单元可见
 
 /**
  * @brief 目标相位状态
@@ -75,9 +75,9 @@ namespace { // 匿名命名空间，仅本编译单元可见
  * 瞄准阶段切换逻辑：先瞄准整车中心防止丢失，稳定后切换到单独装甲板击打
  */
 struct TargetPhaseState {
-    ArmorAimPhase phase{ArmorAimPhase::SingleArmor};  ///< 当前瞄准阶段：整车中心/单装甲
-    int overflow_count{0};                            ///< 阶段切换计数，平滑过渡防抖
-    std::optional<int> jumped_selected_armor_id{};    ///< 目标跳变后记忆选中的装甲ID，防跳变乱切装甲
+    ArmorAimPhase phase{ArmorAimPhase::SingleArmor}; ///< 当前瞄准阶段：整车中心/单装甲
+    int overflow_count{0};                           ///< 阶段切换计数，平滑过渡防抖
+    std::optional<int> jumped_selected_armor_id{};   ///< 目标跳变后记忆选中的装甲ID，防跳变乱切装甲
 };
 
 /**
@@ -85,11 +85,11 @@ struct TargetPhaseState {
  * 单个候选装甲目标全套评估数据，用于打分择优
  */
 struct CandidateEvaluation {
-    core::TargetKey key{};                            ///< 目标唯一键(敌方颜色+装甲编号)
-    L3::TrackerOutput tracker{};                      ///< L3卡尔曼跟踪输出
-    TargetPrediction prediction{};                    ///< 弹道解算后的瞄准预测结果
-    TargetSelectionScores scores{};                   ///< 五项加权打分分数
-    TargetSelectionTraceEntry trace_entry{};          ///< 诊断追踪记录，上位机可视化查看打分详情
+    core::TargetKey key{};                   ///< 目标唯一键(敌方颜色+装甲编号)
+    L3::TrackerOutput tracker{};             ///< L3卡尔曼跟踪输出
+    TargetPrediction prediction{};           ///< 弹道解算后的瞄准预测结果
+    TargetSelectionScores scores{};          ///< 五项加权打分分数
+    TargetSelectionTraceEntry trace_entry{}; ///< 诊断追踪记录，上位机可视化查看打分详情
 };
 
 /**
@@ -99,7 +99,7 @@ struct CandidateEvaluation {
 struct GimbalEffortMetrics {
     double yaw_delta_rad{std::numeric_limits<double>::infinity()};   ///< yaw需要转动弧度
     double pitch_delta_rad{std::numeric_limits<double>::infinity()}; ///< pitch需要转动弧度
-    double score{0.0};                                               ///< 云台代价得分[0,1]，转动越小得分越高
+    double score{0.0}; ///< 云台代价得分[0,1]，转动越小得分越高
 };
 
 /**
@@ -107,8 +107,8 @@ struct GimbalEffortMetrics {
  * 下发ROI给L2感知，限制相机只在目标区域做识别，缩小检测范围提速、抗噪
  */
 struct ReadbackRoiTimestamps {
-    uint64_t projection_timestamp_ns{0};              ///< 轨迹预测对应的时间戳
-    uint64_t freshness_timestamp_ns{0};               ///< 目标最后观测时间戳，判断目标新鲜度
+    uint64_t projection_timestamp_ns{0}; ///< 轨迹预测对应的时间戳
+    uint64_t freshness_timestamp_ns{0};  ///< 目标最后观测时间戳，判断目标新鲜度
 };
 
 /**
@@ -116,9 +116,10 @@ struct ReadbackRoiTimestamps {
  * 一轮目标筛选的全部装甲候选、被淘汰目标，用于诊断
  */
 struct ArmorCandidateCollection {
-    std::vector<core::TargetKey> active_keys{};       ///< 当前存活的所有目标Key
-    std::vector<CandidateEvaluation> candidates{};    ///< 有效可击打候选装甲
-    std::vector<TargetSelectionTraceEntry> rejected{}; ///< 被剔除的目标(无跟踪/弹道求解失败)，用于日志排查
+    std::vector<core::TargetKey> active_keys{};    ///< 当前存活的所有目标Key
+    std::vector<CandidateEvaluation> candidates{}; ///< 有效可击打候选装甲
+    std::vector<TargetSelectionTraceEntry>
+        rejected{}; ///< 被剔除的目标(无跟踪/弹道求解失败)，用于日志排查
 };
 
 // 工具函数：数值钳位至 [0,1]
@@ -134,7 +135,7 @@ struct ArmorCandidateCollection {
 
 // 目标视觉滞留时长：多久没有收到图像观测，越大代表目标越久没被看见
 [[nodiscard]] double
-optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexcept {
+    optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexcept {
     if (tracker.last_observation_timestamp_ns == 0) {
         return 0.0;
     }
@@ -176,13 +177,11 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
     if (preferred_key.has_value()) // 存在优先锁定的目标key
     {
         // 遍历全部跟踪器
-        for (const auto& tracker : *trackers)
-        {
+        for (const auto& tracker : *trackers) {
             // tracker_supports_readback_roi(tracker)：判断该跟踪器是否支持ROI回读（有些跟踪器不能做ROI）
             // make_target_key(tracker)：从跟踪器生成唯一目标ID，和preferred_key比对
             if (tracker_supports_readback_roi(tracker)
-                && make_target_key(tracker) == *preferred_key)
-            {
+                && make_target_key(tracker) == *preferred_key) {
                 // 找到优先锁定目标，直接返回这个跟踪器，不再往下遍历
                 return tracker;
             }
@@ -193,8 +192,7 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
     const L3::TrackerOutput* best = nullptr; // 记录当前最优跟踪器的指针，初始为空
 
     // 遍历全部跟踪结果，筛选可用ROI跟踪器，打分选出best
-    for (const auto& tracker : *trackers)
-    {
+    for (const auto& tracker : *trackers) {
         // 当前跟踪器不支持ROI裁剪，直接跳过
         if (!tracker_supports_readback_roi(tracker)) {
             continue;
@@ -212,10 +210,8 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
         const bool best_has_finite    = std::isfinite(best->last_image_center_distance_px);
 
         // 两个状态不一致：一个有效、一个无效
-        if (tracker_has_finite != best_has_finite)
-        {
-            if (tracker_has_finite)
-            {
+        if (tracker_has_finite != best_has_finite) {
+            if (tracker_has_finite) {
                 // 当前tracker数值有效，旧best无效，替换best
                 best = &tracker;
             }
@@ -225,16 +221,14 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
         // --------------------------第三优先级：画面上离图像中心越近优先级越高--------------------------
         // last_image_center_distance_px：目标框距离画面中心点像素距离，越小越靠近画面中间
         if (tracker_has_finite
-            && tracker.last_image_center_distance_px < best->last_image_center_distance_px)
-        {
+            && tracker.last_image_center_distance_px < best->last_image_center_distance_px) {
             best = &tracker;
             continue;
         }
 
         // --------------------------第四优先级：观测时间戳更新的优先--------------------------
         // last_observation_timestamp_ns：这个跟踪器最后一次观测到目标的纳秒时间戳，越大越新
-        if (tracker.last_observation_timestamp_ns > best->last_observation_timestamp_ns)
-        {
+        if (tracker.last_observation_timestamp_ns > best->last_observation_timestamp_ns) {
             best = &tracker;
         }
     }
@@ -248,10 +242,9 @@ optical_age_seconds(const L3::TrackerOutput& tracker, uint64_t current_ns) noexc
     return *best;
 }
 
-
 // 解析选中目标快照的两个时间戳，用于ROI缓存
 [[nodiscard]] ReadbackRoiTimestamps
-resolve_readback_roi_timestamps(const SelectedTargetSnapshot& snapshot) noexcept {
+    resolve_readback_roi_timestamps(const SelectedTargetSnapshot& snapshot) noexcept {
     const uint64_t projection_timestamp_ns =
         snapshot.tracker.timestamp_ns != 0 ? snapshot.tracker.timestamp_ns : snapshot.timestamp_ns;
     const uint64_t freshness_timestamp_ns = snapshot.tracker.last_observation_timestamp_ns != 0
@@ -265,7 +258,7 @@ resolve_readback_roi_timestamps(const SelectedTargetSnapshot& snapshot) noexcept
 
 // 获取敌方车辆/基地中心世界坐标
 [[nodiscard]] std::optional<Eigen::Vector3d>
-tracker_center_world_position(const L3::TrackerOutput& tracker) noexcept {
+    tracker_center_world_position(const L3::TrackerOutput& tracker) noexcept {
     if (const auto* robot_state = tracker.robot_state()) {
         return robot_state->position;
     }
@@ -343,13 +336,13 @@ tracker_center_world_position(const L3::TrackerOutput& tracker) noexcept {
 
 // 打分项2：跟踪状态分数，正常跟踪=1分，临时丢失使用配置低分
 [[nodiscard]] double
-score_track_state(const TargetSelectionConfig& cfg, const L3::TrackerOutput& tracker) noexcept {
+    score_track_state(const TargetSelectionConfig& cfg, const L3::TrackerOutput& tracker) noexcept {
     return tracker.status == L3::TrackerStatus::Tracking ? 1.0 : cfg.temp_lost_state_score;
 }
 
 // 打分项3：子弹飞行时间分数，距离越近飞行时间越短，得分越高
 [[nodiscard]] double
-score_tof(const TargetSelectionConfig& cfg, const TargetPrediction& prediction) noexcept {
+    score_tof(const TargetSelectionConfig& cfg, const TargetPrediction& prediction) noexcept {
     if (!std::isfinite(prediction.flying_time) || cfg.refs.tof_ref_s <= 1e-6) {
         return 0.0;
     }
@@ -546,7 +539,7 @@ struct AimContext {
 
 // 构造轨迹规划种子，用于生成车辆运动参考轨迹
 [[nodiscard]] std::optional<PlannerSeed>
-make_planner_seed(const L3::TrackerOutput& tracker, const TargetPrediction& pred) noexcept {
+    make_planner_seed(const L3::TrackerOutput& tracker, const TargetPrediction& pred) noexcept {
     PlannerSeed s;
     s.state_timestamp_ns    = tracker.timestamp_ns;
     s.target_jumped         = tracker.target_jumped;
@@ -820,9 +813,9 @@ auto write_hold_outputs(
     for (const auto& candidate : collection.candidates) {
         decider_candidates.push_back(
             ArmorTargetDeciderCandidate{
-                .key     = candidate.key,        // 目标唯一ID
-                .tracker = candidate.tracker,    // 跟踪器输出位姿、观测信息
-                .scores  = candidate.scores,     // 各项打分（距离、角度、置信度等）
+                .key     = candidate.key,     // 目标唯一ID
+                .tracker = candidate.tracker, // 跟踪器输出位姿、观测信息
+                .scores  = candidate.scores,  // 各项打分（距离、角度、置信度等）
             });
     }
 
@@ -841,7 +834,7 @@ auto write_hold_outputs(
 
     // ==========步骤5：构建目标选择追踪trace，用于Foxglove调试可视化、日志回放==========
     // trace记录：时间戳、上一轮目标、决策器类型、切换阈值、选中结果、全部候选、被拒绝的候选列表
-    auto trace     = build_target_selection_trace(
+    auto trace = build_target_selection_trace(
         ctx.current_ns, previous_key, decider, sel_cfg.switch_margin, *decider_result,
         collection.candidates, std::move(collection.rejected));
 
@@ -865,7 +858,6 @@ auto write_hold_outputs(
         .trace    = std::move(trace),
     };
 }
-
 
 /**
  * @brief 能量机关目标分支
@@ -935,10 +927,9 @@ auto write_hold_outputs(
         .intent   = build_control_intent(*pred, ctx, ref_traj_cfg, std::nullopt, ldm_in),
         .snapshot = std::move(snap),
         // trace只填时间戳；能量机关没有多候选目标选择逻辑，没有选目标trace信息
-        .trace    = TargetSelectionTrace{.timestamp_ns = ctx.current_ns},
+        .trace = TargetSelectionTrace{.timestamp_ns = ctx.current_ns},
     };
 }
-
 
 } // namespace
 
@@ -1002,23 +993,27 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
          unmanned_armor_target_decider = std::move(unmanned_armor_target_decider),
          manned_armor_target_decider   = std::move(manned_armor_target_decider),
          was_following = false, decider_state = ArmorTargetDeciderState{}](
-            talos::res<L4Config> cfg,                          // 只读L4配置资源
-            talos::res<Aimer> aimer,                           // 瞄准模块参数
-            core::trajectory::trajectory_solver solver,         // 弹道求解器句柄（共享）
-            core::trajectory::bullet_speed bullet_speed_,      // 弹丸初速资源
-            core::following following,                         // 手控跟随开关原子标记
-            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in, // L3跟踪输出输入通道
-            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic> rune_in, // 能量机关状态输入
-            talos::spmc<L3::ldm::LdmState> ldm_in,             // LDM吊射目标输入通道
-            talos::res<fast_tf::CoordinateSystem> tf_buffer,   // fast‑tf坐标变换缓存资源
-            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> out_snap, // 输出选中目标快照（可视化+ROI使用）
-            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic> out_trace,   // 输出目标选择调试trace，给Foxglove
-            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic> out_ctrl) mutable {        // 输出云台控制意图，下发L1硬件层
-
+            talos::res<L4Config> cfg,                        // 只读L4配置资源
+            talos::res<Aimer> aimer,                         // 瞄准模块参数
+            core::trajectory::trajectory_solver solver,      // 弹道求解器句柄（共享）
+            core::trajectory::bullet_speed bullet_speed_,    // 弹丸初速资源
+            core::following following,                       // 手控跟随开关原子标记
+            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic>
+                tracker_in,                                  // L3跟踪输出输入通道
+            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic>
+                rune_in,                                     // 能量机关状态输入
+            talos::spmc<L3::ldm::LdmState> ldm_in,           // LDM吊射目标输入通道
+            talos::res<fast_tf::CoordinateSystem> tf_buffer, // fast‑tf坐标变换缓存资源
+            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
+                out_snap,                                    // 输出选中目标快照（可视化+ROI使用）
+            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic>
+                out_trace,                                   // 输出目标选择调试trace，给Foxglove
+            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic>
+                out_ctrl) mutable {                          // 输出云台控制意图，下发L1硬件层
             const uint64_t now_ns = fcs::clock::now_ns();
 
             // 查询当前时刻：云台坐标系、枪口坐标系变换；从fast_tf缓存插值得到
-            const auto xf         = lookup_gimbal_muzzle_transforms(*tf_buffer, now_ns);
+            const auto xf = lookup_gimbal_muzzle_transforms(*tf_buffer, now_ns);
             // [[unlikely]]编译器提示：这个分支属于极少发生的冷路径，编译器做优化
             if (!xf) [[unlikely]] {
                 SPDLOG_WARN("tf lookup failed: {}", xf.error());
@@ -1055,7 +1050,8 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             const auto tracker_vec = tracker_in.read_current();
 
             // 获取兜底目标：当完全没有新决策输出时，ROI模块可以继续使用上一个有效目标
-            const auto fallback = pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
+            const auto fallback =
+                pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
 
             // ========== 目标优先级逻辑：1.装甲板优先 ==========
             // try_armor：装甲目标选择、弹道计算，输出瞄准决策std::optional<Decision>
@@ -1106,7 +1102,8 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
     // =================================================================================
     scheduler.add_system<talos::pool_compute>(
         "l4_optimal_target_readback_roi",
-        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> selected_target_in,
+        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
+               selected_target_in,
            talos::res<L2::ArmorReadbackRoiConfig> readback_roi_config,
            talos::res_mut<L2::TrackerReadbackCache> readback_cache) {
             // lambda内部辅助函数：判断当前快照是否支持ROI回传，只有装甲目标才支持
@@ -1148,4 +1145,4 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
         });
 }
 
-} // namespace fcs::L4_planning::aimer
+} // namespace fcs::L4

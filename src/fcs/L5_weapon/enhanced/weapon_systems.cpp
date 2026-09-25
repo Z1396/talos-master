@@ -249,7 +249,8 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
 
     // 步骤3:创建轨迹优化器实例，使用shared_ptr避免大对象拷贝
     // TinyMpcTrajectoryOptimizer：MPC轨迹求解器，用于运动目标的预测弹道优化
-    auto optimizer = std::make_shared<TinyMpcTrajectoryOptimizer>(config.mpc_weapon, trajectory_cfg);
+    auto optimizer =
+        std::make_shared<TinyMpcTrajectoryOptimizer>(config.mpc_weapon, trajectory_cfg);
 
     // 步骤4:注册武器控制系统，固定250Hz周期执行，周期4ms，控制强实时
     scheduler.add_system<talos::fixed_rate<250>>(
@@ -263,7 +264,6 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
             talos::res<fast_tf::CoordinateSystem> tf_buffer,
             // 输出SPMC通道：输出最终武器指令，下发给L1硬件层
             talos::spmc_mut<WeaponCommand, WeaponCommandChannelTopic> weapon_out) mutable {
-
             // 读取SPMC通道最新控制意图，非阻塞读取
             auto intent = intent_in.read();
             // 没有收到L4下发的新意图，本帧直接退出，不输出指令
@@ -285,7 +285,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                     [&](const L4::TrackCommand& cmd) {
                         // 步骤1：调用MPC轨迹优化器，对运动目标做预测弹道求解
                         // 返回std::expected，成功拿到WeaponCommand；失败携带错误信息
-                        auto opt         = optimizer->optimize(cmd, now);
+                        auto opt = optimizer->optimize(cmd, now);
                         // MPC优化成功就用优化结果；失败调用track_fallback降级兜底方案
                         WeaponCommand wc = opt ? *opt : track_fallback(cmd, now);
 
@@ -356,7 +356,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                         weapon_out.write(wc);
                     },
                 },
-                *intent); // 把variant变体对象传入visit，完成类型分发
+                *intent);                       // 把variant变体对象传入visit，完成类型分发
         });
 }
 

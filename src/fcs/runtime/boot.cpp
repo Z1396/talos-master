@@ -6,9 +6,6 @@
 #include "runtime/boot.hpp"
 
 // ===================== L1-L5五层业务模块头文件 =====================
-// L1：硬件原始数据输出层，只负责相机、MCU、IMU硬件读写，无算法
-#include "L1_sensor/output_interface.hpp"
-
 // L2感知-装甲识别：ROI图像裁剪逻辑、装甲检测ECS系统注册函数
 #include "L2_perception/armor/readback_roi.hpp"
 #include "L2_perception/armor/systems.hpp"
@@ -34,18 +31,12 @@
 // ===================== 框架底层核心通用组件头文件 =====================
 // 装甲全套数据结构：单装甲、批量检测、角点、PnP三维结果
 #include "core/armor_types.hpp"
-// 全局SPMC无锁通道Topic枚举，定义所有线程间数据流标识
-#include "core/channel_topics.hpp"
 // Runtime全局上下文结构体，存储启动、硬件、视觉全部配置
 #include "core/runtime.hpp"
 // 弹道计算资源容器：弹速、空气阻力、重力补偿、分段查表
 #include "core/trajectory/resource.hpp"
-// 全局基础别名：Eigen向量/位姿、枚举、状态机、功能掩码
-#include "core/types.hpp"
 // fast_tf静态坐标系枚举：world/odom/gimbal/camera/muzzle所有坐标系标识
 #include "frame.hpp"
-// Quanta视频编码组件：H.265硬编码、WebSocket Foxglove实时推流
-#include "quanta/stream_transport.hpp"
 // 离线录制组件：图像/跟踪/调试消息存入Mcap文件离线回放
 #include "runtime/capturer.hpp"
 // TOML配置文件加载、语法校验、类型转换工具
@@ -132,13 +123,13 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     // 读取相机安装平移向量
     auto cam_trans = config.gimbal_yaw.gimbal_pitch.camera_link.translation;
     // 读取相机安装滚转/俯仰/偏航角度（单位度）
-    auto cam_rot   = config.gimbal_yaw.gimbal_pitch.camera_link.rotation();
+    auto cam_rot = config.gimbal_yaw.gimbal_pitch.camera_link.rotation();
     // from_rpy：输入三轴角度(自动转弧度)+三维平移，生成完整坐标变换
     fast_tf::update<fast_tf::camera_link_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::camera_link_fuxk_frame>::from_rpy(
-            to_rad(cam_rot.roll), to_rad(cam_rot.pitch), to_rad(cam_rot.yaw),
-            cam_trans.x(), cam_trans.y(), cam_trans.z()),
+            to_rad(cam_rot.roll), to_rad(cam_rot.pitch), to_rad(cam_rot.yaw), cam_trans.x(),
+            cam_trans.y(), cam_trans.z()),
         0);
 
     // ========== 4.camera_optical相机光学标准坐标系固定转换 ==========
@@ -148,15 +139,14 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     fast_tf::update<fast_tf::camera_optical_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::camera_optical_fuxk_frame>::from_rpy(
-            -pi / 2.0, 0.0, -pi / 2.0,
-            0.0, 0.0, 0.0),
+            -pi / 2.0, 0.0, -pi / 2.0, 0.0, 0.0, 0.0),
         0);
 
     // ========== 5.muzzle_link枪口发射坐标系：弹道解算核心外参 ==========
     // 读取云台到枪口机械平移
     auto muzzle_trans = config.gimbal_yaw.gimbal_pitch.muzzle_link.translation;
     // 读取枪口三轴安装角度
-    auto muzzle_rot   = config.gimbal_yaw.gimbal_pitch.muzzle_link.rotation();
+    auto muzzle_rot = config.gimbal_yaw.gimbal_pitch.muzzle_link.rotation();
     // 构造枪口完整坐标变换存入TF系统
     fast_tf::update<fast_tf::muzzle_link_fuxk_frame>(
         system,
@@ -166,7 +156,7 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
         0);
 }
 
-} // 匿名命名空间结束，内部工具仅本文件可用
+} // namespace
 
 /**
  * @brief 框架顶层唯一启动函数，整个火控程序初始化总入口
@@ -194,7 +184,7 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
  *        build执行后禁止新增任何资源/系统，否则运行断言崩溃
  */
 [[nodiscard]] std::expected<void, std::string>
-boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
+    boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // 从调度器获取ECS全局World容器
     // World是全局资源仓库，所有单例资源（TF、推理、弹道）统一存放
     auto& world = scheduler.world();
@@ -216,28 +206,27 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // std::visit：根据当前硬件类型自动匹配对应lambda分支
     // overloaded{}：简化多分支lambda写法，无需手写模板重载
     std::visit(
-        overloaded{
-            // 分支A：通用直连MCU硬件配置 DirectConfig
-            // &捕获外部所有需要使用的变量：坐标系统、world容器、手性标记
-            [&coordinate_system, &world, &chiral](hardware::DirectConfig cfg) {
-                // 调用本文件私有函数，加载整套机械外参写入TF树
-                init_coordinate_system(coordinate_system, cfg.hardware.extrinsic);
-                // 创建弹道初速全局资源，取值来自MCU硬件默认弹速
-                world.insert_resource(
-                    core::trajectory::bullet_speed_data{
-                        .bullet_speed = cfg.hardware.mcu->bullet_speed_default});
-                // 读取配置内手性开关，赋值给外层chiral变量
-                chiral = cfg.hardware.chiral;
-            },
-            // 分支B：Daedalus一体化集成硬件配置
-            // 无需chiral，仅捕获坐标系统与world容器
-            [&coordinate_system, &world](hardware::DaedalusConfig cfg) {
-                // 同样初始化TF静态坐标树，使用Daedalus专属外参
-                init_coordinate_system(coordinate_system, cfg.extrinsic);
-                // 注入一体化硬件自带弹速参数
-                world.insert_resource(
-                    core::trajectory::bullet_speed_data{.bullet_speed = cfg.bullet_speed});
-            }},
+        overloaded{// 分支A：通用直连MCU硬件配置 DirectConfig
+                   // &捕获外部所有需要使用的变量：坐标系统、world容器、手性标记
+                   [&coordinate_system, &world, &chiral](hardware::DirectConfig cfg) {
+                       // 调用本文件私有函数，加载整套机械外参写入TF树
+                       init_coordinate_system(coordinate_system, cfg.hardware.extrinsic);
+                       // 创建弹道初速全局资源，取值来自MCU硬件默认弹速
+                       world.insert_resource(
+                           core::trajectory::bullet_speed_data{
+                               .bullet_speed = cfg.hardware.mcu->bullet_speed_default});
+                       // 读取配置内手性开关，赋值给外层chiral变量
+                       chiral = cfg.hardware.chiral;
+                   },
+                   // 分支B：Daedalus一体化集成硬件配置
+                   // 无需chiral，仅捕获坐标系统与world容器
+                   [&coordinate_system, &world](const hardware::DaedalusConfig& cfg) {
+                       // 同样初始化TF静态坐标树，使用Daedalus专属外参
+                       init_coordinate_system(coordinate_system, cfg.extrinsic);
+                       // 注入一体化硬件自带弹速参数
+                       world.insert_resource(
+                           core::trajectory::bullet_speed_data{.bullet_speed = cfg.bullet_speed});
+                   }},
         // 传入variant变体变量，visit自动分发匹配分支
         config.backend);
 
@@ -313,7 +302,8 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
 
     // 将推理引擎所有权移动到全局资源，所有L2检测任务共享同一个推理实例
     world.insert_resource(std::move(backend_handle_result->backend));
-    // 根据相机内参创建PnP三维位姿解算器，存入全局资源   //1. 调用 .value() 拿到整个结构体（这里会发生一次拷贝）
+    // 根据相机内参创建PnP三维位姿解算器，存入全局资源   //1. 调用 .value()
+    // 拿到整个结构体（这里会发生一次拷贝）
     world.insert_resource(L2::create_pnp_solver(setup_result.value().camera_config));
 
     // ===================== 步骤7：注册弹道解算全局资源 =====================
@@ -381,8 +371,8 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
 
     // ===================== 步骤10：Quanta视频流、离线录制系统注册 =====================
 
-    auto quanta_cfg      = config.vision.quanta;         // 复制视频基础配置
-    quanta_cfg.filter                          = config.vision.quanta_filter;  //补充图像滤波参数
+    auto quanta_cfg   = config.vision.quanta;        // 复制视频基础配置
+    quanta_cfg.filter = config.vision.quanta_filter; // 补充图像滤波参数
     // 从硬件初始化结果读取相机分辨率
     const auto& stream_camera_config = setup_result.value().camera_config;
 
@@ -396,9 +386,8 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     WebSocket
     ↓
     Foxglove*/
-    auto quanta_stream_result        = runtime::register_quanta_stream_systems(
-        world, scheduler, quanta_cfg,
-        static_cast<int>(stream_camera_config.width),
+    auto quanta_stream_result = runtime::register_quanta_stream_systems(
+        world, scheduler, quanta_cfg, static_cast<int>(stream_camera_config.width),
         static_cast<int>(stream_camera_config.height));
     // 视频流注册失败，返回错误终止启动
     if (!quanta_stream_result) {
@@ -443,7 +432,7 @@ boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     return {};
 }
 
-} // fcs顶层命名空间结束
+} // namespace fcs
 /*所以 boot.cpp 的最核心逻辑其实只有这 6 行
 
 如果把 300 多行压缩成伪代码：

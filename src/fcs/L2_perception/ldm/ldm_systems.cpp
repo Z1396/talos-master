@@ -107,7 +107,7 @@ void apply_detector_boundary_semantics(
     };
 }
 
-} // namespace 内部工具函数结束
+} // namespace
 
 /**
  * @brief 注册LDM大符完整感知流水线系统到Talos调度器

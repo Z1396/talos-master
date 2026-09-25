@@ -19,7 +19,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
-#include <variant>       // std::variant 变体类型，实现大小跟踪器共存
+#include <variant> // std::variant 变体类型，实现大小跟踪器共存
 
 #include <spdlog/spdlog.h>
 
@@ -43,8 +43,7 @@ namespace {
 template <typename ModelT>
 EnergyMeterState build_state_from_tracker(
     const ::energy_meter::Tracker<ModelT>& tracker, uint64_t timestamp_ns, int tracking_frames,
-    bool is_big, bool obs_valid)
-{
+    bool is_big, bool obs_valid) {
     // 获取EKF滤波后的状态向量 x
     const auto& x = tracker.get_state();
 
@@ -61,7 +60,8 @@ EnergyMeterState build_state_from_tracker(
     // 计算当前生效叶片的绝对旋转角度
     // 一共5片叶片，均分360°：每片间隔 2π/5 rad
     // tracker.getCurrentBladeId()：当前需要击打叶片编号
-    const double blade_roll = roll + static_cast<double>(tracker.getCurrentBladeId()) * 2.0 * M_PI / 5.0;
+    const double blade_roll =
+        roll + static_cast<double>(tracker.getCurrentBladeId()) * 2.0 * M_PI / 5.0;
     const double sr = std::sin(blade_roll);
     const double cr = std::cos(blade_roll);
 
@@ -73,8 +73,7 @@ EnergyMeterState build_state_from_tracker(
     const double cy = std::cos(yaw);
     const double sy = std::sin(yaw);
     const Eigen::Vector3d blade_offset(
-        blade_local.x() * cy - blade_local.y() * sy,
-        blade_local.x() * sy + blade_local.y() * cy,
+        blade_local.x() * cy - blade_local.y() * sy, blade_local.x() * sy + blade_local.y() * cy,
         blade_local.z());
 
     // 能量机关旋转中心在odom里程计坐标系下的三维坐标(XC,YC,ZC)
@@ -82,7 +81,8 @@ EnergyMeterState build_state_from_tracker(
 
     // 构造姿态四元数
     const Eigen::Quaterniond yaw_quat(std::cos(yaw / 2), 0.0, 0.0, std::sin(yaw / 2));
-    const Eigen::Quaterniond roll_quat(std::cos(blade_roll / 2), std::sin(blade_roll / 2), 0.0, 0.0);
+    const Eigen::Quaterniond roll_quat(
+        std::cos(blade_roll / 2), std::sin(blade_roll / 2), 0.0, 0.0);
 
     EnergyMeterState out;
     out.timestamp_ns   = timestamp_ns;
@@ -97,25 +97,22 @@ EnergyMeterState build_state_from_tracker(
     out.direction      = tracker.getDirection(); // 顺时针/逆时针旋转方向
     out.is_big_rune    = is_big;
     // 最终待击打叶片在odom世界坐标系下的三维坐标（控制层用来解算云台角度）
-    out.position       = r_center + blade_offset;
+    out.position = r_center + blade_offset;
     // 叶片整体姿态
-    out.quat           = yaw_quat * roll_quat;
+    out.quat = yaw_quat * roll_quat;
 
     out.obs_valid = obs_valid;
 
     // ========= 区分大符、小符赋值动力学参数 =========
-    if constexpr (std::is_same_v<ModelT, ::energy_meter::BigRuneModel>)
-    {
+    if constexpr (std::is_same_v<ModelT, ::energy_meter::BigRuneModel>) {
         // 大符模型：带变速动力学（角加速度、阻力、振幅）
-        out.t           = x(ModelT::TAU);   // 阻尼系数τ
-        out.a           = x(ModelT::A);     // 摆动振幅
-        out.omega       = x(ModelT::W);      // 实时角速度
-        out.b           = ::energy_meter::to_b(out.a);
+        out.t     = x(ModelT::TAU); // 阻尼系数τ
+        out.a     = x(ModelT::A);   // 摆动振幅
+        out.omega = x(ModelT::W);   // 实时角速度
+        out.b     = ::energy_meter::to_b(out.a);
         // 大符需要连续跟踪5帧以上才认定模型有效
         out.model_valid = is_tracking && tracking_frames > 5;
-    }
-    else
-    {
+    } else {
         // 小符：固定匀速旋转，无动力学模型
         out.t           = 0.0;
         out.a           = 0.0;
@@ -138,22 +135,18 @@ EnergyMeterState build_state_from_tracker(
  */
 EnergyMeterState build_state(
     const ::energy_meter::AnyTracker& tracker_var, uint64_t timestamp_ns, int tracking_frames,
-    bool is_big, bool obs_valid)
-{
+    bool is_big, bool obs_valid) {
     // std::visit 访问variant内真实类型，编译期分支匹配
     return std::visit(
-        [&](const auto& tk) -> EnergyMeterState
-        {
+        [&](const auto& tk) -> EnergyMeterState {
             using T = std::decay_t<decltype(tk)>;
-            if constexpr (std::is_same_v<T, std::monostate>)
-            {
+            if constexpr (std::is_same_v<T, std::monostate>) {
                 // 空状态，返回空白结构体
                 return EnergyMeterState{};
-            }
-            else
-            {
+            } else {
                 // 分派给模板函数组装状态
-                return build_state_from_tracker(tk, timestamp_ns, tracking_frames, is_big, obs_valid);
+                return build_state_from_tracker(
+                    tk, timestamp_ns, tracking_frames, is_big, obs_valid);
             }
         },
         tracker_var);
@@ -166,8 +159,7 @@ EnergyMeterState build_state(
  * @param scheduler DAG调度器实例
  * @param config L3能量机关配置参数
  */
-void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Config&& config)
-{
+void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Config&& config) {
     // 将配置存入全局资源池，系统各处可只读获取
     scheduler.world().insert_resource(std::move(config));
 
@@ -187,8 +179,7 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
             // 订阅L2感知下发的小符观测数据
             talos::subscribe<fcs::rune::RuneObservation, RuneObservationChannelTopic> obs_in,
             // 发布滤波后的能量机关状态给控制层
-            talos::publish<EnergyMeterState, EnergyMeterStateChannelTopic> state_out) mutable
-        {
+            talos::publish<EnergyMeterState, EnergyMeterStateChannelTopic> state_out) mutable {
             // 阻塞读取一帧感知观测
             auto obs = obs_in.read();
 
@@ -198,10 +189,9 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
 
             // 取当前帧时间戳，无观测则取系统当前时钟
             const uint64_t frame_ns = obs ? obs->timestamp_ns : fcs::clock::now_ns();
-            double dt = 0.0;
+            double dt               = 0.0;
             // 计算帧间隔时间dt(s)，用于EKF时序预测
-            if (last_timestamp_ns > 0 && frame_ns > last_timestamp_ns)
-            {
+            if (last_timestamp_ns > 0 && frame_ns > last_timestamp_ns) {
                 dt = static_cast<double>(frame_ns - last_timestamp_ns) * 1e-9;
             }
 
@@ -211,31 +201,25 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
             // 判断跟踪器当前是否处于空闲IDLE状态
             bool is_idle = false;
             std::visit(
-                [&](const auto& tk)
-                {
+                [&](const auto& tk) {
                     using T = std::decay_t<decltype(tk)>;
-                    if constexpr (std::is_same_v<T, std::monostate>)
-                    {
+                    if constexpr (std::is_same_v<T, std::monostate>) {
                         is_idle = true;
-                    }
-                    else
-                    {
+                    } else {
                         is_idle = (tk.state == T::IDLE);
                     }
                 },
                 tracker_var);
 
             // 空闲状态 + 无有效观测，直接跳过本轮
-            if (is_idle && !obs_valid)
-            {
+            if (is_idle && !obs_valid) {
                 return;
             }
 
             last_timestamp_ns = frame_ns;
 
             // ========= 帧间隔过大，判定目标丢失，重置整套跟踪器 =========
-            if (dt > cfg->reset_vote_time)
-            {
+            if (dt > cfg->reset_vote_time) {
                 **tracker_ptr     = ::energy_meter::AnyTracker{};
                 last_timestamp_ns = 0;
                 tracking_frames   = 0;
@@ -245,17 +229,13 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
             }
 
             // ========= 分支1：当前没有有效观测（感知丢帧、被遮挡） =========
-            if (!obs_valid)
-            {
+            if (!obs_valid) {
                 // 仅执行EKF时间预测predict，不做观测更新；送入零观测实现缓慢飘移衰减
                 std::visit(
-                    [&](auto& tk)
-                    {
+                    [&](auto& tk) {
                         using T = std::decay_t<decltype(tk)>;
-                        if constexpr (!std::is_same_v<T, std::monostate>)
-                        {
-                            if (dt > 0.0)
-                            {
+                        if constexpr (!std::is_same_v<T, std::monostate>) {
+                            if (dt > 0.0) {
                                 tk.predict(dt);
                                 tk.update(Eigen::Vector3d::Zero(), {}, {});
                             }
@@ -264,11 +244,9 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
                     tracker_var);
 
                 // 已经投票确定大小符，才允许输出丢失状态
-                if (voter.determined() && !std::holds_alternative<std::monostate>(tracker_var))
-                {
+                if (voter.determined() && !std::holds_alternative<std::monostate>(tracker_var)) {
                     const bool is_tracking = std::visit(
-                        [&](const auto& tk) -> bool
-                        {
+                        [&](const auto& tk) -> bool {
                             using T = std::decay_t<decltype(tk)>;
                             if constexpr (std::is_same_v<T, std::monostate>)
                                 return false;
@@ -287,41 +265,33 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
 
             // ========= 分支2：观测有效，执行大小符投票判定 =========
             // 投票器尚未得出结论时，利用本帧叶片数量更新投票
-            if (!voter.determined())
-            {
+            if (!voter.determined()) {
                 // 传入当前检测到的叶片数量，进行投票
-                if (const auto decision = voter.update(obs->target_positions_odom.size()))
-                {
+                if (const auto decision = voter.update(obs->target_positions_odom.size())) {
                     SPDLOG_INFO(
                         "靶数投票决策: {}, big={} small={}, frames={}",
                         decision->is_big ? "大符" : "小符", decision->big_votes,
                         decision->small_votes, decision->frames);
 
                     // 根据投票结果构造对应跟踪器存入variant
-                    if (decision->is_big)
-                    {
+                    if (decision->is_big) {
                         tracker_var = ::energy_meter::BigTracker{};
-                    }
-                    else
-                    {
+                    } else {
                         tracker_var = ::energy_meter::SmallTracker{};
                     }
                 }
             }
 
             // 跟踪器依然为空，直接退出
-            if (std::holds_alternative<std::monostate>(tracker_var))
-            {
+            if (std::holds_alternative<std::monostate>(tracker_var)) {
                 return;
             }
 
             // ========= 进入EKF跟踪迭代：配置参数 + 初始化/预测更新 =========
             std::visit(
-                [&](auto& tk)
-                {
+                [&](auto& tk) {
                     using T = std::decay_t<decltype(tk)>;
-                    if constexpr (!std::is_same_v<T, std::monostate>)
-                    {
+                    if constexpr (!std::is_same_v<T, std::monostate>) {
                         // 将配置参数灌入跟踪器
                         typename T::Params p;
                         p.lost_thres          = cfg->lost_thres;
@@ -337,8 +307,7 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
                         tk.set_params(p);
 
                         // 首次观测到来，初始化EKF状态
-                        if (!tk.has_ekf())
-                        {
+                        if (!tk.has_ekf()) {
                             tk.first_meet_u(
                                 obs->r_center_odom.translation(), obs->target_positions_odom[0],
                                 obs->target_quats_odom[0]);
@@ -346,18 +315,16 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
 
                         // 实测旋转半径 = 叶片坐标 - 中心坐标 的模长
                         const double observed_radius =
-                            (obs->target_positions_odom[0] - obs->r_center_odom.translation()).norm();
+                            (obs->target_positions_odom[0] - obs->r_center_odom.translation())
+                                .norm();
                         tk.setRadius(observed_radius);
 
                         // 帧间隔正常：predict预测 + update观测更新完整EKF步进
-                        if (dt > 0.0)
-                        {
+                        if (dt > 0.0) {
                             tk.step(
                                 dt, obs->r_center_odom.translation(), obs->target_positions_odom,
                                 obs->target_quats_odom);
-                        }
-                        else
-                        {
+                        } else {
                             // dt=0 无时间流逝，仅做观测更新
                             tk.update(
                                 obs->r_center_odom.translation(), obs->target_positions_odom,
@@ -369,8 +336,7 @@ void register_energy_meter_systems(talos::Scheduler& scheduler, EnergyMeterL3Con
 
             // ========= 统计跟踪状态计数，组装数据包发布 =========
             const bool is_tracking = std::visit(
-                [&](const auto& tk) -> bool
-                {
+                [&](const auto& tk) -> bool {
                     using T = std::decay_t<decltype(tk)>;
                     if constexpr (std::is_same_v<T, std::monostate>)
                         return false;

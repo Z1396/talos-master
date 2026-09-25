@@ -20,8 +20,8 @@ struct L4Config;
  *
  * 2. Plan adapter 规划适配层：
  *    将Aimer输出的预测坐标，封装为统一 ControlIntent 互斥指令
- *    ControlIntent 包含三类互斥指令：TrackCommand 持续跟随 / ShotCommand 射击 / HoldCommand 云台保持
- *    输出下发至L1底层硬件输出接口、可视化模块
+ *    ControlIntent 包含三类互斥指令：TrackCommand 持续跟随 / ShotCommand 射击 / HoldCommand
+ * 云台保持 输出下发至L1底层硬件输出接口、可视化模块
  *
  * @param scheduler Talos全局调度器实例，所有L4计算系统挂载至此调度器管理
  * @param config L4完整配置参数，右值引用接收，函数内部移动存入全局共享资源，无深拷贝开销
