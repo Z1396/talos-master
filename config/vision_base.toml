@@ -175,7 +175,7 @@ min_blob_aspect_ratio = 0.35         # 最小宽高比
 max_blob_aspect_ratio = 4.0          # 最大宽高比
 min_pair_center_dy_ratio = 1.0       # 成对色块中心最小垂直距离比例
 max_pair_center_dy_ratio = 12.0      # 成对色块中心最大垂直距离比例
-max_pair_size_delta_ratio = 0.75      # 配对两个色块面积最大差值比例
+max_pair_size_delta_ratio = 0.75     # 配对两个色块面积最大差值比例
 max_gap_cv = 0.65                    # 色块间隙系数阈值
 min_preliminary_candidate_score = 0.80        # 单组候选最低匹配得分
 min_preliminary_candidate_score_two_pair = 0.87 # 两组配对最低得分
@@ -190,9 +190,9 @@ max_pose_angle_rad = 0.872664626             # 大符最大倾斜角度（弧度
 octagon_side_length_m = 0.020711      # 八边形单边长
 octagon_circumradius_m = 0.02706      # 外接圆半径
 pair_center_separation_m = 0.036514   # 上下灯条中心间距
-window_length_m = 0.012              # 灯条长度
-window_width_m = 0.009618            # 灯条宽度
-volume_height_m = 0.067              # 整体高度
+window_length_m = 0.012               # 灯条长度
+window_width_m = 0.009618             # 灯条宽度
+volume_height_m = 0.067               # 整体高度
 detectable_center_z_range_m = [-0.01, 0.01] # Z轴深度允许误差
 
 # ====================== [naive_ldm] 大符卡尔曼跟踪滤波器 ======================

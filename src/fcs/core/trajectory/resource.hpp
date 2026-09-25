@@ -30,7 +30,7 @@ using trajectory_solver = talos::res<std::unique_ptr<solver::TrajectorySolver>>;
 using trajectory_config = talos::res<model::ModelConfig>;
 
 /// bullet_speed：弹速 只读资源（读取弹道计算用）
-using bullet_speed     = talos::res<bullet_speed_data>;
+using bullet_speed = talos::res<bullet_speed_data>;
 /// bullet_speed_mut：弹速 可变资源（修改弹速，硬件/配置更新时写入）
 using bullet_speed_mut = talos::res_mut<bullet_speed_data>;
 

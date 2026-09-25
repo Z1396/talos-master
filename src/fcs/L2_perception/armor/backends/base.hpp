@@ -36,12 +36,13 @@
  */
 
 #include "core/armor_types.hpp"
+#include "core/types.hpp"
 
-#include <concepts>     // C++20 Concept支持
-#include <expected>     // C++23 错误处理类型
-#include <string>       // 错误信息字符串
-#include <utility>      // std::move等工具
-#include <vector>       // 检测结果容器
+#include <concepts> // C++20 Concept支持
+#include <expected> // C++23 错误处理类型
+#include <string>   // 错误信息字符串
+#include <utility>  // std::move等工具
+#include <vector>   // 检测结果容器
 
 // 前向声明OpenCV类型，避免引入重量级头文件（减少编译依赖、加速编译）
 namespace cv {
@@ -63,7 +64,8 @@ namespace fcs {
  * ## Concept强制的契约
  *
  * 1. **类型别名**：
- *    - `DetectionResult`: 检测结果类型，必须为std::expected<std::vector<ArmorDetection>, std::string>
+ *    - `DetectionResult`: 检测结果类型，必须为std::expected<std::vector<ArmorDetection>,
+ * std::string>
  *    - `Config`: 配置类型，每个后端定义自己的配置结构体
  *
  * 2. **核心检测方法**：

@@ -67,10 +67,12 @@ void register_tracker_systems(talos::Scheduler& scheduler, TrackerConfig&& confi
         "armor_tracker",
         // Lambda捕获：延迟构造的TrackerManager unique_ptr
         [manager = std::unique_ptr<TrackerManager>{}](
-            talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> meas_in,  ///< 输入：装甲板测量批量（SPMC只读）
-            talos::spmc_mut<TrackerOutputs, TrackerOutputChannelTopic> tracker_out, ///< 输出：tracker结果批量（SPMC只写）
-            talos::res<TrackerConfig> config  ///< 配置资源（只读，版本追踪）
-        ) mutable {
+            talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic>
+                meas_in,                     ///< 输入：装甲板测量批量（SPMC只读）
+            talos::spmc_mut<TrackerOutputs, TrackerOutputChannelTopic>
+                tracker_out,                 ///< 输出：tracker结果批量（SPMC只写）
+            talos::res<TrackerConfig> config ///< 配置资源（只读，版本追踪）
+            ) mutable {
             // 延迟初始化：首次运行时创建TrackerManager
             // 好处：避免构造函数阻塞调度器启动
             if (!manager) {
