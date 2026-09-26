@@ -559,8 +559,8 @@ constexpr auto lookup(const CoordinateSystem& system, timestamp_ns_t ns) noexcep
  * 对标ROS2 TF2 TimePointZero逻辑，工业机器人常用，避免外推漂移
  */
 template <frame Target, frame Source, frame CurrentFrame>
-constexpr auto lookup_clamped(
-    const CoordinateSystem& system, TransformMatrixd<CurrentFrame, Source> acc, timestamp_ns_t ns) noexcept -> std::expected<TransformMatrixd<Target, Source>, std::string> 
+constexpr auto lookup_clamped(const CoordinateSystem& system, TransformMatrixd<CurrentFrame, Source> acc, timestamp_ns_t ns) noexcept 
+        -> std::expected<TransformMatrixd<Target, Source>, std::string> 
 {
     static_assert(is_descendant_of<Source, Target>(), "Source must be a descendant of Target");
     if constexpr (std::is_same_v<CurrentFrame, Target>) 

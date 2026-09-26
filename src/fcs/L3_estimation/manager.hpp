@@ -165,7 +165,6 @@ public:
      */
     [[nodiscard]] TrackerOutputs update_all(const ArmorMeasurementBatch& measurements) {
         TrackerOutputs updated_outputs;
-
         // ----------------------------------------------------------------------
         // 步骤1：按(name, color)对测量数据进行分组
         // ----------------------------------------------------------------------
@@ -373,10 +372,8 @@ public:
     }
 
 private:
-    std::unordered_map<core::TargetKey, std::unique_ptr<TrackerNew>, core::TargetKeyHash>
-        trackers_;          ///< tracker实例映射
-    std::unordered_map<core::TargetKey, uint64_t, core::TargetKeyHash>
-        last_timestamp_ns_; ///< 上次更新时间戳（纳秒）
+    std::unordered_map<core::TargetKey, std::unique_ptr<TrackerNew>, core::TargetKeyHash> trackers_;          ///< tracker实例映射
+    std::unordered_map<core::TargetKey, uint64_t, core::TargetKeyHash> last_timestamp_ns_; ///< 上次更新时间戳（纳秒）
 };
 
 // ============================================================================

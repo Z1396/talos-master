@@ -696,7 +696,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                     frame->frame_id, has_detector_roi, detector_roi});
         });
 
-    // ====================== 第二个固定频率System：PnP位姿求解器 200Hz ======================
+    // ====================== 第二个固定频率System：PnP位姿求解器 200Hz ======================得出装甲板在里程计系的位姿测量结果    
     scheduler.add_system<talos::fixed_rate<200>>(
         "armor_solver", // 系统标识
         [](
@@ -807,7 +807,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             measurement_out.write(
                 ArmorMeasurementBatch{
                     std::move(odom_measurements), detections->timestamp_ns, detections->frame_id});
-        });
+        }); 
 }
 
 // 函数签名说明：

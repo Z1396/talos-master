@@ -988,8 +988,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
     // =================================================================================
     scheduler.add_system<talos::fixed_rate<250>>(
         "l4_aimer",
-        [phase_states =
-             std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash>{},
+        [phase_states = std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash>{},
          unmanned_armor_target_decider = std::move(unmanned_armor_target_decider),
          manned_armor_target_decider   = std::move(manned_armor_target_decider),
          was_following = false, decider_state = ArmorTargetDeciderState{}](
@@ -998,18 +997,13 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             core::trajectory::trajectory_solver solver,      // 弹道求解器句柄（共享）
             core::trajectory::bullet_speed bullet_speed_,    // 弹丸初速资源
             core::following following,                       // 手控跟随开关原子标记
-            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic>
-                tracker_in,                                  // L3跟踪输出输入通道
-            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic>
-                rune_in,                                     // 能量机关状态输入
+            talos::spmc<L3::TrackerOutputs, TrackerOutputChannelTopic> tracker_in,                        // L3跟踪输出输入通道
+            talos::spmc<energy_meter::EnergyMeterState, EnergyMeterStateChannelTopic> rune_in,              // 能量机关状态输入
             talos::spmc<L3::ldm::LdmState> ldm_in,           // LDM吊射目标输入通道
             talos::res<fast_tf::CoordinateSystem> tf_buffer, // fast‑tf坐标变换缓存资源
-            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
-                out_snap,                                    // 输出选中目标快照（可视化+ROI使用）
-            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic>
-                out_trace,                                   // 输出目标选择调试trace，给Foxglove
-            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic>
-                out_ctrl) mutable {                          // 输出云台控制意图，下发L1硬件层
+            talos::spmc_mut<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> out_snap,         // 输出选中目标快照（可视化+ROI使用）
+            talos::spmc_mut<TargetSelectionTrace, TargetSelectionTraceChannelTopic> out_trace,             // 输出目标选择调试trace，给Foxglove
+            talos::spmc_mut<ControlIntent, ControlIntentChannelTopic> out_ctrl) mutable {          // 输出云台控制意图，下发L1硬件层
             const uint64_t now_ns = fcs::clock::now_ns();
 
             // 查询当前时刻：云台坐标系、枪口坐标系变换；从fast_tf缓存插值得到
@@ -1102,8 +1096,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
     // =================================================================================
     scheduler.add_system<talos::pool_compute>(
         "l4_optimal_target_readback_roi",
-        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
-               selected_target_in,
+        [](talos::spmc<SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> selected_target_in,
            talos::res<L2::ArmorReadbackRoiConfig> readback_roi_config,
            talos::res_mut<L2::TrackerReadbackCache> readback_cache) {
             // lambda内部辅助函数：判断当前快照是否支持ROI回传，只有装甲目标才支持

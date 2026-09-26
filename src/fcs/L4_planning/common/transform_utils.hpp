@@ -82,8 +82,7 @@ struct TransformLookupResult {
  * @endcode
  */
 [[nodiscard]] inline std::expected<TransformLookupResult, std::string>
-    lookup_gimbal_muzzle_transforms(
-        const fast_tf::CoordinateSystem& tf_buffer, uint64_t current_ns) noexcept {
+    lookup_gimbal_muzzle_transforms(const fast_tf::CoordinateSystem& tf_buffer, uint64_t current_ns) noexcept {
     using namespace fast_tf;
 
     // 查找枪口变换（先查找，因为枪口变换依赖云台变换）

@@ -314,8 +314,7 @@ template <typename Compare>
  *
  * 返回类型 ArmorTargetDecider 本质是 std::variant<UnmannedArmorTargetDecider, MannedArmorTargetDecider>
  */
-auto make_armor_target_decider(ArmorTargetDeciderKind kind, double switch_margin) noexcept
-    -> ArmorTargetDecider {
+auto make_armor_target_decider(ArmorTargetDeciderKind kind, double switch_margin) noexcept -> ArmorTargetDecider {
     switch (kind) {
     // 自动模式：机器人自主根据代价选装甲目标，带切换裕度防止频繁跳目标
     case ArmorTargetDeciderKind::Unmanned:

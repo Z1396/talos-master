@@ -533,12 +533,15 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     auto pp1 = det.corners[j];
                     auto pp2 = det.corners[(j + 1) % 4];
                     // 绘制角点小圆点
-                    cv::circle(
-                        img_bgr, pp1, 2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
+                    //cv::circle(
+                        //img_bgr, pp1, 1, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
                     // 带箭头边线，箭头大小随线段长度自适应
-                    cv::arrowedLine(
-                        img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
-                        cv::LINE_AA, 0, 10.0 / cv::norm(pp1 - pp2));
+                    //cv::arrowedLine(
+                        // img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
+                        // cv::LINE_AA, 0, 10.0 / cv::norm(pp1 - pp2));
+
+                    cv::line(
+                        img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_THIN, cv::LINE_AA);
                 }
 
                 // 装甲名称/类型/敌方颜色文字

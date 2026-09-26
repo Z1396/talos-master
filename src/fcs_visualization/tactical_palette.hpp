@@ -143,8 +143,8 @@ constexpr int TEXT_MEDIUM_PX = 2;
 // L2 - PERCEPTION 感知层：原始测量、装甲检测、LDM检测结果（3D Marker）
 // ============================================================================
 namespace L2 { // L2感知层：PnP测量、原始检测结果可视化
-constexpr ::foxglove::schemas::Color MEASUREMENT_GHOST      = {0.62, 0.66, 0.72, 0.22}; // 旧/过期测量，低透明度虚影
-constexpr ::foxglove::schemas::Color MEASUREMENT_CONFIDENCE = {0.62, 0.66, 0.72, 0.48}; // 有效测量结果，透明度更高
+constexpr ::foxglove::schemas::Color MEASUREMENT_GHOST      = {0.92, 0.66, 0.72, 0.22}; // 旧/过期测量，低透明度虚影
+constexpr ::foxglove::schemas::Color MEASUREMENT_CONFIDENCE = {0.92, 0.66, 0.72, 0.48}; // 有效测量结果，透明度>0.5 r, g, b, a**（RGBA，（alpha 透明度，0 完全透明，1 不透明）值域 0~1）
 
 // LDM能量机关不同状态颜色
 constexpr ::foxglove::schemas::Color LDM_STABLE       = with_alpha(Semantic::STATUS_ACTIVE, 0.78); // 能量机关状态稳定
@@ -249,7 +249,7 @@ constexpr ::foxglove::schemas::Color SECONDARY = {0.72, 0.75, 0.78, 0.66};   // 
 constexpr ::foxglove::schemas::Color WARNING   = with_alpha(Semantic::ALERT, 0.78);  // 警告文本颜色
 constexpr ::foxglove::schemas::Color ERROR     = with_alpha(Semantic::DECISION_NEGATIVE, 0.78); // 错误文本颜色
 
-constexpr double SIZE_SMALL      = 0.035;  // 小号字体，米
+constexpr double SIZE_SMALL      = 0.025;  // 小号字体，米
 constexpr double SIZE_MEDIUM     = 0.052;  // 中号字体
 constexpr double SIZE_LARGE      = 0.070;  // 大号字体
 constexpr double SIZE_DEFAULT    = SIZE_MEDIUM; // 默认字体使用中号
