@@ -10,6 +10,7 @@
 #include "foxglove_types.hpp"
 #include "scene_builder.hpp"
 #include "scheduler/scheduler.hpp"
+#include "vis_helpers.hpp" // 装甲板立方体绘制工具（make_armor_cube），同L3跟踪场景用法
 // L4控制意图、通道话题定义、帧结构
 #include "L4_planning/control_intent.hpp"
 #include "core/channel_topics.hpp"
@@ -41,6 +42,54 @@ struct FutureArmorSnapshot {
     double angular_velocity{0.0};                             // 装甲角速度
     std::vector<Eigen::Vector4d> armors;                      // 多装甲位姿数组 (x,y,z,yaw)
 };
+
+/**
+ * @brief 将选中目标状态线性外推 dt 秒，生成击打时刻（弹丸到达时）装甲板位姿快照
+ * @param snapshot L4选中目标快照（含完整跟踪器状态）
+ * @param dt 预测时长（秒）：观测延迟 + 弹丸飞行时间
+ * @return 目标有效返回外推后快照；无目标/无效时长返回nullopt
+ *
+ * 外推假设与EKF的CV（匀速+匀转）运动模型一致：
+ * 机器人：position += velocity*dt，yaw += v_yaw*dt；前哨站：二维位置、偏航、装甲高度同推
+ * 装甲板位姿复用 L3 RobotTargetState/OutpostTargetState::armor_poses() 的几何计算
+ */
+[[nodiscard]] inline std::optional<FutureArmorSnapshot>
+    predict_future_armors(const ::fcs::L4::SelectedTargetSnapshot& snapshot, double dt) noexcept {
+    if (!snapshot.has_target() || dt <= 0.0)
+        return std::nullopt;
+
+    FutureArmorSnapshot future;
+
+    if (const auto* robot = snapshot.tracker.robot_state(); robot != nullptr) {
+        // 机器人目标：CV模型外推中心位置与整体偏航角
+        auto state = *robot;
+        state.position += state.velocity * dt;
+        state.yaw += state.v_yaw * dt;
+        future.center = state.position;
+        // 前推后的偏航角速度/线速度保持不变（匀速假设）
+        future.linear_velocity  = state.velocity;
+        future.angular_velocity = state.v_yaw;
+        const auto poses        = state.armor_poses();
+        future.armors.assign(poses.begin(), poses.end());
+    } else if (const auto* outpost = snapshot.tracker.outpost_state(); outpost != nullptr) {
+        // 前哨站目标：二维位置外推，三块装甲高度随vz整体平移
+        auto state = *outpost;
+        state.position += state.velocity.head<2>() * dt;
+        state.yaw += state.v_yaw * dt;
+        for (auto& z : state.z)
+            z += state.velocity.z() * dt;
+        future.center = {
+            state.position.x(), state.position.y(), (state.z[0] + state.z[1] + state.z[2]) / 3.0};
+        future.linear_velocity  = state.velocity;
+        future.angular_velocity = state.v_yaw;
+        const auto poses        = state.armor_poses();
+        future.armors.assign(poses.begin(), poses.end());
+    } else {
+        // 无有效目标状态（monostate）
+        return std::nullopt;
+    }
+    return future;
+}
 
 /// 工具函数：布尔值转 YES/NO 字符串，用于可视化元数据展示
 /// [[nodiscard]] 强制接收返回值，防止丢弃格式化结果
@@ -387,7 +436,6 @@ inline void append_selection_trace_metadata(
         // 候选目标数组，std::move转移，避免拷贝；数组每一项包含：候选id、得分、距离、代价、是否允许被选中等调试信息
         {           "candidates",                                           std::move(candidates)},
     };
-
 }
 
 /**
@@ -442,7 +490,7 @@ inline void append_selection_trace_metadata(
     target_json["timestamp"]["nsec"] = snapshot.timestamp_ns % 1000000000L;      // 剩余纳秒
     target_json["tracking"]          = snapshot.tracker.is_tracking();           // 是否稳定跟踪
     target_json["valid"]             = snapshot.has_target();                    // 是否存在有效目标
-    target_json["optimal_target"]    = target_json["valid"];                        // 是否存在有效目标
+    target_json["optimal_target"]    = target_json["valid"];                     // 是否存在有效目标
     target_json["source"] = std::string(magic_enum::enum_name(snapshot.source)); // 目标来源枚举
     target_json["plan_distance"]       = snapshot.distance;                      // 规划瞄准距离
     target_json["predicted_future_ns"] = snapshot.predicted_future_ns;           // 向前预测时长
@@ -527,15 +575,16 @@ inline void append_plan_metadata(
 void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
     // ========== 任务1：发布当前最优选中目标JSON ==========
     // =========================================================================
-// 任务1：发布【L4选中目标快照】JSON消息到Foxglove
-// 作用：可视化当前火控最终选中的目标（id、装甲、距离、状态）
-// =========================================================================
-app.add_system<talos::pool_compute>(
+    // 任务1：发布【L4选中目标快照】JSON消息到Foxglove
+    // 作用：可视化当前火控最终选中的目标（id、装甲、距离、状态）
+    // =========================================================================
+    app.add_system<talos::pool_compute>(
         "foxglove_solver_target_pub",
-        [](// spmc输入通道：L4输出的选中目标快照，其他模块写，本system只读
-           talos::spmc<::fcs::L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic> selected_target_in,
-           // res只读资源：Foxglove服务实例，websocket服务端
-           talos::res<std::shared_ptr<FoxgloveServer>> server) {
+        []( // spmc输入通道：L4输出的选中目标快照，其他模块写，本system只读
+            talos::spmc<::fcs::L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
+                selected_target_in,
+            // res只读资源：Foxglove服务实例，websocket服务端
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             // 前置检查：服务指针有效、通道可读；不满足直接return，不执行可视化
             if (!detail::foxglove_ready(*server, selected_target_in)) {
                 return;
@@ -551,13 +600,13 @@ app.add_system<talos::pool_compute>(
                 *server, l4_detail::json_solver_target(*selected_target));
         });
 
-// ========== 任务2：发布【目标选择全候选打分日志】JSON ==========
-// 用途：调试目标选择决策器，看每帧所有候选目标的代价、打分、排名，是谁被淘汰、谁是备选
-app.add_system<talos::pool_compute>(
+    // ========== 任务2：发布【目标选择全候选打分日志】JSON ==========
+    // 用途：调试目标选择决策器，看每帧所有候选目标的代价、打分、排名，是谁被淘汰、谁是备选
+    app.add_system<talos::pool_compute>(
         "foxglove_target_selection_pub",
-        [](// SPMC通道：TargetSelectionTrace，每帧目标选择完整trace日志
-           talos::spmc<::fcs::L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic> trace_in,
-           talos::res<std::shared_ptr<FoxgloveServer>> server) {
+        []( // SPMC通道：TargetSelectionTrace，每帧目标选择完整trace日志
+            talos::spmc<::fcs::L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic> trace_in,
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             if (!detail::foxglove_ready(*server, trace_in)) {
                 return;
             }
@@ -572,19 +621,19 @@ app.add_system<talos::pool_compute>(
                 *server, l4_detail::json_target_selection_trace(*trace));
         });
 
-// =========================================================================
-// 任务3：发布【L5云台执行指令WeaponCommand】JSON
-// 核心：MPC输出最终云台指令、速度加速度、开火建议、MPC调试信息、退化原因
-// 输入两个SPMC：WeaponCommand(MPC输出执行指令) + ControlIntent(L4上层规划意图)
-// 做时间戳对齐，把同一帧的L4规划意图附加到消息中方便比对
-// =========================================================================
-app.add_system<talos::pool_compute>(
+    // =========================================================================
+    // 任务3：发布【L5云台执行指令WeaponCommand】JSON
+    // 核心：MPC输出最终云台指令、速度加速度、开火建议、MPC调试信息、退化原因
+    // 输入两个SPMC：WeaponCommand(MPC输出执行指令) + ControlIntent(L4上层规划意图)
+    // 做时间戳对齐，把同一帧的L4规划意图附加到消息中方便比对
+    // =========================================================================
+    app.add_system<talos::pool_compute>(
         "foxglove_l4_gimbal_cmd_pub",
-        [](// 输入1：L5 MPC输出最终云台执行指令
-           talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
-           // 输入2：L4输出控制意图（目标选择、期望瞄准角度）
-           talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
-           talos::res<std::shared_ptr<FoxgloveServer>> server) {
+        []( // 输入1：L5 MPC输出最终云台执行指令
+            talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
+            // 输入2：L4输出控制意图（目标选择、期望瞄准角度）
+            talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             if (!detail::foxglove_ready(*server, cmd_in)) {
                 return;
             }
@@ -612,43 +661,44 @@ app.add_system<talos::pool_compute>(
 
             // 手动组装json，导出MPC全部调试字段
             nlohmann::json cmd_json;
-            cmd_json["timestamp_ns"]      = cmd->timestamp_ns;        // 本指令生成时间戳(ns)
-            cmd_json["plan_timestamp_ns"] = cmd->plan_timestamp_ns;    // 对应的上层L4规划帧时间戳
+            cmd_json["timestamp_ns"]      = cmd->timestamp_ns;      // 本指令生成时间戳(ns)
+            cmd_json["plan_timestamp_ns"] = cmd->plan_timestamp_ns; // 对应的上层L4规划帧时间戳
             cmd_json["timestamp"]         = nlohmann::json::object();
             cmd_json["timestamp"]["sec"]  = cmd->timestamp_ns / 1000000000L; // 秒部分
-            cmd_json["timestamp"]["nsec"] = cmd->timestamp_ns % 1000000000L;// 纳秒余数
+            cmd_json["timestamp"]["nsec"] = cmd->timestamp_ns % 1000000000L; // 纳秒余数
 
             // pre_plan：MPC优化之前，L4给出原始期望瞄准角度
             cmd_json["pre_plan"] = {
-                {     "yaw",      cmd->plan_yaw},      // 原始期望偏航
-                {   "pitch",    cmd->plan_pitch},      // 原始期望俯仰
-                {"distance", cmd->plan_distance},      // 原始目标距离
+                {     "yaw",      cmd->plan_yaw}, // 原始期望偏航
+                {   "pitch",    cmd->plan_pitch}, // 原始期望俯仰
+                {"distance", cmd->plan_distance}, // 原始目标距离
             };
             // post_plan：MPC优化平滑之后输出云台目标角度，附带开火建议
             cmd_json["post_plan"] = {
                 {        "yaw",   cmd->yaw},
                 {      "pitch", cmd->pitch},
-                {"fire_advice",  cmd->fire},          // true=建议开火
+                {"fire_advice",  cmd->fire}, // true=建议开火
             };
 
             // MPC输出完整云台状态
-            cmd_json["yaw"]                  = cmd->yaw;               // 输出目标偏航角(rad)
-            cmd_json["pitch"]                = cmd->pitch;             // 输出目标俯仰角(rad)
-            cmd_json["v_yaw"]                = cmd->yaw_vel;           // 目标偏航角速度 rad/s
-            cmd_json["v_pitch"]              = cmd->pitch_vel;         // 目标俯仰角速度 rad/s
-            cmd_json["a_yaw"]                = cmd->yaw_accel;         // 目标偏航角加速度 rad/s²
-            cmd_json["a_pitch"]              = cmd->pitch_accel;      // 目标俯仰角加速度 rad/s²
-            cmd_json["distance"]             = cmd->distance;          // 预测目标距离
-            cmd_json["tof"]                  = cmd->tof;               // 子弹飞行时间time‑of‑flight
-            cmd_json["fire_advice"]          = cmd->fire;               // 是否建议开火
-            cmd_json["yaw_error"]            = cmd->yaw_error;         // 偏航跟踪误差
-            cmd_json["pitch_error"]          = cmd->pitch_error;       // 俯仰跟踪误差
-            cmd_json["shooting_range_yaw"]   = cmd->shooting_range_yaw;// 允许开火偏航误差阈值
-            cmd_json["shooting_range_pitch"] = cmd->shooting_range_pitch;//允许开火俯仰误差阈值
-            cmd_json["ref_yaw"]              = cmd->ref_yaw;          // MPC参考轨迹yaw
-            cmd_json["ref_pitch"]            = cmd->ref_pitch;         // MPC参考轨迹pitch
+            cmd_json["yaw"]                  = cmd->yaw;         // 输出目标偏航角(rad)
+            cmd_json["pitch"]                = cmd->pitch;       // 输出目标俯仰角(rad)
+            cmd_json["v_yaw"]                = cmd->yaw_vel;     // 目标偏航角速度 rad/s
+            cmd_json["v_pitch"]              = cmd->pitch_vel;   // 目标俯仰角速度 rad/s
+            cmd_json["a_yaw"]                = cmd->yaw_accel;   // 目标偏航角加速度 rad/s²
+            cmd_json["a_pitch"]              = cmd->pitch_accel; // 目标俯仰角加速度 rad/s²
+            cmd_json["distance"]             = cmd->distance;    // 预测目标距离
+            cmd_json["tof"]                  = cmd->tof;         // 子弹飞行时间time‑of‑flight
+            cmd_json["fire_advice"]          = cmd->fire;        // 是否建议开火
+            cmd_json["yaw_error"]            = cmd->yaw_error;   // 偏航跟踪误差
+            cmd_json["pitch_error"]          = cmd->pitch_error; // 俯仰跟踪误差
+            cmd_json["shooting_range_yaw"]   = cmd->shooting_range_yaw;   // 允许开火偏航误差阈值
+            cmd_json["shooting_range_pitch"] = cmd->shooting_range_pitch; // 允许开火俯仰误差阈值
+            cmd_json["ref_yaw"]              = cmd->ref_yaw;              // MPC参考轨迹yaw
+            cmd_json["ref_pitch"]            = cmd->ref_pitch;            // MPC参考轨迹pitch
 
-            // degradation_reason std::optional<std::string>；瞄准退化原因（遮挡、滤波发散、目标丢失）
+            // degradation_reason
+            // std::optional<std::string>；瞄准退化原因（遮挡、滤波发散、目标丢失）
             if (cmd->degradation_reason) {
                 cmd_json["degradation_reason"] = *cmd->degradation_reason;
             }
@@ -656,8 +706,8 @@ app.add_system<talos::pool_compute>(
             // viz_debug 可选MPC调试结构体，存参考轨迹、优化轨迹数组
             if (cmd->viz_debug) {
                 cmd_json["mpc"] = {
-                    {   "center_index",          cmd->viz_debug->center_index},   // 当前时刻在时域窗口的下标
-                    {"lookahead_index",       cmd->viz_debug->lookahead_index},  // 前向预测终点下标
+                    {   "center_index",          cmd->viz_debug->center_index}, // 当前时刻在时域窗口的下标
+                    {"lookahead_index",       cmd->viz_debug->lookahead_index}, // 前向预测终点下标
                     { "reference_size", cmd->viz_debug->reference_plan.size()}, // MPC参考轨迹点数量
                     { "optimized_size", cmd->viz_debug->optimized_plan.size()}, // MPC优化轨迹点数量
                 };
@@ -671,9 +721,9 @@ app.add_system<talos::pool_compute>(
             detail::publish_json_message<GimbalCmdMessage>(*server, cmd_json);
         });
 
-// ========== 任务4：MPC参考/优化轨迹数组JSON发布 ==========
-// 把MPC时域窗口每一个时间采样点（yaw/pitch/distance/tof）输出json，Foxglove表格查看整条预测时域序列
-app.add_system<talos::pool_compute>(
+    // ========== 任务4：MPC参考/优化轨迹数组JSON发布 ==========
+    // 把MPC时域窗口每一个时间采样点（yaw/pitch/distance/tof）输出json，Foxglove表格查看整条预测时域序列
+    app.add_system<talos::pool_compute>(
         "foxglove_l4_mpc_trajectory_pub",
         [](talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
            talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
@@ -700,19 +750,22 @@ app.add_system<talos::pool_compute>(
             traj_json["plan_timestamp_ns"] = cmd->plan_timestamp_ns;
             traj_json["center_index"]      = cmd->viz_debug->center_index;
             traj_json["lookahead_index"]   = cmd->viz_debug->lookahead_index;
-            traj_json["reference"]         = nlohmann::json::array(); // MPC参考轨迹数组（原始目标序列）
-            traj_json["optimized"]         = nlohmann::json::array(); // MPC平滑优化后轨迹数组
+            traj_json["reference"] = nlohmann::json::array(); // MPC参考轨迹数组（原始目标序列）
+            traj_json["optimized"] = nlohmann::json::array(); // MPC平滑优化后轨迹数组
 
             // 遍历参考轨迹所有时域采样点
             for (int i = 0; i < static_cast<int>(cmd->viz_debug->reference_plan.size()); ++i) {
                 const auto& reference = cmd->viz_debug->reference_plan[i];
                 traj_json["reference"].push_back({
-                    {          "index",                                i},
-                    {"temporal_offset", i - cmd->viz_debug->center_index}, // 相对当前时刻时域偏移，0=当前，正数未来，负数过去
-                    {            "yaw",                    reference.yaw},
-                    {          "pitch",                  reference.pitch},
-                    {       "distance",               reference.distance},
-                    {            "tof",                    reference.tof},
+                    {          "index",i                                       },
+                    {"temporal_offset",
+                     i
+                     - cmd->viz_debug
+                     ->center_index                       }, // 相对当前时刻时域偏移，0=当前，正数未来，负数过去
+                    {            "yaw",      reference.yaw},
+                    {          "pitch",    reference.pitch},
+                    {       "distance", reference.distance},
+                    {            "tof",      reference.tof},
                 });
             }
             // 遍历MPC优化之后的轨迹点
@@ -734,27 +787,28 @@ app.add_system<talos::pool_compute>(
             detail::publish_json_message<MpcTrajectoryMessage>(*server, traj_json);
         });
 
-// =========================================================================
-// 任务5：L4目标选择候选球体3D场景渲染
-// 功能：Foxglove 3D视图绘制所有候选目标球体
-// 颜色区分：选中目标(主选) / runner_up次优备选 / eliminated淘汰候选
-// 球体附带悬浮元数据：代价、rank，鼠标hover看打分；附带文本标签#1 RED_ARMOR
-// 约束：云台Hold保持模式不渲染场景
-// =========================================================================
-app.add_system<talos::pool_compute>(
+    // =========================================================================
+    // 任务5：L4目标选择候选球体3D场景渲染
+    // 功能：Foxglove 3D视图绘制所有候选目标球体
+    // 颜色区分：选中目标(主选) / runner_up次优备选 / eliminated淘汰候选
+    // 球体附带悬浮元数据：代价、rank，鼠标hover看打分；附带文本标签#1 RED_ARMOR
+    // 约束：云台Hold保持模式不渲染场景
+    // =========================================================================
+    app.add_system<talos::pool_compute>(
         "foxglove_l4_gimbal_scene",
-        [](// L4控制意图通道
-           talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
-           // L4选中目标快照通道
-           talos::spmc<::fcs::L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
-               selected_target_in,
-           // 目标选择trace打分日志通道
-           talos::spmc<::fcs::L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic> trace_in,
-           talos::res<std::shared_ptr<FoxgloveServer>> server) {
+        []( // L4控制意图通道
+            talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
+            // L4选中目标快照通道
+            talos::spmc<::fcs::L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
+                selected_target_in,
+            // 目标选择trace打分日志通道
+            talos::spmc<::fcs::L4::TargetSelectionTrace, TargetSelectionTraceChannelTopic> trace_in,
+            talos::res<std::shared_ptr<FoxgloveServer>> server) {
             if (!detail::foxglove_ready(*server, plan_in))
                 return;
             auto intent = plan_in.read();
-            // std::holds_alternative 判断variant当前类型：如果是HoldCommand（云台保持模式）直接返回，不渲染
+            // std::holds_alternative
+            // 判断variant当前类型：如果是HoldCommand（云台保持模式）直接返回，不渲染
             if (!intent || std::holds_alternative<::fcs::L4::HoldCommand>(*intent))
                 return;
 
@@ -799,8 +853,8 @@ app.add_system<talos::pool_compute>(
                     auto builder = viz::EntityBuilder::create<fast_tf::odom>(
                                        "l4", l4_detail::selection_trace_entity_id(candidate))
                                        .timestamp(trace->timestamp_ns)
-                                       .position(*candidate.target_center)  // 球体世界坐标
-                                       .size(tac::L4::SELECTION_SIZE * style.size_scale) //球体半径
+                                       .position(*candidate.target_center) // 球体世界坐标
+                                       .size(tac::L4::SELECTION_SIZE * style.size_scale) // 球体半径
                                        .color(style.color)
                                        .alpha(style.alpha)
                                        .sphere(); // 实体类型球体
@@ -823,18 +877,21 @@ app.add_system<talos::pool_compute>(
             publish_scene_if_nonempty<GimbalSceneMessage>(*server, std::move(entities));
         });
 
-// =========================================================================
-// 任务6：250Hz定时MPC预测轨迹+子弹弹道渲染
-// talos::fixed_rate<250>：固定250Hz周期执行，**不等待消息触发**
-// 两件事：
-// 1. MPC有效时：绘制MPC参考轨迹线、优化平滑轨迹线、时域中心点标记球体
-// 2. 根据当前云台姿态求解子弹抛物线弹道，绘制弹道线
-// 兜底逻辑：没有MPC调试数据，拿当前真实云台姿态，模拟15m距离弹道用于调试
-// 依赖资源：弹道求解solver、TF坐标系、子弹初速bullet_speed
-// =========================================================================
-app.add_system<talos::fixed_rate<250>>(
+    // =========================================================================
+    // 任务6：250Hz定时MPC预测轨迹+子弹弹道渲染
+    // talos::fixed_rate<250>：固定250Hz周期执行，**不等待消息触发**
+    // 两件事：
+    // 1. MPC有效时：绘制MPC参考轨迹线、优化平滑轨迹线、时域中心点标记球体
+    // 2. 根据当前云台姿态求解子弹抛物线弹道，绘制弹道线
+    // 兜底逻辑：没有MPC调试数据，拿当前真实云台姿态，模拟15m距离弹道用于调试
+    // 依赖资源：弹道求解solver、TF坐标系、子弹初速bullet_speed
+    // =========================================================================
+    app.add_system<talos::fixed_rate<250>>(
         "foxglove_l4_mpc_prediction_scene",
         [](talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
+           // L4选中目标快照通道：击打时刻装甲板预测的数据来源
+           talos::spmc<::fcs::L4::SelectedTargetSnapshot, SelectedTargetSnapshotChannelTopic>
+               selected_target_in,
            talos::res<std::shared_ptr<FoxgloveServer>> server,
            core::trajectory::trajectory_solver solver,    // 弹道求解器资源，计算子弹重力弹道
            talos::res<fast_tf::CoordinateSystem> coord,   // FastTF坐标系资源，查询gimbal→odom变换
@@ -844,6 +901,57 @@ app.add_system<talos::fixed_rate<250>>(
             }
             std::vector<::foxglove::schemas::SceneEntity> entities;
             auto cmd = cmd_in.read();
+
+            // -------- 击打时刻预测装甲板：当前时刻+弹丸飞行时间后的目标装甲位姿虚影 --------
+            const auto selected_target = selected_target_in.read_current();
+            if (cmd && selected_target && selected_target->has_target() && cmd->tof > 0.0) {
+                // 预测时长 = 快照到当前指令的观测延迟 + 弹丸飞行时间；延迟钳位非负防通道错序
+                const double latency_s = std::max(
+                    0.0,
+                    static_cast<double>(cmd->timestamp_ns - selected_target->timestamp_ns) * 1e-9);
+                const double predict_s = latency_s + cmd->tof;
+                // 线性外推得到弹丸到达时刻的装甲板位姿（CV模型，与EKF/aimer假设一致）
+                if (const auto future =
+                        l4_detail::predict_future_armors(*selected_target, predict_s)) {
+                    auto builder =
+                        viz::EntityBuilder::create<fast_tf::odom>("l4", "l4_future_armors")
+                            .timestamp(cmd->timestamp_ns);
+                    // 大/小装甲尺寸判断：与L3装甲绘制逻辑一致（英雄/基地为大装甲）
+                    const bool is_big_armor =
+                        cls_to_armor_type(selected_target->tracker.target_name) == ArmorType::Large;
+                    // 倾斜方向：机器人装甲向上倾斜，前哨站(3块)装甲向下倾斜
+                    const double tilt     = future->armors.size() == 4
+                                              ? tac::Geometry::ARMOR_TILT_ANGLE
+                                              : -tac::Geometry::ARMOR_TILT_ANGLE;
+                    const int selected_id = selected_target->selected_armor_id;
+
+                    for (std::size_t i = 0; i < future->armors.size(); ++i) {
+                        auto cube = L3::vis::make_armor_cube(
+                            future->armors[i], tilt,
+                            is_big_armor ? tac::Geometry::ARMOR_HEIGHT_BIG
+                                         : tac::Geometry::ARMOR_HEIGHT_SMALL);
+                        // 选中的击打装甲高亮（琥珀色），其余半透明虚影色，与当前时刻装甲区分
+                        const bool is_hit = static_cast<int>(i) == selected_id;
+                        cube.color = is_hit ? tac::L3::PREDICTION_AMBER : tac::L4::FUTURE_ARMOR;
+
+                        if (is_hit) {
+                            // 高亮装甲上方标注击打时刻，billboard模式永远朝向相机
+                            ::foxglove::schemas::TextPrimitive text;
+                            text.text = fmt::format("hit t+{:.0f}ms", predict_s * 1e3);
+                            text.pose = cube.pose;
+                            if (text.pose->position.has_value()) {
+                                text.pose->position->z += tac::L3::LABEL_OFFSET_Z;
+                            }
+                            text.font_size = tac::Text::SIZE_SMALL;
+                            text.color     = tac::Text::PRIMARY;
+                            text.billboard = tac::Text::BILLBOARD_ENABLED;
+                            builder.add_text(std::move(text));
+                        }
+                        builder.add_cube(cube);
+                    }
+                    entities.push_back(std::move(builder).build());
+                }
+            }
 
             // MPC调试数据有效：渲染MPC预测轨迹
             if (cmd && cmd->viz_debug) {
@@ -965,6 +1073,5 @@ app.add_system<talos::fixed_rate<250>>(
             // 发布MPC预测3D场景
             publish_scene_if_nonempty<MpcPredictionSceneMessage>(*server, std::move(entities));
         });
-
 }
 } // namespace fcs::visualization::foxglove::systems
