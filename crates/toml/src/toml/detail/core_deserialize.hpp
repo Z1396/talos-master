@@ -23,13 +23,13 @@ namespace detail {
  * 1. Reflectable<T>：支持字段反射
  * 2. !ReadFrom<T>：没有自定义read_from方法（优先自定义解析，其次反射）
  * 3. !TomlScalarValue<T>：不是基础标量
- * 4. !std::is_enum_v<T>：不是枚举
- * 5. !is_flatten_v：不是flatten平铺包装器
- * 6. !is_required_v：不是required必填包装器
- * 7. !is_std_optional_v：不是std::optional
- * 8. !is_std_vector_v：不是vector容器
- * 9. !is_std_array_v：不是array数组
- * 10. !is_std_map_v：不是map键值容器
+ * 4. !std::is_enum_v<T>：枚举走`parse_enum_node` （字符串/数字互转），不是反射
+ * 5. !is_flatten_v：`flatten<T>` 包装器（字段平铺到父表）有专门的展开逻辑
+ * 6. !is_required_v：`required<T>` 必填包装器要先拆包装再解析内部类型
+ * 7. !is_std_optional_v：optional 是"缺 key 不报错"的特殊语义，不是必填字段
+ * 8. !is_std_vector_v：vector 走容器逐元素解析分支
+ * 9. !is_std_array_v：array 同上（且要校验长度恰好 N）
+ * 10. !is_std_map_v：map 的 key 本身来自 TOML 键名，逻辑完全不同
  * 仅普通自定义数据结构体符合，走自动反射解析分支
  */
 template <typename T>
@@ -78,7 +78,7 @@ template <typename T>
  * @return 整体解析结果，遇到第一个字段错误立即停止并保存错误
  */
 template <ReflectDeserializeCandidate T>
-[[nodiscard]] std::expected<void, std::string>
+[[nodiscard]] std::expected<void, std::string>   //table 从path load过来的toml.table
     read_reflected_into(const toml::table& table, T& out) {
     // 初始化成功状态
     std::expected<void, std::string> result{};
@@ -309,8 +309,7 @@ struct Deserialize {
     /**
      * @brief 可选读取：键不存在返回空std::optional<T>
      */
-    [[nodiscard]] static std::expected<std::optional<T>, std::string>
-        read_optional(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<std::optional<T>, std::string> read_optional(const toml::table& table, std::string_view key) {
         const toml::node* node = table.get(key);
         if (!node) {
             return std::optional<T>{};
@@ -322,16 +321,14 @@ struct Deserialize {
     /**
      * @brief take读取：解析成功后从table移除该键，避免重复读取
      */
-    [[nodiscard]] static std::expected<T, std::string>
-        take(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<T, std::string> take(const toml::table& table, std::string_view key) {
         return detail::erase_on_success(read(table, key), table, key);
     }
 
     /**
      * @brief 可选take：存在则读取并删除键，不存在返回空optional
      */
-    [[nodiscard]] static std::expected<std::optional<T>, std::string>
-        take_optional(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<std::optional<T>, std::string> take_optional(const toml::table& table, std::string_view key) {
         return detail::erase_on_success_optional(read_optional(table, key), table, key);
     }
 };
@@ -341,29 +338,25 @@ struct Deserialize {
  */
 template <TomlScalarValue T>
 struct Deserialize<T, void> {
-    [[nodiscard]] static std::expected<T, std::string>
-        read(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<T, std::string> read(const toml::table& table, std::string_view key) {
         // 读取必填标量，回调执行标量节点解析
         return detail::read_required<T>(table, key, [&](const toml::node& node) {
             return detail::parse_scalar_node<T>(node, key);
         });
     }
 
-    [[nodiscard]] static std::expected<std::optional<T>, std::string>
-        read_optional(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<std::optional<T>, std::string> read_optional(const toml::table& table, std::string_view key) {
         // 可选标量读取
         return detail::read_optional_value<T>(table, key, [&](const toml::node& node) {
             return detail::parse_scalar_node<T>(node, key);
         });
     }
 
-    [[nodiscard]] static std::expected<T, std::string>
-        take(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<T, std::string> take(const toml::table& table, std::string_view key) {
         return detail::erase_on_success(read(table, key), table, key);
     }
 
-    [[nodiscard]] static std::expected<std::optional<T>, std::string>
-        take_optional(const toml::table& table, std::string_view key) {
+    [[nodiscard]] static std::expected<std::optional<T>, std::string> take_optional(const toml::table& table, std::string_view key) {
         return detail::erase_on_success_optional(read_optional(table, key), table, key);
     }
 };
