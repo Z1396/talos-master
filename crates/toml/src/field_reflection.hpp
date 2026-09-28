@@ -49,6 +49,23 @@ concept field_referenceable = std::is_aggregate_v<std::remove_cvref_t<T>>;
 std::remove_cvref_t<T>：剥离T身上所有 const/volatile/左值引用&/右值引用&& 修饰，得到原始裸类型
 std::is_aggregate_v<X>：编译期常量判断，X是否为C++聚合体（纯数据struct，无自定义构造函数）
 只有是聚合体，才满足「可遍历字段」约束
+聚合体设计初衷就是**纯数据载体**，像 C 的 struct，只放字段，不绑定成员函数也可以（当然聚合体**可以有普通成员函数！这点很容易踩坑**）。
+```
+struct Point {
+    int x;
+    int y;
+    void print() { // ✅ 可以有普通成员函数！仍然是聚合体
+        printf("%d %d", x, y);
+    }
+};
+Point p{1,2}; // 依旧聚合初始化，合法
+```
+👉 看到没：**聚合体可以带成员函数，只要没有用户声明构造函数、虚函数、私有非静态成员**。
+所以不能说 “不能有函数”，只能说**不能有特殊的面向对象设施**。
+### ❌ 容易混淆的点
+1. 可以有普通成员函数，只是**不能自己写构造函数**
+2. 可以有静态成员（静态函数 / 静态变量），不影响是不是聚合体
+3. C++20 之后聚合体还能继承别的聚合体
 */
 
 /// @brief Concept：判断类型T是否支持「编译期提取成员字段名」
@@ -68,13 +85,26 @@ auto names = boost::pfr::names_as_array<LaunchConfig>();
 std::array<std::string_view, 3>{"name", "port", "enable_log"};*/
 concept field_namable = std::is_aggregate_v<std::remove_cvref_t<T>>
                      && requires { boost::pfr::names_as_array<std::remove_cvref_t<T>>(); };
-/*
-两段校验逻辑：
-1. 基础门槛：必须是聚合体
-2. requires表达式校验：编译期可调用 boost::pfr::names_as_array<裸类型>()
-   该接口返回 constexpr std::string_view 数组，存储结构体全部成员的变量名
-两个条件同时成立，才代表该类型可以反射拿到字段名字符串
-*/
+/*例子：
+### ✅ 和上一个 `field_referenceable` 的关键差别
+
+- `field_referenceable`：只要是聚合就行，**包含数组**
+- `field_namable`：聚合 **并且 PFR 能反射出字段名**，**自动排除数组**（数组没有字段名）
+```
+struct Person { int id; std::string name; };
+static_assert(field_namable<Person>);          // ✅ 可以拿到 "id", "name"
+static_assert(field_namable<Person&>);         // ✅ 剥掉引用还是Person
+
+static_assert(!field_namable<int[5]>);         // ❌ int数组是聚合，但没有字段名，names_as_array不合法
+## Boost.PFR 字段名反射的限制（很重要）
+
+PFR 获取成员名不是标准 C++ 反射，是**编译器签名 trick**，有前提：
+
+1. 需要开启 `BOOST_PFR_CORE_NAME_ENABLED`，C++20+，GCC/Clang/MSVC 支持程度不一样Boost
+2. 只能对 **SimpleAggregate**：聚合体，一般不能带基类、不能有引用成员等，否则拿不到字段名Boost
+3. 不能对 union
+4. 编译器关闭这个特性时，`names_as_array` 直接不存在，`field_namable` 全部不满足
+```*/
 
 // detail 私有实现命名空间，存放底层工具函数，外部业务禁止直接使用
 namespace detail {
@@ -131,7 +161,7 @@ constexpr void for_each_field_impl(T&& obj, F&& func, std::index_sequence<Is...>
 
 - T&& 在模板中是 转发引用 （万能引用）
 - T&& 在非模板中是 右值引用 （只接受右值）
-- std::forward<T>() 实现完美转发，保留原始值类别*/
+- std::forward<T>() 实现完美转发，保留原始值类别*/ // obj == T out
 template <typename T, typename F>
 constexpr void for_each_field(T&& obj, F&& func) {
     // 剥离对象修饰符，得到纯净裸类型，用于获取字段数量
