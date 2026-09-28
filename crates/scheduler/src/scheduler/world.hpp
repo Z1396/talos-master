@@ -361,33 +361,20 @@ public:
     [[nodiscard]] T& emplace(Args&&... args) {
         using U = std::remove_cvref_t<T>; // 去除 const/引用，拿到原始类型
 
-        // 尝试插入：不存在则创建，存在则返回已有迭代器
-        /*try_emplace 是 C++17 新增的容器成员函数，针对关联容器（map/unordered_map），作用：
-        尝试插入 key，key 不存在才原地构造 value；key 已存在则什么都不做。
-        返回结构化绑定 (迭代器, bool)：
-        iterator：该 key 对应的节点迭代器（不管插入成功与否）
-        bool = inserted：true 本次新建；false key 原本就存在
-        二、和 emplace /insert 的核心区别
+        // try_emplace：key不存在则创建，存在则直接返回对应迭代器
+        /* C++17 关联容器(map/unordered_map)接口
+        返回 pair<迭代器, bool>
+        it：目标key对应的迭代器，无论是否新建
+        inserted：true=本次新建；false=key已存在
 
-        1. emplace /insert 的坑:
-        map<TypeIndex, Storage> res;
-        // key 存在时，依然会先构造右侧 Storage 临时对象，再丢弃，白白构造+析构
-        res.emplace(key, Storage{});
-        key 重复时，value 还是会先构造，开销浪费。
+        对比 emplace/insert：
+        emplace 在key重复时，仍会先构造value临时对象再丢弃，浪费开销；
+        try_emplace 仅当key不存在时，才原地构造value；key已存在则完全不构造value，无多余开销。
 
-        2. try_emplace 优势
-        只有 key 不存在时，才会用 Args... 原地构造 value；
-        key 已存在，完全不构造 value，零多余开销。
-        非常适合你资源管理器 “类型唯一、禁止重复创建” 的场景。*/
-
-        /*3. 两个变量含义（对应 try_emplace 返回 pair）
-        it：容器迭代器
-        key 不存在：指向刚新建的空 value 节点
-        key 已存在：指向原有旧节点
-        后续用 it->second 拿到该类型对应的存储容器
-        inserted：布尔标记
-        true：本次调用新插入了 key，类型资源不存在，正常流程往下创建资源
-        false：key 原本就存在，重复注册资源，触发 panic 崩溃*/             /*try_emplace 返回类型是标准库 pair：std::pair<容器迭代器, bool>*/
+        适用场景：资源管理器，保证同类型只创建一次。
+        逻辑：
+        it->second 获取key对应的存储；
+        inserted=false → 重复注册，触发panic。*/
         auto [it, inserted] = resources_.try_emplace(typeid(U));
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）

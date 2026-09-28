@@ -85,7 +85,11 @@ requires(std::default_initializable<T>)
 /// 一键从table生成完整配置结构体（对外最常用接口 from_table<T>）
 /// 要求T支持默认构造，内部封装read_into
 template <detail::TableReadable T>
+   //- 模板参数 `T`，**第一个约束**：`T` 必须满足概念 `detail::TableReadable`（你项目内部定义的概念，代表这个类型可以从表格读取 / 反序列化）。
+   //- `detail::`：命名空间，说明是内部实现细节，不是对外 API。
 requires(std::default_initializable<T>)
+   //- C++20 requires 子句，**第二个约束**：`T` 必须满足标准概念 `std::default_initializable<T>`
+   //- `std::default_initializable<T>`：类型 T 可以默认初始化，即 `T t;` 合法（有无参构造函数）。
 [[nodiscard]] std::expected<T, std::string> from_table(const toml::table& table) {
     T value{};
     auto result = read_into(table, value);

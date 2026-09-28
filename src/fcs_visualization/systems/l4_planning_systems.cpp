@@ -903,19 +903,29 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             auto cmd = cmd_in.read();
 
             // -------- 击打时刻预测装甲板：当前时刻+弹丸飞行时间后的目标装甲位姿虚影 --------
+            // 门控只看EKF跟踪状态，不依赖WeaponCommand是否为本tick新消息：
+            // read_current()取最新快照，只要跟踪中（含TempLost惯性滑行）每个tick都重发实体，
+            // 保证Foxglove里虚影连续可见不闪烁
             const auto selected_target = selected_target_in.read_current();
-            if (cmd && selected_target && selected_target->has_target() && cmd->tof > 0.0) {
-                // 预测时长 = 快照到当前指令的观测延迟 + 弹丸飞行时间；延迟钳位非负防通道错序
-                const double latency_s = std::max(
-                    0.0,
-                    static_cast<double>(cmd->timestamp_ns - selected_target->timestamp_ns) * 1e-9);
-                const double predict_s = latency_s + cmd->tof;
+            const uint64_t now_ns      = clock::now_ns();
+            // 观测延迟 = 当前时刻 - 快照写入时刻；钳位非负防通道错序
+            const double latency_s =
+                std::max(0.0, static_cast<double>(now_ns - selected_target->timestamp_ns) * 1e-9);
+            // 快照超0.25s未更新（视觉失效/aimer无输出）不再外推，防止CV模型漂出合理范围
+            if (selected_target && selected_target->has_target()
+                && selected_target->tracker.is_tracking() && latency_s <= 0.25) {
+                // 飞行时间：优先用L5指令携带的精确TOF；无新指令时按距离/弹速估计兜底
+                const double tof_s =
+                    (cmd && cmd->tof > 0.0)
+                        ? cmd->tof
+                        : selected_target->distance / std::max(1.0, bullet_speed->bullet_speed);
+                const double predict_s = latency_s + tof_s;
                 // 线性外推得到弹丸到达时刻的装甲板位姿（CV模型，与EKF/aimer假设一致）
                 if (const auto future =
                         l4_detail::predict_future_armors(*selected_target, predict_s)) {
                     auto builder =
                         viz::EntityBuilder::create<fast_tf::odom>("l4", "l4_future_armors")
-                            .timestamp(cmd->timestamp_ns);
+                            .timestamp(now_ns);
                     // 大/小装甲尺寸判断：与L3装甲绘制逻辑一致（英雄/基地为大装甲）
                     const bool is_big_armor =
                         cls_to_armor_type(selected_target->tracker.target_name) == ArmorType::Large;
@@ -924,85 +934,87 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
                                               ? tac::Geometry::ARMOR_TILT_ANGLE
                                               : -tac::Geometry::ARMOR_TILT_ANGLE;
                     const int selected_id = selected_target->selected_armor_id;
-
-                    for (std::size_t i = 0; i < future->armors.size(); ++i) {
+                    // 只画开火命中的那一块装甲板，其余装甲板不渲染
+                    if (selected_id >= 0 && selected_id < static_cast<int>(future->armors.size())) {
                         auto cube = L3::vis::make_armor_cube(
-                            future->armors[i], tilt,
+                            future->armors[static_cast<std::size_t>(selected_id)], tilt,
                             is_big_armor ? tac::Geometry::ARMOR_HEIGHT_BIG
                                          : tac::Geometry::ARMOR_HEIGHT_SMALL);
-                        // 选中的击打装甲高亮（琥珀色），其余半透明虚影色，与当前时刻装甲区分
-                        const bool is_hit = static_cast<int>(i) == selected_id;
-                        cube.color = is_hit ? tac::L3::PREDICTION_AMBER : tac::L4::FUTURE_ARMOR;
-
-                        if (is_hit) {
-                            // 高亮装甲上方标注击打时刻，billboard模式永远朝向相机
-                            ::foxglove::schemas::TextPrimitive text;
-                            text.text = fmt::format("hit t+{:.0f}ms", predict_s * 1e3);
-                            text.pose = cube.pose;
-                            if (text.pose->position.has_value()) {
-                                text.pose->position->z += tac::L3::LABEL_OFFSET_Z;
-                            }
-                            text.font_size = tac::Text::SIZE_SMALL;
-                            text.color     = tac::Text::PRIMARY;
-                            text.billboard = tac::Text::BILLBOARD_ENABLED;
-                            builder.add_text(std::move(text));
+                        // 击打装甲高亮（琥珀色），与当前时刻装甲区分
+                        cube.color = tac::L3::PREDICTION_AMBER;
+                        // 装甲上方标注击打时刻，billboard模式永远朝向相机
+                        ::foxglove::schemas::TextPrimitive text;
+                        text.text = fmt::format("hit t+{:.0f}ms", predict_s * 1e3);
+                        text.pose = cube.pose;
+                        if (text.pose->position.has_value()) {
+                            text.pose->position->z += tac::L3::LABEL_OFFSET_Z;
                         }
+                        text.font_size = tac::Text::SIZE_SMALL;
+                        text.color     = tac::Text::PRIMARY;
+                        text.billboard = tac::Text::BILLBOARD_ENABLED;
+                        builder.add_text(std::move(text));
                         builder.add_cube(cube);
+                        entities.push_back(std::move(builder).build());
                     }
-                    entities.push_back(std::move(builder).build());
                 }
             }
 
-            // MPC调试数据有效：渲染MPC预测轨迹
-            if (cmd && cmd->viz_debug) {
-                entities.reserve(2);
-                // -------- 绘制MPC参考轨迹连线（原始目标时域序列） --------
-                if (cmd->viz_debug->reference_plan.size() >= 2) {
-                    std::vector<::foxglove::schemas::Point3> ref_line_points;
-                    ref_line_points.reserve(cmd->viz_debug->reference_plan.size());
-                    // spherical_to_cartesian：球坐标(distance/yaw/pitch)转odom系笛卡尔3D点
-                    for (const auto& reference : cmd->viz_debug->reference_plan) {
-                        ref_line_points.push_back(
-                            detail::spherical_to_cartesian_point3(
-                                reference.distance, reference.yaw, reference.pitch));
+            // ======== MPC轨迹可视化总开关 ========
+            // false = 本话题只渲染击打装甲板虚影，MPC参考/优化轨迹与弹道线全部关闭；
+            // 调试MPC时改回true即可，下方代码全部保留
+            constexpr bool kEnableMpcTrajectoryViz = false;
+            if (kEnableMpcTrajectoryViz) {
+                // MPC调试数据有效：渲染MPC预测轨迹
+                if (cmd && cmd->viz_debug) {
+                    entities.reserve(2);
+                    // -------- 绘制MPC参考轨迹连线（原始目标时域序列） --------
+                    if (cmd->viz_debug->reference_plan.size() >= 2) {
+                        std::vector<::foxglove::schemas::Point3> ref_line_points;
+                        ref_line_points.reserve(cmd->viz_debug->reference_plan.size());
+                        // spherical_to_cartesian：球坐标(distance/yaw/pitch)转odom系笛卡尔3D点
+                        for (const auto& reference : cmd->viz_debug->reference_plan) {
+                            ref_line_points.push_back(
+                                detail::spherical_to_cartesian_point3(
+                                    reference.distance, reference.yaw, reference.pitch));
+                        }
+                        // line_strip：连续折线实体
+                        entities.push_back(
+                            viz::EntityBuilder::create<fast_tf::odom>("l4", "mpc_ref_line")
+                                .timestamp(cmd->timestamp_ns)
+                                .line_strip(
+                                    std::move(ref_line_points), tac::L4::MPC_REFERENCE,
+                                    tac::L4::TRAJECTORY_LINE_THICKNESS)
+                                .build());
                     }
-                    // line_strip：连续折线实体
-                    entities.push_back(
-                        viz::EntityBuilder::create<fast_tf::odom>("l4", "mpc_ref_line")
-                            .timestamp(cmd->timestamp_ns)
-                            .line_strip(
-                                std::move(ref_line_points), tac::L4::MPC_REFERENCE,
-                                tac::L4::TRAJECTORY_LINE_THICKNESS)
-                            .build());
-                }
-                // -------- 绘制MPC优化平滑轨迹连线 --------
-                if (cmd->viz_debug->optimized_plan.size() >= 2) {
-                    std::vector<::foxglove::schemas::Point3> opt_line_points;
-                    opt_line_points.reserve(cmd->viz_debug->optimized_plan.size());
-                    for (const auto& optimized : cmd->viz_debug->optimized_plan) {
-                        opt_line_points.push_back(
-                            detail::spherical_to_cartesian_point3(
-                                optimized.distance, optimized.yaw, optimized.pitch));
+                    // -------- 绘制MPC优化平滑轨迹连线 --------
+                    if (cmd->viz_debug->optimized_plan.size() >= 2) {
+                        std::vector<::foxglove::schemas::Point3> opt_line_points;
+                        opt_line_points.reserve(cmd->viz_debug->optimized_plan.size());
+                        for (const auto& optimized : cmd->viz_debug->optimized_plan) {
+                            opt_line_points.push_back(
+                                detail::spherical_to_cartesian_point3(
+                                    optimized.distance, optimized.yaw, optimized.pitch));
+                        }
+                        entities.push_back(
+                            viz::EntityBuilder::create<fast_tf::odom>("l4", "mpc_opt_line")
+                                .timestamp(cmd->timestamp_ns)
+                                .line_strip(
+                                    std::move(opt_line_points), tac::L4::MPC_PRESENT,
+                                    tac::L4::TRAJECTORY_LINE_THICKNESS)
+                                .build());
                     }
-                    entities.push_back(
-                        viz::EntityBuilder::create<fast_tf::odom>("l4", "mpc_opt_line")
-                            .timestamp(cmd->timestamp_ns)
-                            .line_strip(
-                                std::move(opt_line_points), tac::L4::MPC_PRESENT,
-                                tac::L4::TRAJECTORY_LINE_THICKNESS)
-                            .build());
-                }
 
-                // std::clamp 把center_index限制合法下标，防止数组越界崩溃
-                const int center_index = std::clamp(
-                    cmd->viz_debug->center_index, 0,
-                    static_cast<int>(cmd->viz_debug->optimized_plan.size()) - 1);
+                    // std::clamp 把center_index限制合法下标，防止数组越界崩溃
+                    const int center_index = std::clamp(
+                        cmd->viz_debug->center_index, 0,
+                        static_cast<int>(cmd->viz_debug->optimized_plan.size()) - 1);
 
-                // 局部lambda封装：生成轨迹关键点球体+文本标签，复用代码
-                const auto add_key_marker =
-                    [&](const std::string& entity_id, const ::fcs::L5::TrajectoryPlanSample& sample,
-                        const std::string& label, const ::foxglove::schemas::Color& color,
-                        double size) {
+                    // 局部lambda封装：生成轨迹关键点球体+文本标签，复用代码
+                    const auto add_key_marker = [&](const std::string& entity_id,
+                                                    const ::fcs::L5::TrajectoryPlanSample& sample,
+                                                    const std::string& label,
+                                                    const ::foxglove::schemas::Color& color,
+                                                    double size) {
                         entities.push_back(
                             viz::EntityBuilder::create<fast_tf::odom>("l4", entity_id)
                                 .timestamp(cmd->timestamp_ns)
@@ -1016,58 +1028,61 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
                                     label, 0.0, 0.0, tac::L3::LABEL_OFFSET_Z, tac::Text::SIZE_SMALL)
                                 .build());
                     };
-                // 绘制参考轨迹当前时域中心点球体标签 Ref
-                add_key_marker(
-                    "mpc_ref_center",
-                    cmd->viz_debug->reference_plan[static_cast<size_t>(center_index)],
-                    l4_detail::key_point_label(
-                        "Ref", cmd->viz_debug->reference_plan[static_cast<size_t>(center_index)]),
-                    tac::L4::MPC_REFERENCE, tac::L4::SELECTION_SIZE);
-                // 绘制优化轨迹当前时域中心点球体标签 Opt
-                add_key_marker(
-                    "mpc_opt_center",
-                    cmd->viz_debug->optimized_plan[static_cast<size_t>(center_index)],
-                    l4_detail::key_point_label(
-                        "Opt", cmd->viz_debug->optimized_plan[static_cast<size_t>(center_index)]),
-                    tac::L4::MPC_PRESENT, tac::L4::SELECTION_SIZE);
+                    // 绘制参考轨迹当前时域中心点球体标签 Ref
+                    add_key_marker(
+                        "mpc_ref_center",
+                        cmd->viz_debug->reference_plan[static_cast<size_t>(center_index)],
+                        l4_detail::key_point_label(
+                            "Ref",
+                            cmd->viz_debug->reference_plan[static_cast<size_t>(center_index)]),
+                        tac::L4::MPC_REFERENCE, tac::L4::SELECTION_SIZE);
+                    // 绘制优化轨迹当前时域中心点球体标签 Opt
+                    add_key_marker(
+                        "mpc_opt_center",
+                        cmd->viz_debug->optimized_plan[static_cast<size_t>(center_index)],
+                        l4_detail::key_point_label(
+                            "Opt",
+                            cmd->viz_debug->optimized_plan[static_cast<size_t>(center_index)]),
+                        tac::L4::MPC_PRESENT, tac::L4::SELECTION_SIZE);
 
-                // 弹道求解器：根据MPC输出pitch、子弹初速、预测距离，生成子弹抛物线轨迹点
-                auto trajectory = solver->get()->generate_trajectory(
-                    cmd->pitch, bullet_speed->bullet_speed, cmd->distance);
-                std::vector<Eigen::Vector3d> traj_points;
-                traj_points.reserve(trajectory.size());
-                // 弹道坐标转换到odom坐标系
-                for (const auto& [x, z] : trajectory) {
-                    traj_points.emplace_back(
-                        x * std::cos(cmd->pitch) + z * std::sin(cmd->pitch), 0,
-                        -x * std::sin(cmd->pitch) + z * std::cos(cmd->pitch));
-                }
-                // 生成子弹弹道线SceneEntity
-                auto traj_entities =
-                    viz::patterns::bullet_trajectory(traj_points, cmd->fire, cmd->timestamp_ns);
-                entities.insert(
-                    entities.end(), std::make_move_iterator(traj_entities.begin()),
-                    std::make_move_iterator(traj_entities.end()));
-            } else {
-                // 兜底分支：没有MPC调试数据，拿真实云台姿态模拟15m弹道，方便调试
-                auto f = fast_tf::lookup_clamped<fast_tf::odom, fast_tf::gimbal>(
-                    *coord, clock::now_ns());
-                if (f) {
-                    auto [r, p, y] = f->euler_rot().rpy();
-                    auto trajectory =
-                        solver->get()->generate_trajectory(p, bullet_speed->bullet_speed, 15.0);
+                    // 弹道求解器：根据MPC输出pitch、子弹初速、预测距离，生成子弹抛物线轨迹点
+                    auto trajectory = solver->get()->generate_trajectory(
+                        cmd->pitch, bullet_speed->bullet_speed, cmd->distance);
                     std::vector<Eigen::Vector3d> traj_points;
                     traj_points.reserve(trajectory.size());
+                    // 弹道坐标转换到odom坐标系
                     for (const auto& [x, z] : trajectory) {
                         traj_points.emplace_back(
-                            x * std::cos(p) + z * std::sin(p), 0,
-                            -x * std::sin(p) + z * std::cos(p));
+                            x * std::cos(cmd->pitch) + z * std::sin(cmd->pitch), 0,
+                            -x * std::sin(cmd->pitch) + z * std::cos(cmd->pitch));
                     }
+                    // 生成子弹弹道线SceneEntity
                     auto traj_entities =
-                        viz::patterns::bullet_trajectory(traj_points, false, clock::now_ns());
+                        viz::patterns::bullet_trajectory(traj_points, cmd->fire, cmd->timestamp_ns);
                     entities.insert(
                         entities.end(), std::make_move_iterator(traj_entities.begin()),
                         std::make_move_iterator(traj_entities.end()));
+                } else {
+                    // 兜底分支：没有MPC调试数据，拿真实云台姿态模拟15m弹道，方便调试
+                    auto f = fast_tf::lookup_clamped<fast_tf::odom, fast_tf::gimbal>(
+                        *coord, clock::now_ns());
+                    if (f) {
+                        auto [r, p, y] = f->euler_rot().rpy();
+                        auto trajectory =
+                            solver->get()->generate_trajectory(p, bullet_speed->bullet_speed, 15.0);
+                        std::vector<Eigen::Vector3d> traj_points;
+                        traj_points.reserve(trajectory.size());
+                        for (const auto& [x, z] : trajectory) {
+                            traj_points.emplace_back(
+                                x * std::cos(p) + z * std::sin(p), 0,
+                                -x * std::sin(p) + z * std::cos(p));
+                        }
+                        auto traj_entities =
+                            viz::patterns::bullet_trajectory(traj_points, false, clock::now_ns());
+                        entities.insert(
+                            entities.end(), std::make_move_iterator(traj_entities.begin()),
+                            std::make_move_iterator(traj_entities.end()));
+                    }
                 }
             }
             // 发布MPC预测3D场景
