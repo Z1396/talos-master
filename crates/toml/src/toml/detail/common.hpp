@@ -313,33 +313,60 @@ template <TomlScalarValue T>
     return std::unexpected(invalid_value_error(key, expected_type_name<T>(), node.type()));
 }
 
-/// 解析枚举：支持字符串/数字两种写法，大小写不敏感
+/**
+ * @brief 解析 TOML 节点为 C++ 枚举类型 T
+ * @tparam T 目标枚举类型，requires 约束：T 必须是 enum / enum class
+ * @param node TOML 配置节点，来源 toml++ 库
+ * @param key 当前字段名/上下文路径，用于报错信息，例如 "robot.mode"
+ * @return std::expected<T, std::string>
+ *         - 成功：包含枚举值 T
+ *         - 失败：包含人类可读的错误字符串
+ * @note 支持两种配置写法：
+ *         1. 字符串形式：mode = "Auto" （大小写不敏感匹配枚举名）
+ *         2. 数字底层值：mode = 1 （匹配枚举底层整型）
+ * @note 依赖 magic_enum 库做枚举反射；enum_options<T>() 返回所有合法枚举字符串列表
+ */
 template <typename T>
 requires(std::is_enum_v<T>) [[nodiscard]] std::expected<T, std::string>
     parse_enum_node(const toml::node& node, std::string_view key) {
+    // 获取当前枚举 T 的全部合法选项字符串，用于报错提示，例如 "[Auto, Manual, Test]"
     const std::string options = enum_options<T>();
-    // 字符串形式枚举
+
+    // ========== 分支1：TOML 节点是字符串类型 ==========
+    // node.value<std::string>()：尝试把节点取出为 std::string；成功返回 std::optional<std::string> 有值
     if (auto s = node.value<std::string>()) {
+        // magic_enum::enum_cast<T>(字符串, 大小写不敏感)：字符串转枚举
+        // 例如 "auto" 可以匹配 enum class Mode { Auto=0, Manual=1 };
         if (auto enum_val = magic_enum::enum_cast<T>(*s, magic_enum::case_insensitive)) {
+            // 转换成功，返回枚举值
             return *enum_val;
         }
+        // 字符串存在，但不在枚举合法名字列表里，返回错误信息
         return std::unexpected(fmt::format(
             "Invalid enum value for key '{}': '{}', must be one of {}", key, *s, options));
     }
-    // 数字底层值枚举
+
+    // ========== 分支2：TOML 节点是整型数字类型 ==========
+    // 尝试取出节点为 int64_t，兼容 TOML 里所有整数字面量
     if (auto i = node.value<int64_t>()) {
+        // U：枚举 T 的底层基础类型（enum class 默认 int，普通枚举可自定义 underlying type）
         using U = std::underlying_type_t<T>;
+        // 将读取到的 int64_t 强转为枚举底层类型，再用 magic_enum 数字转枚举
         if (auto enum_val = magic_enum::enum_cast<T>(static_cast<U>(*i))) {
             return *enum_val;
         }
+        // 数字存在，但不是任何枚举的合法底层值
         return std::unexpected(fmt::format(
             "Invalid enum value for key '{}': {}, must be one of {}", key, *i, options));
     }
-    // 既不是字符串也不是数字
+
+    // ========== 分支3：既不是字符串，也不是整数（如数组、table、bool、浮点数） ==========
+    // node_type_name：工具函数，把 toml::node_type 转成可读字符串，例如 "table", "array"
     return std::unexpected(fmt::format(
         "Invalid value for key '{}': expected enum as string/integer, got {}; options: {}", key,
         node_type_name(node.type()), options));
 }
+
 
 // ============================================================================
 // 结果包装转换工具

@@ -116,6 +116,12 @@ int main() {
             区分两个东西不要混：
             *x：解引用运算符，取出容器内部存储的实体，结果一定是左值；
             std::move(val)：把 val 转右值引用。*/
+            /*因为标准库 专门为这个转换写了一个构造函数 ——`shared_ptr` 有一个接收`unique_ptr&&` 的移动构造：
+            unique_ptr<FoxgloveServer> ──移动构造──> shared_ptr<FoxgloveServer>
+            1. 接管裸指针：FoxgloveServer* 从 unique_ptr 手里转到 shared_ptr（指针值原样搬）
+            2. 创建控制块：shared_ptr 额外分配一块"引用计数"内存，初始 count = 1
+            3. 释放源：unique_ptr 置空（此后它不再是所有者，析构时不会 delete）
+            效果就是 所有权模式从“独占”平滑升级为“共享” ：*/
             std::shared_ptr<fcs::visualization::FoxgloveServer> server = std::move(*server_result);
 
             // 挂载数据接收器：业务数据转发至 Foxglove 服务
