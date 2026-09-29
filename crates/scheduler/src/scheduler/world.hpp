@@ -226,6 +226,10 @@ struct Resource {
      */
     template <typename... Args>
     explicit Resource(std::in_place_t, Args&&... args) noexcept(
+        /*`std::is_nothrow_constructible_v<T, Args...>` 返回 `true` / `false`
+        > 模板参数：
+        > - 第一个：待构造类型 `T`
+        > - 后面一串：构造时传入的参数类型列表*/
         std::is_nothrow_constructible_v<T, Args&&...>)
         : value(std::forward<Args>(args)...) {}
 
@@ -358,42 +362,32 @@ public:
        manager.emplace<Foo>(10, 20);
        // T = Foo，Args = [int, int]*/
     template <typename T, typename... Args>
-    [[nodiscard]] T& emplace(Args&&... args) {
+    [[nodiscard]] T& emplace(Args&&... args) { 
         using U = std::remove_cvref_t<T>; // 去除 const/引用，拿到原始类型
-
-        // try_emplace：key不存在则创建，存在则直接返回对应迭代器
-        /* C++17 关联容器(map/unordered_map)接口
-        返回 pair<迭代器, bool>
-        it：目标key对应的迭代器，无论是否新建
-        inserted：true=本次新建；false=key已存在
-
-        对比 emplace/insert：
-        emplace 在key重复时，仍会先构造value临时对象再丢弃，浪费开销；
-        try_emplace 仅当key不存在时，才原地构造value；key已存在则完全不构造value，无多余开销。
-
-        适用场景：资源管理器，保证同类型只创建一次。
-        逻辑：
-        it->second 获取key对应的存储；
-        inserted=false → 重复注册，触发panic。*/
+        // try_emplace：C++17 map/unordered_map接口，key不存在则新建，存在直接返回迭代器
+        // 返回 pair<迭代器, bool>；bool标记是否本次插入成功
+        // 对比 emplace：key冲突时try_emplace不会构造value，无多余开销
+        // 场景：资源管理器，保证同类型只创建一次
+        // 逻辑：it->second取存储；inserted=false则重复注册，panic
         auto [it, inserted] = resources_.try_emplace(typeid(U));
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）
         if (!inserted) [[unlikely]] {
             panic(
                 "Resource already exists: {}",
+                /*## 和 `decltype` 的对比（极易混淆）
+                - `decltype(expr)`：**编译期**推导表达式的类型，得到类型本身，不产生运行开销；保留 cv、引用。
+                - `typeid(expr)`：得到`std::type_info`对象；多态类型时会触发运行时 RTTI；丢掉 const/volatile/ 引用。
+                const int& v = 1;
+                decltype(v)  // const int&
+                typeid(v)    // std::type_info for int*/
                 talos::scheduler::detail::demangle(typeid(U).name()));
         }
-
-        // 在 UniqueAny 类型擦除容器中原位构造 Resource<U> 包装器
-        // 使用 .template 语法：因 it->second 依赖模板参数，需显式告知编译器 < 为模板参数列表
-        /*3. std::in_place
-        头文件 <utility>，原位构造标记。
-        作用：告诉 emplace 不要先构造临时 Resource<U>
-        再移动，直接使用后面一串参数，在容器分配的内存上直接构造 Resource<U>。 如果不写
-        std::in_place，编译器会误以为你要传入一个已存在的 Resource<U> 临时对象，产生额外拷贝 /
-        移动开销。*/
-        // std::forward<Args>(args)... 完美转发构造参数，保留值类别
-        // auto& 绑定返回的左值引用，避免拷贝并确保后续访问的是容器内实体
+        // UniqueAny类型擦除容器，原位构造Resource<U>包装器
+        // .template：it->second依赖模板参数，显式告知编译器<是模板参数起始
+        // std::in_place(<utility>)：原位构造标记，直接在容器内存构造Resource<U>，不生成临时对象，省去移动开销
+        // std::forward<Args>(args)...：完美转发参数，保留原值类别
+        // auto&绑定左值引用，避免拷贝，直接访问容器内对象
         auto& storage =
             it->second.template emplace<Resource<U>>(std::in_place, std::forward<Args>(args)...);
 
