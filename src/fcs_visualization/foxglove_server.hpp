@@ -120,14 +120,13 @@ template <typename Def>
  */
 template <typename Def>
 [[nodiscard]] inline std::expected<void, std::string> init_channel_for(
-    FoxgloveChannels& channels, const ::foxglove::Context& context,
-    FoxgloveTransport active_transport) {
+    FoxgloveChannels& channels, const ::foxglove::Context& context, FoxgloveTransport active_transport) {
     // 编译期判断：通道绑定了指定传输方式，且与当前模式不一致 → 直接跳过
     if constexpr (requires { Def::transport; }) {
         if (Def::transport != active_transport)
             return {};
     }
-    // 执行通用初始化
+    // 执行通用初始化函数
     return init_channel_for<Def>(channels, context);
 }
 
@@ -151,8 +150,7 @@ template <typename... Defs>
     std::expected<void, std::string> result;
     // 折叠表达式：依次初始化每一个通道，短路求值，失败立即终止
     bool ok =
-        ((result = init_channel_for<Defs>(channels, context, transport), result.has_value())
-         && ...);
+        ((result = init_channel_for<Defs>(channels, context, transport), result.has_value()) && ...);
     if (!ok)
         return result;
     return {};

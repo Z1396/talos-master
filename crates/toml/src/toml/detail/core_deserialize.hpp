@@ -79,10 +79,10 @@ template <typename T>
  */
 template <ReflectDeserializeCandidate T>
 [[nodiscard]] std::expected<void, std::string>   //table 从path load过来的toml.table
-    read_reflected_into(const toml::table& table, T& out) {
-    // 初始化成功状态
+    read_reflected_into(const toml::table& table, T& out) {   
+    // 初始化成功状态 
     std::expected<void, std::string> result{};
-    // 反射遍历结构体全部字段：回调传入字段名、字段引用
+    // 反射遍历结构体全部字段：回调传入字段名、字段引用      
     field_reflection::for_each_field(out, [&](std::string_view field_name, auto&& field) {
         // 短路逻辑：已有字段解析失败，跳过后续所有字段
         if (!result) 

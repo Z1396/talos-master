@@ -91,6 +91,19 @@ requires(std::default_initializable<T>)
    //- C++20 requires 子句，**第二个约束**：`T` 必须满足标准概念 `std::default_initializable<T>`
    //- `std::default_initializable<T>`：类型 T 可以默认初始化，即 `T t;` 合法（有无参构造函数）。
 [[nodiscard]] std::expected<T, std::string> from_table(const toml::table& table) {
+/*局部构造完整结果 → 成功才转移”这个模式在每一级都在重复 ，只是“导出”的形式有三种。拿`from_table<PresetEntry>()` 的完整路径走一遍：
+`from_table<PresetEntry>(table)                    【临时①】
+└─ T value{};                                     ← 第一个临时对象
+   └─ read_into(table, value)
+      └─ T parsed{};                              【临时②】第二个临时对象
+         └─ read_object_into(table, parsed)
+            └─ read_reflected_into(table, parsed)
+               └─ for_each_field: 逐字段拿到 parsed.backend/robot/vision 的引用
+                  └─ parse_reflected_field(table, "robot", robot字段引用)
+                     └─ Deserialize<std::string>::take(...)   ← 标量：返回值即"临时"
+                        └─ 字段引用直接写入，无独立临时
+         └─ out = std::move(parsed)               ← ②→①：成功才整体搬运
+   └─ return std::move(value)                     ← ①→返回值：再搬运一`*/
     T value{};
     auto result = read_into(table, value);
     if (!result) {

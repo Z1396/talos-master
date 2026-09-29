@@ -282,9 +282,13 @@ auto load_robot_extrinsic_config(std::string_view robot)
     // ========== 6. 拼装最终 RuntimeConfig 并返回 ==========
     // C++17 指定成员初始化，组装全量运行时配置
     return RuntimeConfig{
+        // cfg 是裸变量，直接 move 即可
         .backend  = std::move(cfg), // 硬件后端配置
-        .foxglove = std::move(launch.foxglove), // Foxglove 可视化工具配置
+        // launch 是裸结构体 LaunchConfig，成员直接可用 
+        .foxglove = std:: move (launch.foxglove), // 成员本身就是 FoxgloveConfig，直接 move, // Foxglove 可视化工具配置
         .capturer = std::move(launch.capturer), // 数据录制器配置
+        /*↑ 返回类型：expected<VisionConfig, string> 
+        .vision   = std:: move (*vision_config) // 先 * 取出里面的 VisionConfig，再 move*/
         .vision   = std::move(*vision_config), // 视觉整套配置
         // 运行时上下文：记录当前使用的后端、机器人、视觉方案
         .launch =
