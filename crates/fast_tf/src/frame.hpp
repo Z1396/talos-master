@@ -344,6 +344,13 @@ using EphemeralBuffer = Buffer<EdgeTransform<T>, 5, 500>;
  * odom、gimbal_yaw、gimbal_pitch、camera_link、camera_optical、muzzle_link
  * 完整保存整棵坐标系树所有边的时序变换历史，支持插值查询任意时刻T_AB
  */
+/*CoordinateSystem（堆上的资源实例）
+ ├─ odom 缓冲区:          [{t=0,单位阵}]
+ ├─ gimbal_yaw 缓冲区:    [{t=0,单位阵}, {t=100ms,yaw=5°}, {t=101ms,yaw=5.1°}, ...最多500条]
+ ├─ gimbal_pitch 缓冲区:  [{t=0,...}, {IMU高频push的俯仰角}, ...]
+ ├─ camera_link 缓冲区:   [{t=0, 外参平移+旋转}]     ← boot L128 写入的机械外参
+ └─ muzzle_link 缓冲区:   [{t=0, 枪口外参}]          ← boot L151 写入
+      ↑ push(ns, transform) 就是往对应数组写入下一个槽位，满500覆盖最老的变换*/
 using CoordinateSystem = std::tuple<
     EphemeralBuffer<odom_fuxk_frame>, EphemeralBuffer<gimbal_yaw_fuxk_frame>,
     EphemeralBuffer<gimbal_pitch_fuxk_frame>, EphemeralBuffer<camera_link_fuxk_frame>,
@@ -476,8 +483,7 @@ constexpr void for_each_coordinate_buffer(System&& system, Fn&& fn) {
  * @param ns 变换对应时间戳（纳秒）
  */
 template <non_root_frame Layer>
-constexpr void update(
-    CoordinateSystem& system, const EdgeTransform<Layer>& transform, timestamp_ns_t ns) noexcept {
+constexpr void update(CoordinateSystem& system, const EdgeTransform<Layer>& transform, timestamp_ns_t ns) noexcept {
     buffer_of<Layer>(system).push(ns, transform);
 }
 
