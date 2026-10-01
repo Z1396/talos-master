@@ -69,6 +69,7 @@
 #include "core/types.hpp"
 
 #include <algorithm>
+#include <cstdint>
 #include <numbers>
 #include <numeric>
 #include <opencv2/core.hpp>
@@ -77,6 +78,31 @@
 #include <vector>
 
 namespace fcs::L2 {
+
+// ============================================================================
+// AT Legacy Debug Frame (for Traditional Backend → Foxglove)
+// ============================================================================
+
+/**
+ * @struct ArmorDebugFrame
+ * @brief 传统检测流程调试帧：携带二值化掩码与数字分类裁剪图
+ *
+ * 仿照 RuneDebugFrame（rune/types.hpp）模式：
+ * L2 检测流程产生的中间图（用完即丢的局部量）在此打包，
+ * 经 ArmorDebugFrameChannelTopic 通道传给可视化系统发布到 Foxglove。
+ *
+ * 字段说明：
+ * - binary_jpeg：二值化掩码 JPEG（灯条为白色），调 binary_threshold 时观察分割效果
+ * - number_jpeg：数字分类器输入的裁剪图（20x28 放大 4 倍），取本次置信度最高的装甲
+ * - timestamp_ns / frame_id：由调用方（armor_detector 系统）填充源帧信息
+ */
+struct ArmorDebugFrame {
+    uint64_t timestamp_ns{};      ///< 源帧时间戳（纳秒），由系统层填充
+    uint64_t frame_id{};          ///< 源帧编号，由系统层填充
+
+    std::vector<uint8_t> binary_jpeg{};  ///< 二值化掩码 JPEG 编码
+    std::vector<uint8_t> number_jpeg{};  ///< 数字分类裁剪图 JPEG 编码（可空：本帧无候选装甲）
+};
 
 // ============================================================================
 // AT Legacy Light Structure (for Traditional Backend)

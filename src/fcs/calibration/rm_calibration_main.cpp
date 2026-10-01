@@ -20,42 +20,42 @@
  */
 
 // ===================== 标定业务模块头文件 =====================
-#include "calibration/calibration_board.hpp"        // 标定板基类、棋盘格/ChArUco板抽象
-#include "calibration/calibration_config.hpp"         // 标定工具总配置结构体 CalibrationConfig
-#include "calibration/calibration_systems.hpp"        // 注册标定系统任务（调度器System注册函数）
-#include "calibration/chessboard_detector.hpp"        // 棋盘格角点/ChArUco标记检测算法封装
-#include "calibration/handeye_calibrator.hpp"         // 手眼标定求解器（AX=XB多种求解方法）
-#include "calibration/intrinsic_calibrator.hpp"        // 相机内参标定求解器（OpenCV标定封装）
+#include "calibration/calibration_board.hpp"    // 标定板基类、棋盘格/ChArUco板抽象
+#include "calibration/calibration_config.hpp"   // 标定工具总配置结构体 CalibrationConfig
+#include "calibration/calibration_systems.hpp"  // 注册标定系统任务（调度器System注册函数）
+#include "calibration/chessboard_detector.hpp"  // 棋盘格角点/ChArUco标记检测算法封装
+#include "calibration/handeye_calibrator.hpp"   // 手眼标定求解器（AX=XB多种求解方法）
+#include "calibration/intrinsic_calibrator.hpp" // 相机内参标定求解器（OpenCV标定封装）
 
 // ===================== 机器人通用业务头文件 =====================
-#include "camera_config.hpp"                          // 相机参数结构体 CameraConfig
-#include "core/armor_types.hpp"                       // 装甲板相关基础类型（颜色、装甲结构）
-#include "core/trajectory/resource.hpp"               // 弹道、弹速全局资源定义
+#include "camera_config.hpp"            // 相机参数结构体 CameraConfig
+#include "core/armor_types.hpp"         // 装甲板相关基础类型（颜色、装甲结构）
+#include "core/trajectory/resource.hpp" // 弹道、弹速全局资源定义
 
 // ===================== 日志、调试可视化 =====================
-#include "spdlog_hook.hpp"                            // spdlog日志全局初始化、格式化钩子
+#include "spdlog_hook.hpp" // spdlog日志全局初始化、格式化钩子
 
 // ===================== Talos框架底层公共头文件 =====================
-#include "config.hpp"                                 // CMake编译宏、全局编译配置
-#include "core/channel_topics.hpp"                    // 消息通道话题定义（相机图像、云台数据）
-#include "core/time.hpp"                              // 高精度时间戳、时钟工具
-#include "foxglove_server.hpp"                        // Foxglove可视化服务（Websocket/MCAP录包）
-#include "foxglove_sink.hpp"                          // spdlog日志输出到Foxglove可视化端
-#include "runtime/l1_l2_setup.hpp"                    // L1硬件层+L2感知层运行时初始化（相机/MCU/IMU）
-#include "scheduler/scheduler.hpp"                    // 全局任务调度器（ECS架构，System资源驱动）
-#include "toml_helper.hpp"                             // TOML通用解析工具，toml表转C++结构体
-#include "toml_helper_eigen.hpp"                      // Eigen矩阵/向量TOML序列化/反序列化扩展
+#include "config.hpp"              // CMake编译宏、全局编译配置
+#include "core/channel_topics.hpp" // 消息通道话题定义（相机图像、云台数据）
+#include "core/time.hpp"           // 高精度时间戳、时钟工具
+#include "foxglove_server.hpp"     // Foxglove可视化服务（Websocket/MCAP录包）
+#include "foxglove_sink.hpp"       // spdlog日志输出到Foxglove可视化端
+#include "runtime/l1_l2_setup.hpp" // L1硬件层+L2感知层运行时初始化（相机/MCU/IMU）
+#include "scheduler/scheduler.hpp" // 全局任务调度器（ECS架构，System资源驱动）
+#include "toml_helper.hpp"         // TOML通用解析工具，toml表转C++结构体
+#include "toml_helper_eigen.hpp"   // Eigen矩阵/向量TOML序列化/反序列化扩展
 
 // ===================== 调度器错误格式化打印 =====================
 #include "scheduler/error_formatter.hpp"
 
 // ===================== C++标准库、系统API、第三方库 =====================
-#include <atomic>                                     // 原子布尔，跨线程安全的运行标志
-#include <chrono>                                     // 高精度时间休眠、时间戳
-#include <csignal>                                    // Linux信号捕获（Ctrl+C退出）
-#include <iostream>                                   // 控制台标准输出（帮助文档打印）
-#include <spdlog/spdlog.h>                            // 高性能日志库（INFO/WARN/ERROR/CRITICAL）
-#include <thread>                                     // C++标准线程库（调度器后台运行）
+#include <atomic>          // 原子布尔，跨线程安全的运行标志
+#include <chrono>          // 高精度时间休眠、时间戳
+#include <csignal>         // Linux信号捕获（Ctrl+C退出）
+#include <iostream>        // 控制台标准输出（帮助文档打印）
+#include <spdlog/spdlog.h> // 高性能日志库（INFO/WARN/ERROR/CRITICAL）
+#include <thread>          // C++标准线程库（调度器后台运行）
 
 // 简化命名空间：所有标定相关类型直接使用，无需重复 fcs::calibration::
 using namespace fcs::calibration;
@@ -73,9 +73,7 @@ std::atomic<bool> g_running{true};
  * @param sig 捕获到的信号值（SIGINT Ctrl+C / SIGTERM 程序终止）
  * 作用：捕获退出信号，修改全局运行标志，优雅退出而非直接强制kill
  */
-void signal_handler(int /*sig*/) {
-    g_running = false;
-}
+void signal_handler(int /*sig*/) { g_running = false; }
 
 /**
  * @brief 打印程序帮助文档、命令行参数说明、运行示例、交互按键
@@ -125,10 +123,10 @@ int main(int argc, char* argv[]) {
     init_logger();
 
     // ========== 命令行参数默认初始化 ==========
-    std::string config_path = "calibration.toml";          // 默认TOML配置文件
-    std::string intrinsic_path;                            // 外部加载的相机内参文件路径
-    std::optional<CalibrationMode> mode_override;          // 命令行覆盖标定模式（可选）
-    std::optional<bool> daedalus_override;                  // 命令行强制开启仿真器（可选）
+    std::string config_path = "calibration.toml"; // 默认TOML配置文件
+    std::string intrinsic_path;                   // 外部加载的相机内参文件路径
+    std::optional<CalibrationMode> mode_override; // 命令行覆盖标定模式（可选）
+    std::optional<bool> daedalus_override;        // 命令行强制开启仿真器（可选）
 
     // ========== 循环解析所有命令行参数 ==========
     for (int i = 1; i < argc; ++i) {
@@ -143,7 +141,7 @@ int main(int argc, char* argv[]) {
         } else if (arg == "--mode" && i + 1 < argc) {
             // 解析标定模式枚举字符串（magic_enum实现字符串<->枚举转换）
             std::string mode_str = argv[++i];
-            auto mode = magic_enum::enum_cast<CalibrationMode>(mode_str);
+            auto mode            = magic_enum::enum_cast<CalibrationMode>(mode_str);
             if (mode) {
                 mode_override = *mode;
             } else {
@@ -160,8 +158,8 @@ int main(int argc, char* argv[]) {
     }
 
     // ========== 注册系统退出信号捕获 ==========
-    std::signal(SIGINT, signal_handler);   // 捕获 Ctrl+C
-    std::signal(SIGTERM, signal_handler);   // 捕获系统终止信号 kill
+    std::signal(SIGINT, signal_handler);  // 捕获 Ctrl+C
+    std::signal(SIGTERM, signal_handler); // 捕获系统终止信号 kill
     SPDLOG_INFO("RM标定工具启动中...");
     SPDLOG_INFO("加载配置文件: {}", config_path);
 
@@ -190,9 +188,9 @@ int main(int argc, char* argv[]) {
     SPDLOG_INFO("标定模式: {}", magic_enum::enum_name(config->mode));
     SPDLOG_INFO("图像输入源: {}", use_daedalus ? "Daedalus仿真器" : "真实硬件相机");
     SPDLOG_INFO("标定板类型: {}", magic_enum::enum_name(config->board.type));
-    SPDLOG_INFO("标定板尺寸: {}x{}格, 方格边长 {} mm",
-                config->board.width, config->board.height,
-                config->board.square_size * 1000);
+    SPDLOG_INFO(
+        "标定板尺寸: {}x{}格, 方格边长 {} mm", config->board.width, config->board.height,
+        config->board.square_size * 1000);
 
     // ========== 创建标定板检测器（棋盘格/ChArUco） ==========
     auto board_result = create_board(config->board, config->charuco);
@@ -205,7 +203,8 @@ int main(int argc, char* argv[]) {
 
     // ========== 实例化内参、手眼标定求解器 ==========
     // 内参标定器：绑定采集参数、内参输出配置
-    auto intrinsic_calibrator = std::make_shared<IntrinsicCalibrator>(config->capture, config->intrinsic);
+    auto intrinsic_calibrator =
+        std::make_shared<IntrinsicCalibrator>(config->capture, config->intrinsic);
     // 手眼标定器：绑定采集参数、手眼求解配置
     auto handeye_calibrator = std::make_shared<HandEyeCalibrator>(config->capture, config->handeye);
 
@@ -240,13 +239,14 @@ int main(int argc, char* argv[]) {
     }
 
     // ========== 全局标定状态管理 ==========
-    auto status = std::make_shared<CalibrationStatus>();
-    status->state = CalibrationState::Idle;                // 初始状态：空闲
-    status->target_samples = config->capture.min_samples;  // 自动标定所需最少样本数
+    auto status            = std::make_shared<CalibrationStatus>();
+    status->state          = CalibrationState::Idle;      // 初始状态：空闲
+    status->target_samples = config->capture.min_samples; // 自动标定所需最少样本数
 
     // ========== 初始化Talos ECS调度器与世界资源容器 ==========
-    talos::World world;                                    // ECS全局资源仓库（所有单例资源存在此处）
-    talos::Scheduler scheduler(world);                     // 任务调度器，驱动所有感知/标定System运行
+    // 新版API：Scheduler内部自带World，通过scheduler.world()访问
+    talos::Scheduler scheduler;              // 任务调度器，驱动所有感知/标定System运行
+    talos::World& world = scheduler.world(); // ECS全局资源仓库（所有单例资源存在此处）
 
     // 创建坐标变换TF树资源（云台、相机、枪口坐标转换依赖）
     [[maybe_unused]] auto& tf_buffer = world.emplace_resource<fast_tf::CoordinateSystem>();
@@ -263,14 +263,18 @@ int main(int argc, char* argv[]) {
     world.insert_resource(fcs::core::trajectory::bullet_speed_data{.bullet_speed = 25.0});
     world.insert_resource(fcs::ArmorColor::Blue);
 
-    // ========== L1底层硬件+L2感知层初始化 ==========
-    // 参数说明：
-    // mock_mcu=false 不模拟电控板；use_daedalus仿真时硬件配置传nullptr跳过相机/MCU
-    auto setup_result = fcs::runtime::setup_l1(
-        world, scheduler,
-        /*mock_mcu=*/false,
-        use_daedalus,
-        use_daedalus ? nullptr : &hardware_config);
+    // ========== 组装硬件后端配置（新版API：variant二选一） ==========
+    // 仿真模式用DaedalusConfig（IPC共享内存输入）；真实硬件用DirectConfig相机直连
+    fcs::hardware::HardwareBackendConfig backend_cfg =
+        use_daedalus ? fcs::hardware::HardwareBackendConfig{fcs::hardware::DaedalusConfig{}}
+                     : fcs::hardware::HardwareBackendConfig{fcs::hardware::DirectConfig{
+                           .camera_only = true,
+                           .transport   = fcs::hardware::Transport::Direct,
+                           .hardware    = hardware_config}};
+
+    // ========== L1底层硬件+L2感知层初始化（新版3参数签名） ==========
+    auto setup_result =
+        fcs::runtime::setup_l1(scheduler.world(), scheduler, std::move(backend_cfg));
     if (!setup_result) {
         SPDLOG_ERROR("L1/L2运行时环境初始化失败: {}", setup_result.error());
         return 1;
@@ -289,7 +293,9 @@ int main(int argc, char* argv[]) {
             world.insert_resource(foxglove_server);
             // 区分Websocket实时可视化 / MCAP离线录包两种模式打印日志
             if (config->foxglove.transport == fcs::FoxgloveTransport::WebSocket) {
-                SPDLOG_INFO("Foxglove WebSocket可视化服务启动 {}:{}", config->foxglove.host, config->foxglove.port);
+                SPDLOG_INFO(
+                    "Foxglove WebSocket可视化服务启动 {}:{}", config->foxglove.host,
+                    config->foxglove.port);
             } else {
                 SPDLOG_INFO("Foxglove MCAP录包文件输出路径: {}", config->foxglove.mcap_path);
             }
@@ -339,22 +345,23 @@ int main(int argc, char* argv[]) {
         }
 
         // ========== 自动标定逻辑：开启auto_capture且样本数达标则自动求解 ==========
-        if (config->capture.auto_capture
-            && current_samples >= config->capture.min_samples
-            && status->state == CalibrationState::Capturing)
-        {
+        if (config->capture.auto_capture && current_samples >= config->capture.min_samples
+            && status->state == CalibrationState::Capturing) {
             SPDLOG_INFO("已采集足够标定样本，自动执行标定计算...");
             status->state = CalibrationState::Calibrating;
 
             // -------- 分支1：相机内参自动标定 --------
             if (config->mode == CalibrationMode::Intrinsic) {
                 // 传入图像分辨率执行OpenCV内参标定
-                auto result = intrinsic_calibrator->calibrate(cv::Size(config->width, config->height));
+                auto result =
+                    intrinsic_calibrator->calibrate(cv::Size(config->width, config->height));
                 if (result) {
                     // 保存标定结果
                     *intrinsic_result = *result;
                     // 写入TOML内参文件
-                    if (auto save_result = save_intrinsic_result(*result, config->output.intrinsic_path); !save_result) {
+                    if (auto save_result =
+                            save_intrinsic_result(*result, config->output.intrinsic_path);
+                        !save_result) {
                         SPDLOG_ERROR("内参结果保存失败: {}", save_result.error());
                     } else {
                         SPDLOG_INFO("相机内参已保存至: {}", config->output.intrinsic_path);
@@ -371,7 +378,9 @@ int main(int argc, char* argv[]) {
                 auto result = handeye_calibrator->calibrate();
                 if (result) {
                     // 保存手眼外参TOML
-                    if (auto save_result = save_handeye_result(*result, config->output.extrinsic_path, config->handeye.method); !save_result) {
+                    if (auto save_result = save_handeye_result(
+                            *result, config->output.extrinsic_path, config->handeye.method);
+                        !save_result) {
                         SPDLOG_ERROR("手眼外参保存失败: {}", save_result.error());
                     } else {
                         // 打印手眼标定旋转平移结果

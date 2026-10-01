@@ -3,12 +3,36 @@
 #include "L2_perception/armor/config.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <numbers>
 #include <opencv2/core/mat.hpp>
+#include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <ranges>
 #include <spdlog/spdlog.h>
+
+namespace {
+
+/**
+ * @brief 将图像编码为JPEG字节流（调试帧发布用）
+ * @param img 待编码图像（BGR或灰度）
+ * @return JPEG编码字节流，空图或编码失败返回空数组
+ * @note quality 60：调试图兼顾清晰度与WebSocket带宽
+ */
+[[nodiscard]] std::vector<uint8_t> encode_debug_jpeg(const cv::Mat& img) noexcept {
+    if (img.empty()) {
+        return {};
+    }
+    std::vector<uint8_t> encoded;
+    std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 60};
+    if (!cv::imencode(".jpg", img, encoded, params)) {
+        return {};
+    }
+    return encoded;
+}
+
+} // namespace
 
 namespace fcs::L2 {
 
@@ -93,6 +117,9 @@ TraditionalBackend::DetectionResult
     auto detections = match_lights(lights, cfg, gray_img);
 
     // 步骤5：对每一块候选装甲做数字分类，过滤无效装甲
+    // 调试图跟踪：记录本次检测中置信度最高装甲的数字裁剪图（供节流编码发布）
+    cv::Mat best_number_img;
+    float best_confidence = 0.0f;
     for (size_t d = 0; d < detections.size(); ++d) {
         auto& detection = detections[d];
 
@@ -102,12 +129,18 @@ TraditionalBackend::DetectionResult
         if (!number_img.empty()) {
             float confidence = 0.0f;
             // ONNX分类器推理：输入数字图，返回装甲编号+置信度
-            auto result      = classifier_->classify(number_img, confidence);
+            auto result = classifier_->classify(number_img, confidence);
 
             if (result) {
                 // 推理成功，写入装甲编号与置信度
                 detection.name       = *result;
                 detection.confidence = confidence;
+
+                // 调试图：保留置信度最高的数字裁剪图（20x28小图，拷贝开销可忽略）
+                if (confidence > best_confidence) {
+                    best_confidence = confidence;
+                    best_number_img = number_img;
+                }
             } else {
                 // 分类推理失败，标记为无效装甲
                 detection.name       = ArmorName::Invalid;
@@ -154,8 +187,42 @@ TraditionalBackend::DetectionResult
             detections.end());
     }
 
+    // ====================== 调试帧节流编码（约20Hz，供Foxglove发布） ======================
+    // 距上次编码不足50ms直接跳过：避免200Hz检测全速编码JPEG拖累实时链路
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last_debug_encode_ >= std::chrono::milliseconds(50)) {
+        last_debug_encode_ = now;
+
+        ArmorDebugFrame dbg;
+        // 二值化掩码编码：灯条为白色，调binary_threshold时观察分割效果
+        dbg.binary_jpeg = encode_debug_jpeg(binary);
+
+        // 数字裁剪图：20x28单通道，放大4倍转BGR便于观察，无候选装甲时留空
+        if (!best_number_img.empty()) {
+            cv::Mat number_vis;
+            cv::resize(best_number_img, number_vis, cv::Size(), 4.0, 4.0, cv::INTER_NEAREST);
+            cv::cvtColor(number_vis, number_vis, cv::COLOR_GRAY2BGR);
+            dbg.number_jpeg = encode_debug_jpeg(number_vis);
+        }
+        pending_debug_ = std::move(dbg);
+    }
+
     // 返回过滤完成后的装甲检测列表
     return detections;
+}
+
+/**
+ * @brief 取出缓存的调试帧，取出后缓存清空
+ * @return 有缓存返回ArmorDebugFrame，无则nullopt
+ * @noexcept 线程约定：仅armor_detector系统线程调用（检测唯一调用者）
+ */
+std::optional<ArmorDebugFrame> TraditionalBackend::take_debug_frame() noexcept {
+    if (!pending_debug_) {
+        return std::nullopt;
+    }
+    auto dbg = std::move(*pending_debug_);
+    pending_debug_.reset();
+    return dbg;
 }
 
 // Preprocessing
@@ -199,9 +266,7 @@ cv::Mat TraditionalBackend::preprocess_image(
     cv::minMaxLoc(chroma, &min_val, &max_val);
 
     // 动态阈值 = 最大色度 * dark_percentage比例
-    int dynamic_thresh = static_cast<int>(
-        max_val
-        * cfg.dark_percentage);
+    int dynamic_thresh = static_cast<int>(max_val * cfg.dark_percentage);
     // 兜底：不能低于配置的基础阈值，防止全黑图片阈值为0
     dynamic_thresh = std::max(dynamic_thresh, cfg.binary_threshold);
 
@@ -453,7 +518,7 @@ cv::Mat TraditionalBackend::extract_number(
     // 矫正后画布上灯条高度
     static const int light_length = 12;
     // warp变换后画布总高度
-    static const int warp_height       = 28;
+    static const int warp_height = 28;
     // 小装甲、大装甲矫正画布宽度
     static const int small_armor_width = 32;
     static const int large_armor_width = 54;

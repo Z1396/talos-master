@@ -55,7 +55,9 @@
 #include "traditional_classifier.hpp"
 #include "traditional_types.hpp"
 
+#include <chrono>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -113,8 +115,8 @@ public:
     TraditionalBackend& operator=(TraditionalBackend&&) noexcept = default;
 
     // 禁止拷贝（避免共享分类器模型导致的线程安全问题）
-    TraditionalBackend(const TraditionalBackend&)                = delete;
-    TraditionalBackend& operator=(const TraditionalBackend&)     = delete;
+    TraditionalBackend(const TraditionalBackend&)            = delete;
+    TraditionalBackend& operator=(const TraditionalBackend&) = delete;
 
     /**
      * @brief 执行装甲板检测
@@ -141,6 +143,17 @@ public:
      */
     [[nodiscard]] const Config& get_config() const noexcept { return config_; }
 
+    /**
+     * @brief 取出缓存的调试帧（二值化掩码 + 数字分类裁剪图）
+     *
+     * detect_impl() 内部按约 20Hz 节流编码中间图存入 pending_debug_，
+     * 本方法取出并清空缓存（取出后为空，直到下次编码）。
+     *
+     * @return 有缓存的调试帧返回 ArmorDebugFrame，无则返回 nullopt
+     * @note 线程约定：仅 armor_detector 系统（唯一检测调用者）线程调用
+     */
+    [[nodiscard]] std::optional<ArmorDebugFrame> take_debug_frame() noexcept;
+
 private:
     /**
      * @brief 私有构造函数（通过 create() 工厂函数调用）
@@ -154,6 +167,12 @@ private:
     /// ONNX 分类器（用于识别装甲板数字）
     /// 使用 unique_ptr 管理，支持延迟初始化和可选加载
     std::unique_ptr<TraditionalClassifier> classifier_;
+
+    /// 待取走的调试帧缓存（detect_impl 节流编码后写入）
+    std::optional<ArmorDebugFrame> pending_debug_;
+
+    /// 上次调试图编码时刻（节流：约 20Hz，避免 200Hz 检测全速编码拖累）
+    std::chrono::steady_clock::time_point last_debug_encode_{};
 
     /**
      * @brief 图像预处理：BGR 图像转二值图像
