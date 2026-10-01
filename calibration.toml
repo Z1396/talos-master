@@ -9,8 +9,8 @@ mode = "Intrinsic"
 [calibration.profile]
 trigger_mode = false
 invert_image = false
-exposure_time_us = 80000  # 3ms in microseconds
-gain = 2.0
+exposure_time_us = 80000 # 8ms：标定板移动中采集，长曝光会拖影导致角点检测失败
+gain = 4.0             # 亮度不足用增益补（配合F16小光圈）
 rotate_angle = "None"
 
 # =============================================================================
@@ -21,11 +21,12 @@ rotate_angle = "None"
 type = "Chessboard"
 
 # 内角点数量 (棋盘格) 或方格数量 (ChArUco)
+# ⚠️ 棋盘格写【内角点】= 方格数-1：12×9方格 → 11×8内角点
 width = 11
-height = 7
+height = 8
 
 # 方格边长 (米)
-square_size = 0.023
+square_size = 0.03
 
 # =============================================================================
 # ChArUco 专用配置 (仅当 type = "ChArUco" 时生效)
