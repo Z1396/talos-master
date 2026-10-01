@@ -15,11 +15,11 @@ exposure_time_us = 2000 # 曝光时间(微秒)
 gain = 12.0              # 相机增益
 
 [extrinsic.gimbal_yaw.gimbal_pitch]
-translation = [-0.00563, 0, 0.08139] # 云台坐标到相机坐标的平移偏移
+translation = [-0.00563, 0, 0.08139] # 云台pitch坐标到云台yaw坐标的平移偏移
 
-camera_link.translation = [0.05925, 0, 0.04313] # 相机安装位置偏移
+camera_link.translation = [0.05925, 0, 0.04313] # 相机相对于pitch安装位置偏移
 
-muzzle_link.translation = [0.04624, 0.0, 0.0] # 枪口坐标相对偏移
+muzzle_link.translation = [0.04624, 0.0, 0.0] # 枪口坐标相对pitch安装位置的偏移
 muzzle_link.roll = 0.0                        # 枪口横滚角
 
 # 偏高就+n，偏低就-n

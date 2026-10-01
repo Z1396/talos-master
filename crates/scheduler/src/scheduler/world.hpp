@@ -114,6 +114,11 @@ public:
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
         ptr_ = std::make_unique<Model<T>>(std::in_place, std::forward<Args>(args)...);
+        /*`std::unique_ptr::get()`
+        - 返回**托管对象的裸指针**：`Model<T>*`
+        - **不释放所有权！unique_ptr 仍然持有这个对象，析构时依旧会 delete**
+        - 只是把内部保存的指针拿出来给你临时用，**不是转移所有权，不是释放**
+        > 类比：unique_ptr 是一个 “装指针的盒子”；`.get()` 只是把盒子里面指针拿给你看，盒子还拿着管理权。*/
         return static_cast<Model<T>*>(ptr_.get())->value;
     }
 
@@ -226,7 +231,9 @@ struct Resource {
      */
     template <typename... Args>
     explicit Resource(std::in_place_t, Args&&... args) noexcept(
-        /*`std::is_nothrow_constructible_v<T, Args...>` 返回 `true` / `false`
+        /*`std::is_nothrow_constructible_v<T, Args...>`
+        含义：判断用 Args... 类型参数构造 T 对象这件事，
+        是否合法且不会抛出异常（等价于 noexcept(T(std::declval<Args>()...))） 返回 `true` / `false`
         > 模板参数：
         > - 第一个：待构造类型 `T`
         > - 后面一串：构造时传入的参数类型列表*/
@@ -623,7 +630,8 @@ public:
         //    内部一般是：如果U还没注册过，新建对应的存储；已存在则跳过
         ensure_resource_structure_mutable<U>();
 
-        // 4. 核心：异构容器 resources_ 调用成员模板 emplace<U>，完美转发resource
+        // 4. 核心：异构容器 resources_ 调用成员模板 emplace<U>，
+        //    完美转发resource forward只是将左右值类别保持不变而不会改变资源类型U
         //    static_cast<void>(...)：丢弃emplace返回值（不接收引用，仅做存入动作）
         //    ✅ .template 语法重点（你注释里提到的歧义问题）
         //       resources_ 是依赖模板的类，编译器预解析分不清：

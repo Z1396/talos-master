@@ -199,6 +199,18 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
 
     // ========== 步骤2：原地创建fast_tf坐标系全局资源 ==========
     // emplace_resource：直接在ECS堆内存构造对象，无临时拷贝，性能优于insert
+    /*`ResourceStore::emplace<U>(args...)          ← L364：管登记表开格
+    └─ it->second.emplace<Resource<U>>(...)  ← L393：调【UniqueAny::emplace】(L115)
+            └─ ptr_ = make_unique<Model<Resource<U>>>(...)   ← L116：造内胆
+                   └─ value(value(...))             ← L73：真身构造`
+
+    ## 为什么 UniqueAny 要多包一层 Model（虚函数），而不是直接存 T？
+    因为`resources_` 这个 map 的值类型 必须唯一 ：`map<type_index, UniqueAny>` 里每个值都是`UniqueAny` 。
+    如果 UniqueAny 直接内嵌`T value` ，不同 T 的 UniqueAny 就是不同类型，map 装不下。 
+    虚函数擦除 （Concept/Model）就是让“装任意东西的箱子”自己也是同一种类型的标准手段——代价是真身必须上堆（unique_ptr 指向）、访问多一次虚调用/一次 static_cast。
+
+    一句话记忆： resources_ 管查找，UniqueAny 管统一容器，Model 管类型擦除，Resource 管业务协议，value 才是货 。
+    名字是烂了点（Model/Resource 语义太泛），但每层职责是真的各司其职。*/
     auto& coordinate_system = world.emplace_resource<fast_tf::CoordinateSystem>();
 
     // ========== 步骤3：std::visit处理两种硬件variant分支 ==========
@@ -229,7 +241,6 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
                    }},
         // 传入variant变体变量，visit自动分发匹配分支
         config.backend);
-
     /*World
     │
     ├── FoxgloveConfig
@@ -244,7 +255,10 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     // 2. 功能能力掩码：控制各类视觉/跟踪算法启用关闭
     // emplace_resource原地构造CapabilityState全局状态
     static_cast<void>(world.emplace_resource<core::CapabilityState>(
+        /*`std::span` 是连续内存的轻量视图（view），不拥有内存，
+        只保存【起始指针 + 元素数量】，零开销，用来替代裸指针 + 长度成对传参的老旧写法。*/
         std::span<const core::Capability>(config.vision.capabilities.get())));
+
     // 3. 目标跟踪模式状态机：自瞄优先 / 能量机关优先
     static_cast<void>(world.emplace_resource<core::FollowingState>());
     // 4. 装甲检测图像裁剪ROI区域配置存入全局
