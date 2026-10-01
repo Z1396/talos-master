@@ -4,6 +4,7 @@
 // ========== 装甲感知内部依赖头文件 ==========
 // 检测器后端抽象层：统一封装Axera/TensorRT/ONNX三种推理引擎，屏蔽底层差异
 #include "L2_perception/armor/backend.hpp"
+#include "L2_perception/armor/backends/traditional.hpp" // 调试帧take_debug_frame（传统后端专属）
 // 装甲检测、相机、ROI裁剪、跟踪器全套配置结构体定义
 #include "L2_perception/armor/config.hpp"
 // 跟踪器引导ROI裁剪逻辑实现：根据上一帧目标缩小推理区域，降低算力
@@ -152,8 +153,7 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
 [[nodiscard]] bool tracker_snapshot_matches_detection(
     const TrackerReadbackSnapshot& snapshot, const ArmorDetection& detection) noexcept {
     // 三重条件同时满足：快照有效 + 装甲类型一致 + 识别颜色一致
-    return snapshot.valid 
-        && snapshot.tracker.target_name == detection.name
+    return snapshot.valid && snapshot.tracker.target_name == detection.name
         && snapshot.tracker.target_color == detection.color;
 }
 
@@ -198,9 +198,8 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
 
     // 硬编码推导完成雅可比3×3矩阵
     Eigen::Matrix3d J;
-    J << distance * cp * cy, -distance * sp * sy, distance * cp * sy,
-        0.0, distance * cp, distance * sp,
-        -distance * cp * sy, -distance * sp * cy, distance * cp * cy;
+    J << distance * cp * cy, -distance * sp * sy, distance * cp * sy, 0.0, distance * cp,
+        distance * sp, -distance * cp * sy, -distance * sp * cy, distance * cp * cy;
     return J;
 }
 
@@ -212,17 +211,17 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
  */
 [[nodiscard]] Eigen::Matrix3d odom_xyz_to_ypld_jacobian(const Eigen::Vector3d& xyz) noexcept {
     // 拆分XYZ三轴分量
-    const double x     = xyz.x();
-    const double y     = xyz.y();
-    const double z     = xyz.z();
+    const double x = xyz.x();
+    const double y = xyz.y();
+    const double z = xyz.z();
     // XZ平面距离平方
     const double r2_xy = x * x + y * y;
     // 三维欧式距离平方
-    const double r2    = r2_xy + z * z;
+    const double r2 = r2_xy + z * z;
     // XZ平面直线距离
-    const double r_xy  = std::sqrt(r2_xy);
+    const double r_xy = std::sqrt(r2_xy);
     // 三维总距离
-    const double r     = std::sqrt(r2);
+    const double r = std::sqrt(r2);
 
     // 分母极小值保护，防止除零运算崩溃（目标贴相机）
     if (r_xy < 1e-10 || r < 1e-10) {
@@ -239,9 +238,9 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
 
     // 第二行：dpitch/dx, dpitch/dy, dpitch/dz 俯仰对XYZ偏导
     const double denom = r2 * r_xy;
-    J(1, 0) = x * z / denom;
-    J(1, 1) = y * z / denom;
-    J(1, 2) = -r_xy / r2;
+    J(1, 0)            = x * z / denom;
+    J(1, 1)            = y * z / denom;
+    J(1, 2)            = -r_xy / r2;
 
     // 第三行：ddistance/dx, ddistance/dy, dz 距离对XYZ偏导
     J(2, 0) = x / r2;
@@ -279,16 +278,16 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
         odom_xyz_to_ypld_jacobian(odom_measurement.transform.translation());
 
     // 构造4维整体变换雅可比矩阵（前三轴YPD，第四轴roll旋转无变换）
-    Eigen::Matrix4d J   = Eigen::Matrix4d::Zero();
+    Eigen::Matrix4d J = Eigen::Matrix4d::Zero();
     // 3×3坐标变换链式雅可比：J_odom_ypd * 外参旋转矩阵 * J_camera_xyz
     J.block<3, 3>(0, 0) = J_odom_ypd * T_odom_camera.rotation() * J_camera_xyz;
     // 第四维roll旋转无坐标变换，单位1
-    J(3, 3)             = 1.0;
+    J(3, 3) = 1.0;
 
     // 协方差传播计算：J × 相机协方差 × J转置
     Eigen::Matrix4d cov = J * camera_measurement.pnp_cov_ypdr * J.transpose();
     // 强制对称：数值浮点误差会导致矩阵不对称，取均值修正
-    cov                 = 0.5 * (cov + cov.transpose());
+    cov = 0.5 * (cov + cov.transpose());
     // 再次校验矩阵数值合法性
     if (!cov.allFinite()) {
         return Eigen::Matrix4d::Identity() * 1e6;
@@ -336,9 +335,7 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
     const double sp              = std::sin(armor_pitch_rad);
     // 装甲固定俯仰旋转矩阵（仅绕Y轴俯仰）
     Eigen::Matrix3d R_pitch;
-    R_pitch << cp, 0.0, sp,
-        0.0, 1.0, 0.0,
-        -sp, 0.0, cp;
+    R_pitch << cp, 0.0, sp, 0.0, 1.0, 0.0, -sp, 0.0, cp;
 
     // 提取里程计→相机旋转、平移变换
     const Eigen::Matrix3d R_odom_camera = T_odom_camera.rotation();
@@ -357,12 +354,10 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
         const double sy        = std::sin(armor_yaw);
         // 装甲绕Z轴偏航旋转矩阵
         Eigen::Matrix3d R_yaw;
-        R_yaw << cy, -sy, 0.0,
-            sy, cy, 0.0,
-            0.0, 0.0, 1.0;
+        R_yaw << cy, -sy, 0.0, sy, cy, 0.0, 0.0, 0.0, 1.0;
 
         // 步骤1：里程计系装甲总旋转 = 偏航 × 固定俯仰
-        const Eigen::Matrix3d R_odom_armor   = R_yaw * R_pitch;
+        const Eigen::Matrix3d R_odom_armor = R_yaw * R_pitch;
         // 步骤2：转换到相机坐标系下装甲旋转矩阵
         const Eigen::Matrix3d R_camera_armor = R_odom_camera * R_odom_armor;
         // 步骤3：转换到相机坐标系三维平移向量
@@ -371,7 +366,8 @@ std::array<cv::Point2f, 4> sort_corners(const std::array<cv::Point2f, 4>& points
             + t_odom_camera;
 
         // 过滤无效深度：相机Z坐标必须大于0（目标在镜头前方，排除后方镜像）
-        if (!std::isfinite(t_camera_armor.x()) || !std::isfinite(t_camera_armor.y()) || !std::isfinite(t_camera_armor.z()) || t_camera_armor.z() <= 1e-3) {
+        if (!std::isfinite(t_camera_armor.x()) || !std::isfinite(t_camera_armor.y())
+            || !std::isfinite(t_camera_armor.z()) || t_camera_armor.z() <= 1e-3) {
             continue;
         }
 
@@ -545,7 +541,7 @@ struct AspectRatioBounds {
     return bounds.min <= aspect_ratio && aspect_ratio <= bounds.max;
 }
 
-} // 匿名命名空间结束（内部工具函数全部完毕）
+} // namespace
 
 /**
  * @brief 向全局ECS调度器注册装甲感知两大核心System
@@ -575,21 +571,22 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             talos::spmc<ImageFrame, ImageChannelTopic> image_in,
             // 可写SPMC输出通道：装甲检测结果，下发PnP求解系统
             talos::spmc_mut<ArmorDetectionBatch, DetectionChannelTopic> detection_out,
+            // 可写SPMC输出通道：传统检测调试帧（二值化掩码+数字裁剪图，节流约20Hz）
+            talos::spmc_mut<ArmorDebugFrame, ArmorDebugFrameChannelTopic> debug_out,
             // 可变全局资源：推理后端实例（ONNX/TensorRT，需要修改内部状态）
             talos::res_mut<std::shared_ptr<DetectorBackend>> backend,
             // 只读全局资源：TF坐标系管理实例
-            talos::res<fast_tf::CoordinateSystem> tf_system, 
+            talos::res<fast_tf::CoordinateSystem> tf_system,
             // 只读相机内参、畸变配置
             talos::res<CameraConfig> camera_config,
             // ROI裁剪全局配置
             talos::res<ArmorReadbackRoiConfig> readback_roi_config,
             // 上一帧跟踪缓存快照
-            talos::res<TrackerReadbackCache> readback_cache, 
+            talos::res<TrackerReadbackCache> readback_cache,
             // 运行时功能能力掩码（全局只读）
             core::capabilities cap,
             // 当前需要识别敌方颜色（红/蓝）
-            core::detecting_color detecting_color_
-        ) mutable {
+            core::detecting_color detecting_color_) mutable {
             // 读取一帧图像，无新图像直接返回
             auto frame = image_in.read();
             if (!frame) {
@@ -627,17 +624,20 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             // 判断是否开启跟踪引导ROI裁剪功能
             /*作用机制
         - 开启后，在已稳定跟踪目标时，L3 跟踪器输出的目标 3D 位姿会被投影回当前图像，
-            框出目标附近的一小块区域（ROI），L2 检测只在裁剪区域内跑推理，而不是整帧全图，从而省算力、提帧率。
+            框出目标附近的一小块区域（ROI），L2
+        检测只在裁剪区域内跑推理，而不是整帧全图，从而省算力、提帧率。
 
-        - ROI 的生成过程：以`box_size_m = [0.6, 0.6, 0.6]` 米的三维包围盒按目标距离投影到像素 → 
-            按`margin_ratio_x = 0.20` （左右各扩 20%）、`margin_ratio_y = 0` （上下不扩）外扩 → 对齐模型输入宽高比 → 裁到画面边界内。
-            
+        - ROI 的生成过程：以`box_size_m = [0.6, 0.6, 0.6]` 米的三维包围盒按目标距离投影到像素 →
+            按`margin_ratio_x = 0.20` （左右各扩 20%）、`margin_ratio_y = 0` （上下不扩）外扩 →
+        对齐模型输入宽高比 → 裁到画面边界内。
+
         - 目标丢失超过`stale_timeout_s = 0.20` 秒，认为跟踪数据失效，自动切回全图检测重新搜索。*/
             if (readback_roi_config->enabled) {
                 // 加载上一帧跟踪快照
                 const auto snapshot = readback_cache->load();
                 // 跟踪快照时间戳新鲜有效（未超时）
-                if (tracker_snapshot_is_fresh(snapshot, *readback_roi_config, frame->timestamp_ns)) {
+                if (tracker_snapshot_is_fresh(
+                        snapshot, *readback_roi_config, frame->timestamp_ns)) {
                     // 将跟踪三维框投影到图像平面，得到预估ROI区域
                     const auto maybe_roi = resolve_readback_roi(
                         frame->image.size(),
@@ -677,6 +677,17 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             for (auto& detection : detections) {
                 detection.corners = sort_corners(detection.corners);
             }
+
+            // 调试帧透传：仅传统后端产生二值化/数字裁剪调试图（其他后端take返回空）
+            // 注意：ARMOR_DEBUG_FRAME通道为调试专用，正式比赛可注释下行write彻底关闭
+            if (backend->get()->template holds<TraditionalBackend>()) {
+                if (auto dbg =
+                        backend->get()->template get<TraditionalBackend>().take_debug_frame()) {
+                    dbg->timestamp_ns = frame->timestamp_ns;
+                    dbg->frame_id     = frame->frame_id;
+                    debug_out.write(std::move(*dbg));
+                }
+            }
             // 若使用局部ROI，将所有检测坐标偏移还原到原图坐标系
             offset_detections(detections, detector_roi.tl());
             // 过滤检测：只保留目标颜色、长宽比合法装甲
@@ -696,7 +707,8 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                     frame->frame_id, has_detector_roi, detector_roi});
         });
 
-    // ====================== 第二个固定频率System：PnP位姿求解器 200Hz ======================得出装甲板在里程计系的位姿测量结果    
+    // ====================== 第二个固定频率System：PnP位姿求解器 200Hz
+    // ======================得出装甲板在里程计系的位姿测量结果
     scheduler.add_system<talos::fixed_rate<200>>(
         "armor_solver", // 系统标识
         [](
@@ -707,16 +719,15 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             // 可变全局资源：PnP求解器单例
             talos::res<std::shared_ptr<PnPSolver>> solver_ptr,
             // 只读TF坐标系
-            talos::res<fast_tf::CoordinateSystem> tf_system, 
+            talos::res<fast_tf::CoordinateSystem> tf_system,
             // 只读相机内参畸变
             talos::res<CameraConfig> camera_config,
             // ROI配置只读资源
-            talos::res<ArmorReadbackRoiConfig> readback_roi_config, 
+            talos::res<ArmorReadbackRoiConfig> readback_roi_config,
             // 全局功能掩码
             core::capabilities cap,
             // 上一帧跟踪缓存只读资源
-            talos::res<TrackerReadbackCache> readback_cache
-        ) mutable {
+            talos::res<TrackerReadbackCache> readback_cache) mutable {
             // 未开启装甲识别功能，直接退出不执行计算
             if (!core::capable(*cap, core::Capability::Armor)) {
                 return;
@@ -740,11 +751,11 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             }
 
             // 取出正反坐标变换（里程计↔相机）
-            const auto T_odom_camera     = tf_lookup.value();
-            const auto T_camera_odom     = T_odom_camera.inverse();
-            const auto R_odom_camera     = T_odom_camera.rotation();
+            const auto T_odom_camera = tf_lookup.value();
+            const auto T_camera_odom = T_odom_camera.inverse();
+            const auto R_odom_camera = T_odom_camera.rotation();
             // 加载上一帧跟踪快照
-            const auto tracker_snapshot  = readback_cache->load();
+            const auto tracker_snapshot = readback_cache->load();
             // 判断跟踪缓存是否新鲜未超时
             const bool snapshot_is_fresh = tracker_snapshot_is_fresh(
                 tracker_snapshot, *readback_roi_config, detections->timestamp_ns);
@@ -807,7 +818,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             measurement_out.write(
                 ArmorMeasurementBatch{
                     std::move(odom_measurements), detections->timestamp_ns, detections->frame_id});
-        }); 
+        });
 }
 
 // 函数签名说明：
@@ -816,7 +827,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
 //  ❌ 失败：返回 std::unexpected + string 类型错误信息
 // noexcept：本函数**不会抛出C++异常**，适合机器人实时链路，避免异常打乱调度时序
 std::expected<DetectorBackendHandle, std::string>
-create_detector_backend_handle(const ArmorDetectorConfig& config) noexcept {
+    create_detector_backend_handle(const ArmorDetectorConfig& config) noexcept {
     // 调用底层工厂函数，根据配置创建真正的推理后端实例
     // 内部自动根据 config.backend_type 选择：Axera / TensorRT / ONNX Runtime
     auto backend_result = create_detector_backend(config);
@@ -830,7 +841,7 @@ create_detector_backend_handle(const ArmorDetectorConfig& config) noexcept {
 
     // backend_result.value() 是 DetectorBackend 裸实例，用shared_ptr包装
     // 目的：多地方共享同一个推理后端、自动生命周期管理，不用手动delete
-    auto backend_ptr  = std::make_shared<DetectorBackend>(std::move(*backend_result));
+    auto backend_ptr = std::make_shared<DetectorBackend>(std::move(*backend_result));
 
     // magic_enum：编译期反射枚举，把 backend_type 枚举值转成可读字符串（如"Axera" / "TensorRT"）
     // 编译期完成转换，运行时无开销，专门用来打日志、调试Foxglove面板
@@ -851,4 +862,4 @@ std::shared_ptr<PnPSolver> create_pnp_solver(const CameraConfig& config) noexcep
     return std::make_shared<PnPSolver>(config);
 }
 
-} // 顶层L2感知命名空间结束
+} // namespace fcs::L2

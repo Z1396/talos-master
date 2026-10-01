@@ -42,20 +42,15 @@ namespace fcs::visualization::foxglove::systems {
  * @param scheduler_ptr 调度器裸指针，非空时才注册性能统计可视化系统；传入nullptr则跳过性能打点可视化
  */
 void register_debug_systems(talos::scheduler::Scheduler& app, talos::Scheduler* scheduler_ptr) {
-
     // =========================================================================
     // L2 DEBUG: 全局基础资源定时发布系统 1Hz
     // =========================================================================
     /**
-     * talos::fixed_rate_silent<1>：固定1Hz周期任务，silent代表任务超时不会打印告警日志
-     * 作用：定时推送机器人全局静态/基础配置给Foxglove前端
-     * 依赖：Foxglove全局可视化服务、弹道速度、识别颜色、功能开关、跟随模式资源
+     * talos::fixed_rate_silent<1>：1Hz周期任务，silent表示断连不打印超时告警
+     * foxglove_res_pub：低频推送机器人全局配置到Foxglove前端
+     * 数据源：res<>只读全局资源，非消息通道
+     * 发布内容：弹道参数、识别颜色、功能开关、跟随模式等静态/基础状态
      */
-    // =========================================================================
-    // foxglove_res_pub：系统全局资源状态发布，1Hz低频定时推送
-    // 作用：把机器人全局配置/开关状态发给Foxglove，前端面板显示
-    // talos::fixed_rate_silent<1>：1Hz，silent：没有连接时不输出警告日志
-    // 输入全部是 res<> 全局只读资源，不是消息通道
     // =========================================================================
     app.add_system<talos::fixed_rate_silent<1>>(
             "foxglove_res_pub",

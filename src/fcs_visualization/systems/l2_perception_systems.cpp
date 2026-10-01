@@ -15,6 +15,8 @@
 #include "L2_perception/ldm/ldm_geometry.hpp"
 // LDM检测、位姿测量数据结构：LdmDetection、LdmMeasurement结构体定义
 #include "L2_perception/ldm/types.hpp"
+// 传统检测调试帧结构：ArmorDebugFrame（二值化掩码+数字分类裁剪图）
+#include "L2_perception/armor/backends/traditional_types.hpp"
 // 全局消息话题常量，各个spmc通道的Topic标签类型
 #include "core/channel_topics.hpp"
 // 调度器通用基础类型，时间戳、单位别名等基础类型别名
@@ -932,6 +934,45 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             }
 
             detail::publish_json_message<MeasurementMessage>(*server, j);
+        });
+
+    // =========================================================================
+    // 传统检测调试图像发布系统（事件驱动：调试帧到达时触发）
+    // 输入：ArmorDebugFrame（传统后端约20Hz节流产生的二值化掩码+数字分类裁剪图）
+    // 发布：/debug/binary_img（二值掩码）+ /debug/number_img（数字分类裁剪图）
+    // 用途：调binary_threshold/曝光时实时观察灯条分割效果与分类器输入
+    // =========================================================================
+    app.add_system<talos::pool_compute>(
+        "foxglove_l2_debug_images",
+        [](talos::spmc<fcs::L2::ArmorDebugFrame, ArmorDebugFrameChannelTopic> debug_in,
+           talos::res<std::shared_ptr<FoxgloveServer>> server) {
+            // Foxglove未就绪或无新调试帧直接返回
+            if (!detail::foxglove_ready(*server, debug_in)) {
+                return;
+            }
+            auto dbg = debug_in.read();
+            if (!dbg) {
+                return;
+            }
+
+            // 局部lambda：统一JPG消息组装与发布（仿rune_systems的publish模式）
+            auto publish = [&](const std::vector<uint8_t>& bytes, auto builder) {
+                if (bytes.empty()) {
+                    return;
+                }
+                auto msg              = builder();
+                msg.payload.timestamp = timestamp_from_ns(dbg->timestamp_ns);
+                msg.payload.frame_id  = "camera_optical_frame";
+                msg.payload.format    = "jpeg";
+                msg.payload.data      = std::vector<std::byte>(
+                    reinterpret_cast<const std::byte*>(bytes.data()),
+                    reinterpret_cast<const std::byte*>(bytes.data() + bytes.size()));
+                (*server)->enqueue_message(std::move(msg));
+            };
+
+            // 两路调试图：二值化掩码 → /debug/binary_img；数字分类裁剪图 → /debug/number_img
+            publish(dbg->binary_jpeg, [] { return BinaryImageMessage{}; });
+            publish(dbg->number_jpeg, [] { return PatternImageMessage{}; });
         });
 }
 

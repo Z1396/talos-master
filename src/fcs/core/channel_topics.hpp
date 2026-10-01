@@ -34,6 +34,16 @@ struct ImageChannelTopic {}; // L1→L2 图像流
 struct DetectionChannelTopic {}; // L2→L3 检测结果流
 
 /**
+ * @struct ArmorDebugFrameChannelTopic
+ * @brief 传统检测调试帧通道（二值化掩码、数字分类裁剪图）
+ * @流向 传统检测器 → 可视化模块（Foxglove /debug/binary_img、/debug/number_img）
+ * @承载数据 fcs::L2::ArmorDebugFrame 调试帧（JPEG编码的中间图）
+ * @模式 SPMC 单生产者、多消费者
+ * @detail 节流约20Hz：由检测系统take后写入，仅供调试，正式比赛可注释write关闭
+ */
+struct ArmorDebugFrameChannelTopic {}; // L2→可视化 传统检测调试帧流
+
+/**
  * @struct MeasurementChannelTopic
  * @brief 3D位姿测量结果通道标识
  * @流向 PnP位姿解算器 → 目标跟踪器

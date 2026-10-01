@@ -48,9 +48,7 @@ namespace fcs::calibration {
 
 /**
  * @brief 向Talos实时调度器注册全套标定业务系统
- * 模板函数，适配调度器应用类型
  * 注册4套独立实时任务系统：角点检测、内参样本采集、手眼样本采集、Foxglove可视化
- * @tparam App 调度器顶层应用类型（talos::scheduler::Scheduler）
  * @param app 调度器实例
  * @param config 全局标定配置共享指针
  * @param board 标定板检测器多态接口（棋盘格/ChArUco）
@@ -58,9 +56,8 @@ namespace fcs::calibration {
  * @param handeye_calibrator 手眼标定采集/求解器
  * @param intrinsic_result 已求解完成的相机内参结果（用于手眼PnP）
  */
-template <typename App>
-void register_calibration_systems(
-    talos::scheduler::Scheduler& app, std::shared_ptr<CalibrationConfig> config,
+inline void register_calibration_systems(
+    talos::Scheduler& app, std::shared_ptr<CalibrationConfig> config,
     std::shared_ptr<CalibrationBoard> board,
     std::shared_ptr<IntrinsicCalibrator> intrinsic_calibrator,
     std::shared_ptr<HandEyeCalibrator> handeye_calibrator,
