@@ -28,10 +28,10 @@ thirdparty
 build-asan/
 build-tsan/
 build-test/
-camera_intrinsic.toml
+
 .claude
 CRIT.md
-camera_extrinsic.toml
+
 3dparty/foxglove-*.zip
 3dparty/*.zip
 3dparty/*.tgz

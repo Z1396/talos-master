@@ -9,8 +9,8 @@ mode = "Intrinsic"
 [calibration.profile]
 trigger_mode = false
 invert_image = false
-exposure_time_us = 80000 # 8ms：标定板移动中采集，长曝光会拖影导致角点检测失败
-gain = 4.0             # 亮度不足用增益补（配合F16小光圈）
+exposure_time_us = 40000 # 8ms：标定板移动中采集，长曝光会拖影导致角点检测失败
+gain = 2.0             # 亮度不足用增益补（配合F16小光圈）
 rotate_angle = "None"
 
 # =============================================================================

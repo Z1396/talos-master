@@ -1,0 +1,14 @@
+# Camera Intrinsic Calibration Result
+# RMS Error: 0.196189 pixels
+# Samples: 31
+
+# Date: 2026-10-01 15:32:40
+[camera]
+camera_matrix = [2451.41, 0, 799.83, 0, 2455.74, 566.662, 0, 0, 1]
+distort_coefficient = [-0.022426, 0.23621, 0.00142727, 0.00490628, -0.343924]
+width = 1440
+height = 1080
+
+[calibration_info]
+rms_error = 0.196189
+num_samples = 31

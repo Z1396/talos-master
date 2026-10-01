@@ -956,6 +956,9 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             }
 
             // 局部lambda：统一JPG消息组装与发布（仿rune_systems的publish模式）
+            /*`auto builder` 是 C++14 泛型 lambda ：等价于模板参数。为什么必须 auto？—— 每个 lambda 表达式的类型都是编译器独一无二生成的 
+            （`[]{return BinaryImageMessage{};}` 和`[]{return PatternImageMessage{};}` 是两个完全不同的类型），
+            你无法写出它的具体类型名，只能让编译器推导。每次调用`publish` 都会实例化出一个对应版本的 lambda。*/
             auto publish = [&](const std::vector<uint8_t>& bytes, auto builder) {
                 if (bytes.empty()) {
                     return;
@@ -965,6 +968,11 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 msg.payload.frame_id  = "camera_optical_frame";
                 msg.payload.format    = "jpeg";
                 msg.payload.data      = std::vector<std::byte>(
+                    /*作用：强制类型转换，把 bytes.data() 返回的指针，转为 const std::byte*（字节常量指针）
+                    bytes.data()：一般是 std::vector<T> / std::string 等容器，返回指向底层存储的原生指针
+                    std::byte：C++17 引入，专门表示原始字节，不做算术运算，适合二进制数据
+                    reinterpret_cast：底层二进制层面强制转指针类型，不做任何类型安全检查，仅改变指针解释方式
+                    ⚠️ 注意：reinterpret_cast 风险高，仅用于底层二进制数据操作。*/
                     reinterpret_cast<const std::byte*>(bytes.data()),
                     reinterpret_cast<const std::byte*>(bytes.data() + bytes.size()));
                 (*server)->enqueue_message(std::move(msg));
