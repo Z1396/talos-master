@@ -65,7 +65,7 @@ void register_foxglove_systems(
     // L1 底层传感器可视化：相机、IMU、雷达、编码器等原始传感器数据发布 image
     register_l1_sensor_systems(scheduler);
 
-    // L2 感知层可视化：目标检测、分割、特征点、图像处理结果    Raw Message   3D  3D    Raw Message     Raw Message
+    // L2 感知层可视化：目标检测、分割、特征点、图像处理结果    Raw Message   3D  3D    Raw Message     Raw Message     image
     register_l2_perception_systems(scheduler);
 
     // L3 状态估计层可视化：位姿、里程计、滤波结果、融合定位    3D    3D    3D    Image     Raw Message
