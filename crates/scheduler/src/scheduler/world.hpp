@@ -113,6 +113,12 @@ public:
      */
     template <typename T, typename... Args>
     T& emplace(Args&&... args) {
+        /*│          │ make_unique 做两件事：
+        │            │  a. 堆上分配一块 Model<Resource<U>> 大小的内存
+        │            │     —— 这块内存属于 ptr_ → 属于 UniqueAny → 属于 map 条目
+        │            │        → 属于 resources_ → 属于 World
+        │            │     —— 这就是"容器内的最终地址"
+        │            │  b. 在这块内存上调用 Model 的构造函数 ↓*/
         ptr_ = std::make_unique<Model<T>>(std::in_place, std::forward<Args>(args)...);
         /*`std::unique_ptr::get()`
         - 返回**托管对象的裸指针**：`Model<T>*`
@@ -397,8 +403,12 @@ public:
         // auto&绑定左值引用，避免拷贝，直接访问容器内对象
         auto& storage =
             it->second.template emplace<Resource<U>>(std::in_place, std::forward<Args>(args)...);
+        //  storage 的类型: Resource<U>&      （壳的引用）
+        //  storage 是左值（有名字）
 
         return storage.value;
+        //  storage.value 的类型: U&          （壳的成员 value，非静态成员通过左值访问 → 引用）
+        //  storage.value 的值类别: 左值       （成员访问表达式，有"位置"）
     }
 
     /**
@@ -441,6 +451,7 @@ public:
     [[nodiscard]] const T& get() const noexcept {
         auto* storage = get_storage<T>();
         if (!storage) [[unlikely]] {
+            // storage->value 是 Resource<T> 包装器的 value 成员，即 T 类型的资源本体
             panic("Resource not found: {}", talos::scheduler::detail::demangle(typeid(T).name()));
         }
         return storage->value;

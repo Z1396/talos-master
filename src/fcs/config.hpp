@@ -157,8 +157,8 @@ struct McuConfig {
     std::string serial_device{"/dev/ttyS4"};  // Linux 串口设备路径
     int serial_baud_rate{115200};              // 串口波特率
 
-    bool mcu_authoritative_self_color{true};  // true：由下位机判定己方颜色
-    bool mcu_authoritative_bullet_speed{true};// true：由下位机决定实际弹丸速度
+    bool mcu_authoritative_self_color{false};  // true：由下位机判定己方颜色
+    bool mcu_authoritative_bullet_speed{false};// true：由下位机决定实际弹丸速度
 
     double bullet_speed_default{22.0};        // 默认弹速
     double bullet_speed_min{25.0};            // 弹速上限

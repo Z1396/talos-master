@@ -183,6 +183,8 @@ struct basic_resource {
     static constexpr auto kind = Kind;
 
     // 指针类型：根据是否可写，自动选择 T* 或 const T*
+    //std::conditional_t<IsMutable, T*, const T*>：根据 IsMutable 是否为 true，选择 T* 或 const T*
+    // 例如：IsMutable 为 true 时，PtrType 为 T*，IsMutable 为 false 时，PtrType 为 const T*
     using PtrType = std::conditional_t<IsMutable, T*, const T*>;
 
     PtrType ptr_ = nullptr;

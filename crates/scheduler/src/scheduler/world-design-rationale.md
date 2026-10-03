@@ -128,6 +128,111 @@ get_storage<CameraConfig>()
 本质：insert 的签名收 `T&&`（已存在的对象引用），容器必然要产生独立副本，"搬一次"结构上不可避免；
 emplace 收的是"还不是对象"的构造实参，才有可能让构造直接发生在容器内存上。
 
+### 3.5 构造转发链逐行追踪（emplace"只构造一次"的代码体现）
+
+"在容器内构造"不是某一行魔法，而是一条**构造函数转发链**，最终出生动作发生在链尾的成员初始化列表上。
+以 `emplace_resource<CameraConfig>(1920, 1080)` 为例，每步标真实行号：
+
+```
+emplace_resource<CameraConfig>(1920, 1080)
+│
+├─ L666  return resources_.template emplace<U>(std::forward<Args>(args)...);
+│        实参 {1920, 1080} 原样下传（此刻它们只是数字，还不是对象）
+│
+├─ L368  auto [it, inserted] = resources_.try_emplace(typeid(U));
+│        开格 → it->second 是一个 UniqueAny（还没装东西）
+│
+├─ L399  it->second.template emplace<Resource<U>>(std::in_place, 1920, 1080);
+│        │
+│        ▼ 进入 UniqueAny::emplace（L115-123）
+│  L116      ptr_ = std::make_unique<Model<Resource<U>>>(
+│                  std::in_place, std::forward<Args>(args)...);
+│            │  make_unique 做两件事：
+│            │  a. 堆上分配一块 Model<Resource<U>> 大小的内存
+│            │     —— 这块内存属于 ptr_ → UniqueAny → map 条目 → resources_ → World
+│            │        这就是"容器内的最终地址"
+│            │  b. 在这块内存上调用 Model 的构造函数 ↓
+│            ▼
+│  L73       : value(std::forward<Args>(args)...) {}
+│            │   Model 的成员初始化列表：把 {1920, 1080} 转发给成员 value
+│            │   （value 的类型是 Resource<CameraConfig>）
+│            ▼
+│  L241      : value(std::forward<Args>(args)...) {}
+│            │   Resource 的成员初始化列表：继续转发给内部 value
+│            │   （value 的类型是 CameraConfig）
+│            ▼
+│  💥 CameraConfig 的构造函数在这里执行！
+│     它的 this 指针 = &model->value.value = 容器堆内存内的地址
+│     1920、1080 直接初始化成员 —— 对象在这一刻、这个位置出生
+│     ★ 全程只有这一次构造，没有任何"中间对象"
+│
+└─ L390  return std::get<I>(system); → storage.value → 真身引用
+```
+
+### 3.6 最后一跳的实参形态决定匹配哪个构造函数
+
+转发链（L116 → L73 → L241）两条路**完全相同**——它只是管道。
+差别是进管道的东西：**emplace 进去的是原材料，insert 进去的是成品引用**。
+
+```cpp
+emplace 路径：  value(1920, 1080)         → 匹配 CameraConfig(int, double)         直接构造  ← 出生 1 次
+insert 路径：   value(std::move(server))  → 匹配 CameraConfig(CameraConfig&&)      移动构造  ← 出生 2 次
+insert 路径：   value(server)             → 匹配 CameraConfig(const CameraConfig&) 拷贝构造  ← 出生 2 次
+```
+
+insert 为什么躲不掉第 2 次：
+
+1. **原件的位置容器管不着**——`server` 活在调用方的栈帧上，栈帧返回就没了，容器不能"接管"一个即将消失的存储位置
+2. **容器必须独立拥有**——资源池保证"资源活得和 World 一样长"，所以容器里必须有自己的一份
+
+注意：移动了仍算第 2 次构造——移动构造只抢指针不搬数据（便宜），但仍是构造调用：容器内副本逐成员初始化、原件逐成员置空。**次数仍是 2，只是第 2 次的成本从"深拷贝"降到"抢指针"**。
+
+### 3.7 返回值类别：`T&` = 左值（"给你看位置，不给你搬走东西"）
+
+函数返回类型决定值类别：
+
+| 声明 | 返回表达式是 | 语义 |
+|---|---|---|
+| `T f()` | 纯右值（prvalue） | 交付一份新东西，可随便 move |
+| `T& f()` | **左值（lvalue）** | 交付"某处的引用"——借用语义 |
+| `T&& f()` | 将亡值（xvalue） | 交付所有权，鼓励 move 走 |
+
+`emplace` 声明返回 `T&`，`return storage.value;`（storage 是 `Resource<U>&` 左值，`.value` 成员访问 → 左值）——**永远返回左值**。
+这与"容器长期持有、调用方只是借用"的语义配套：若声明 `T&&`，语义变成"交付所有权"，与资源池设计冲突。
+
+调用方的坑：
+
+```cpp
+auto  x = world.emplace_resource<BigConfig>(...);   // ⚠️ auto 按 T 推导 → 拷贝一份副本！
+auto& x = world.emplace_resource<BigConfig>(...);   // ✅ auto& 才是"容器的别名"
+```
+
+值类别速记：
+
+```
+有名字的东西          → 左值（变量、函数参数）
+函数返回 T&           → 左值   ← 本函数
+函数返回 T            → 纯右值
+函数返回 T&&          → 将亡值
+std::move(x)          → 将亡值
+字面量 5、"abc"       → 纯右值
+```
+
+### 3.8 Resource 的两个转发构造（L227-248）
+
+```cpp
+template <typename... Args>
+explicit Resource(std::in_place_t, Args&&... args);   // 原位构造（in_place 暗号开路）
+    : value(std::forward<Args>(args)...) {}           // L241
+
+template <typename U>
+explicit Resource(U&& val);                           // 转发构造（接收现成对象）
+    : value(std::forward<U>(val)) {}                  // L248
+```
+
+两条构造最终都落在**成员初始化列表转发**上。in_place 版本服务 emplace 路径（参数是原料），
+`U&&` 转发版本服务 insert 路径（参数是现成对象的引用，U 按引用折叠推导出拷贝/移动构造）。
+
 ## 四、map 被选中的理由（数据结构层的贡献）
 
 1. **O(1) 按类型查**：`res<T>` 每帧都在查，hot path

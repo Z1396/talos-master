@@ -248,7 +248,6 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     ├── CoordinateSystem
     │
     └── bullet_speed_data*/
-
     // ========== 步骤4：注入视觉层全局静态配置资源 ==========
     // 1. 敌方识别颜色（红/蓝队伍）存入全局资源
     world.insert_resource(config.vision.detect_color);
@@ -318,6 +317,7 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     world.insert_resource(std::move(backend_handle_result->backend));
     // 根据相机内参创建PnP三维位姿解算器，存入全局资源   //1. 调用 .value()
     // 拿到整个结构体（这里会发生一次拷贝）
+    //setup_result.value().camera_config：相机内参配置
     world.insert_resource(L2::create_pnp_solver(setup_result.value().camera_config));
 
     // ===================== 步骤7：注册弹道解算全局资源 =====================
@@ -343,6 +343,10 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     SPDLOG_INFO(
         "bullet initial speed = {:.3f} m/s",
         world.get_res<core::trajectory::bullet_speed_data>()->bullet_speed);
+
+/*---------------------------------------------------------------------------------------------------------------------------*/
+/*-----------------------------------          开始注册systems                 -----------------------------------------------*/
+/*---------------------------------------------------------------------------------------------------------------------------*/
 
     // ===================== 步骤8：自上而下分层注册全部ECS业务系统 =====================
     // L2感知层：装甲检测、LDM大符、Rune旋转能量机关图像任务
