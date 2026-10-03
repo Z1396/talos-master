@@ -554,6 +554,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
     // 获取调度器内置ECS全局资源容器World
     auto& world = scheduler.world();
     // 全局ROI裁剪配置资源不存在则原地构造
+    //has_resource：判断指定类型资源是否存在内部运行：`std::unordered_map::contains`C++20 新增方法，**判断 key 是否存在，只返回 bool，不拿迭代器，不做取值**
     if (!world.has_resource<ArmorReadbackRoiConfig>()) {
         world.insert_resource(ArmorReadbackRoiConfig{});
     }

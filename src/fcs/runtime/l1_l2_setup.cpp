@@ -596,7 +596,6 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
 
     // 在ECS全局资源里预先插入IMU状态存储，给后面IMU读取系统写入姿态数据
     world.insert_resource(core::ImuState{});
-
     // ===================== Variant分发：根据硬件配置类型自动选择初始化分支 =====================
     // std::visit：访问variant（HardwareBackendConfig是std::variant<DaedalusConfig,DirectConfig>）
     // overloaded{}：语法糖，批量放多个lambda，自动匹配variant当前类型
@@ -741,7 +740,6 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 return {}; // Direct硬件初始化成功
             }},
         cfg); // std::visit传入variant变量cfg
-
     // ==============================================
     // 上面硬件分支初始化失败 → 直接向上返回错误字符串
     if (!result) {
@@ -812,9 +810,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
             cam_out.write(fcs::ImageFrame{std::move(img), frame->timestamp_ns, seq});
         });
 
+
+
     // 把武器输出接口存入Scheduler内的ECS资源，给weapon_output系统读取
     scheduler.world().insert_resource(std::move(output));
-
     // ===================== IMU就绪：注册250Hz武器发射指令下发系统 =====================
     if (imu_ready) {
         scheduler.add_system<talos::fixed_rate<250, 1>>(
@@ -834,6 +833,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 (*output)->send(*cmd);
             });
     }
+
 
     // 全部初始化成功，返回结果结构体（携带相机标定信息）
     return L1L2SetupResult{.camera_config = cam_info};

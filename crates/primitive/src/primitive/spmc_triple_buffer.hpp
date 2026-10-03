@@ -226,7 +226,7 @@ public:
 
             // 获取独占写锁，阻塞等待读者全部退出
             state_->lock.write_lock();
-            // 更新全局最新数据
+            // 更新全局最新数据暴露该类型的智能指针，多线程共享
             state_->current = std::move(ptr);
             // 版本号自增，release序保证读者能看到新数据
             state_->generation.fetch_add(1, std::memory_order_release);
