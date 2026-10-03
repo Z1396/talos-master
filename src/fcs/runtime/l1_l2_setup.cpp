@@ -443,14 +443,16 @@ struct McuImu {
     const talos_gimbal::ReceiveCapabilitiesData* capabilities_data = nullptr;
 
     void system(
-        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
-        core::trajectory::bullet_speed_mut bullet_speed, core::detecting_color_mut detecting_color,
-        core::capabilities_mut capabilities, core::following_mut following,
-        core::imu_state_mut imu_state,
-        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
-        [[maybe_unused]] talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic>
-            gt_out) noexcept {
-        // 处理串口接收事件，底层填充g_imu_data/g_capabilities_data
+        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,  // 可写资源句柄：fast_tf坐标系变换缓存，存各坐标系之间位姿，用于坐标转换
+        core::trajectory::bullet_speed_mut bullet_speed,      // 可写资源句柄：弹丸速度，弹道解算使用
+        core::detecting_color_mut detecting_color,            // 可写资源句柄：目标识别颜色，区分敌方红蓝装甲
+        core::capabilities_mut capabilities,                  // 可写资源句柄：系统能力集合，标记当前机器人开启/可用功能
+        core::following_mut following,                        // 可写资源句柄：云台跟随模式状态，控制跟踪逻辑
+        core::imu_state_mut imu_state,                        // 可写资源句柄：IMU姿态数据，陀螺仪、加速度计解算姿态
+        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out, // SPMC可写通道：输出控制状态快照，下发控制消息
+        [[maybe_unused]] talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept // SPMC可写通道：输出真值批量数据，Foxglove可视化；[[maybe_unused]]消除未使用参数告警；noexcept 函数不抛异常
+        {
+        // 处理串口接收事件，底层填充g_imu_data/g_capabilities_data处理断线重连
         device->handle_events();
         // 存在能力包则更新全局设备能力
         if (capabilities_data != nullptr) {
@@ -462,6 +464,7 @@ struct McuImu {
             return;
         }
         const uint64_t timestamp_ns = fcs::clock::now_ns();
+
         // 更新Yaw、Pitch旋转TF
         fast_tf::update_rotate_only<fast_tf::gimbal_yaw_fuxk_frame>(
             *tf_buffer, math_fuxk::rpy<double>(imu_data->data.roll, 0.0, imu_data->data.yaw),
@@ -689,8 +692,8 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                                 return std::unexpected(device_result.error());
                             }
                             // 转移构造MCU共享句柄
+                            /*`.value()` 是 `std::expected` 的成员方法 ——`device_result` 的类型就是它，一路追下来：*/
                             mcu_device = std::make_shared<McuHandle>(std::move(device_result).value());
-                            std::make_shared<McuHandle>(std::move(device_result).value());
                             // USB模式启用能力包解析，挂载capabilities缓冲区
                             talos_gimbal::Stm32Parser::latest_capabilities = &g_capabilities_data;
                         }
@@ -765,7 +768,8 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 // spmc_mut：SPMC通道可变写入端 → 输出控制快照、真值数据（给Foxglove可视化/上层）
                 talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
                 talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) {
-                // 调用IMU抽象层system函数：读取IMU、更新TF、写通道
+                // 调用IMU抽象层system函数：读取IMU、更新TF、写通道, 并更新能力
+                // 注意：能力缓冲区在Chiral模式下为nullptr，不会更新能力
                 imu->system(
                     tf_buffer, bullet_speed, detecting_color, capabilities, following, imu_state,
                     control_out, gt_out);

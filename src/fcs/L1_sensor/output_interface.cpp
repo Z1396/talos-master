@@ -141,17 +141,20 @@ void McuOutput::send(const L5::WeaponCommand& cmd) const noexcept {
                          },
             .data =
                 {
-                         .fire_advice  = cmd.fire, // 开火使能
-                         .target_yaw   = static_cast<float>(cmd.yaw * kRadToDeg),
-                         .target_pitch = -static_cast<float>(cmd.pitch * kRadToDeg),
-                         .ref_yaw_v    = static_cast<float>(cmd.yaw_vel * kRadToDeg), // 偏航角速度
-                         .ref_pitch_v  = -static_cast<float>(cmd.pitch_vel * kRadToDeg), // 俯仰角速度
-                         .ref_yaw_a    = static_cast<float>(cmd.yaw_accel * kRadToDeg), // 偏航角加速度
-                         .ref_pitch_a  = -static_cast<float>(cmd.pitch_accel * kRadToDeg), // 俯仰角加速度
-                         .distance     = static_cast<float>(cmd.distance), // 目标距离
+                         .fire_advice  = cmd.fire, // 开火使能标志
+                         .target_yaw   = static_cast<float>(cmd.yaw * kRadToDeg),//度（°）
+                         .target_pitch = -static_cast<float>(cmd.pitch * kRadToDeg),    //度（°）
+                         .ref_yaw_v    = static_cast<float>(cmd.yaw_vel * kRadToDeg), // 偏航角速度（°/s）
+                         .ref_pitch_v  = -static_cast<float>(cmd.pitch_vel * kRadToDeg), // 俯仰角速度（°/s）
+                         .ref_yaw_a    = static_cast<float>(cmd.yaw_accel * kRadToDeg), // 偏航角加速度（°/s^2）
+                         .ref_pitch_a  = -static_cast<float>(cmd.pitch_accel * kRadToDeg), // 俯仰角加速度（°/s^2）
+                         .distance     = static_cast<float>(cmd.distance), // 目标距离（m）
                          },
             .eof = talos_gimbal::HeaderFrame::EoF(),
         };
+        /*&packet：取 packet 对象的内存起始地址
+        reinterpret_cast<目标类型*>(源地址)：C++ 强制类型转换，用于底层地址类型重映射
+        const uint8_t *：指向只读字节的指针，一般用来把对象内存看成原始二进制流*/
         if (auto result = device_->send_sync(reinterpret_cast<const uint8_t*>(&packet), sizeof(packet)); !result) {
             SPDLOG_WARN("send vision data: {}", result.error());
         }

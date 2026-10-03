@@ -274,6 +274,7 @@ struct Stm32Impl {
                     "send_sync(vendor_id={:#06x}, product_id={:#06x}): device not connected", vid_,
                     pid_));
         }
+        // 实际写入字节数
         int actual    = 0;
         // 同步批量输出传输
         const auto rc = libusb_bulk_transfer(
