@@ -265,6 +265,11 @@ using CameraArmorMeasurement = ArmorMeasurementT<fast_tf::camera_optical>;
  */
 template <fast_tf::frame Frame>
 struct ArmorMeasurementBatchT {
+    /*从当前Frame坐标系下到armor_frame坐标系下的
+    std::vector<ArmorMeasurementT<Frame>> measurements:(旋转矩阵+平移向量+装甲类型+置信度+距离到图像中心
+                                                        +PnP位姿协方差矩阵+PnP雅可比矩阵条件数+帧纳秒时间戳)
+    uint64_t timestamp_ns = 0;                          // 帧纳秒时间戳
+    uint64_t frame_id     = 0;                          // 帧编号           */
     std::vector<ArmorMeasurementT<Frame>> measurements; // 多块装甲测量结果列表
     uint64_t timestamp_ns = 0;                          // 帧纳秒时间戳
     uint64_t frame_id     = 0;                          // 帧编号

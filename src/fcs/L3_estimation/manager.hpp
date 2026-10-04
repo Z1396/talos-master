@@ -168,13 +168,14 @@ public:
         // ----------------------------------------------------------------------
         // 步骤1：按(name, color)对测量数据进行分组
         // ----------------------------------------------------------------------
-        // 使用哈希表分组，避免多次遍历
+        // 使用自定义哈希函数的std::unordered_map<core::TargetKey, ArmorMeasurementBatch, core::TargetKeyHash> grouped;
+        //                  ↑Key          ↑Value类型            ↑自定义哈希函数
+        /* 按(name, color)分组，每个tracker处理一个目标 */
         std::unordered_map<core::TargetKey, ArmorMeasurementBatch, core::TargetKeyHash> grouped;
         for (const auto& meas : measurements.measurements) {
             const core::TargetKey key{meas.name, meas.color};
             grouped[key].measurements.push_back(meas);
         }
-
         // 为每个分组设置时间戳和帧ID（从原始batch继承）
         for (auto& [key, batch] : grouped) {
             batch.timestamp_ns = measurements.timestamp_ns;
@@ -190,6 +191,7 @@ public:
             // 计算时间间隔dt（纳秒转秒）
             double dt = 0.0;
             if (measurements.timestamp_ns > last_ts && last_ts != 0) {
+                //`timestamp_ns` 单位是**纳秒 (ns)**，`1s = 1e9 ns`，除以 `1e9`，就是把**纳秒 → 秒
                 dt = static_cast<double>(measurements.timestamp_ns - last_ts) / 1e9;
             }
             last_ts = measurements.timestamp_ns;
@@ -201,11 +203,14 @@ public:
             }
 
             // 更新阶段（测量更新或丢失处理）
+            /*- 在哈希表里**查找 key**-     返回**迭代器**
+            - ✅ 找到：返回指向 `pair<core::TargetKey, ArmorMeasurementBatch>` 的迭代器
+            - ❌ 没找到：返回 `grouped.end()`（**尾后迭代器，不是有效元素**）*/
             auto it = grouped.find(key);
             if (it != grouped.end()) {
                 // 情况A：有测量数据
                 if (tracker->status() == TrackerStatus::Idle) {
-                    // Idle状态首次观测到目标
+                    // Idle状态首次观测到目标it->second == ArmorMeasurementBatch()
                     (void)tracker->first_meet(it->second);
                 } else {
                     // 已有跟踪目标，执行测量更新

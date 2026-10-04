@@ -377,7 +377,7 @@ public:
             return d;
         }
 
-        // 走到这里代表跟踪普通机器人，机器人滤波器不存在直接返回
+        // 走到这里没有跟踪普通机器人，机器人滤波器不存在直接返回
         if (!robot_target_.has_value()) {
             return false;
         }
@@ -426,7 +426,7 @@ public:
 
         // 取出选中的装甲观测
         const auto& target     = measurements.measurements[static_cast<size_t>(min_idx)];
-        const auto& pos        = target.transform.translation(); // 装甲三维世界坐标
+        const auto& pos        = target.transform.translation(); // 装甲三维世界坐标的平移部分
         const double armor_yaw = target.yaw();                   // 装甲yaw角度
 
         // 填充跟踪器全局信息
@@ -496,9 +496,10 @@ public:
             // 机器人EKF状态向量：x, vx, y, vy, z, vz, yaw, vyaw, log(r0), log(r1), h
             RobotEkfMotionModel::VecX xp0;
             auto v0 = 0.0;
-            xp0 << x0, v0, y0, v0, z0, v0, armor_yaw, v0, std::log(r0_prior), std::log(r1_prior),
-                h_prior;
+            //`<<` 不是位移运算符！是 Eigen 重载的**流插入运算符**，用来按顺序填充向量元素。（用log域半径，因为半径是0-1之间的小数，直接用会丢失精度数学上的便利性）
+            xp0 << x0, v0, y0, v0, z0, v0, armor_yaw, v0, std::log(r0_prior), std::log(r1_prior), h_prior;
 
+            // 初始状态协方差矩阵P0，单位矩阵打底，再修改对角线方差
             RobotEkfMotionModel::MatXX P0 = RobotEkfMotionModel::MatXX::Identity();
 
             P0(XC, XC) = 1;     // 位置初始不确定性
@@ -783,48 +784,70 @@ private:
         // ========== 遍历全部观测 × 全部装甲ID，生成候选 ==========
         std::vector<MatchCandidate<TargetInfo>> candidates;
         candidates.reserve(obs_indices.size() * static_cast<size_t>(armors_num));
-
+        // ========== 候选生成：对每个观测 × 每个装甲ID，生成一个匹配候选 ==========
         for (const size_t obs_index : obs_indices) {
             const auto& meas = measurements.measurements[obs_index];
 
-            // 将装甲检测结果转为EKF观测空间z_raw
+            // 将装甲检测结果（位置、yaw等）转换为EKF观测空间向量 z_raw
+            // z_raw = [yaw, pitch, log(distance), armor_yaw]^T
             const VecZ z_raw    = measurement_to_z_(meas);
-            // 获取模型自带测量噪声R
+
+            // 获取运动模型原生的测量噪声协方差 R_model
+            // 模型会根据观测值（如距离远近）动态调整R，距离远则R更大
             const MatZZ R_model = target.model().R(z_raw);
+
+            // R_update 初始化为模型原生R；后续可能叠加PnP协方差
             MatZZ R_update      = R_model;
 
-            // 前哨站：融合PnP输出的位姿协方差叠加到R；PnP求解越不准，R越大，滤波越不信任该观测
+            // 前哨站特殊处理：将PnP求解输出的位姿协方差叠加到R
+            // PnP求解越不准（协方差越大），R_update越大，滤波器越不信任该观测
+            // 机器人目标不走此分支，直接使用模型原生R
             if (target_name_ == ArmorName::Outpost) {
                 R_update = pnp_augmented_measurement_R_<TargetInfo>(R_model, meas.pnp_cov_ypdr);
             }
 
-            // 遍历机体所有装甲逻辑ID，尝试把当前观测匹配到该ID
+            // 遍历机体上所有装甲逻辑ID（机器人0-3，前哨站0-2）
+            // 尝试将当前观测匹配到每一个装甲ID，生成候选
             for (int id = 0; id < armors_num; ++id) {
-                // h(x,id): 根据滤波器状态预测该装甲id对应的观测z_pred
+                // h(x, id)：根据当前EKF滤波状态x + 装甲ID，预测该装甲ID对应的观测值 z_pred
+                // 这是观测模型，将状态空间映射到观测空间
                 const VecZ z_pred = target.model().h(target.x(), id);
-                // 预测观测无效(装甲背面不可见)，跳过该ID
+
+                // 预测观测无效（装甲背对相机不可见），跳过该ID
+                // 避免生成物理上不可能的匹配候选
                 if (!armor_measurement_visible_from_origin(z_pred)) {
                     continue;
                 }
 
-                // 计算新息nu（角度做最短角度环绕）
+                // 计算新息 nu = z_pred - z_raw（预测观测与真实观测的差值）
+                // 角度分量做最短环绕处理（如350°与10°的差应为-20°而非340°）
                 const VecZ nu   = innovation_(z_pred, z_raw);
-                // 马氏距离d2
+
+                // 计算马氏距离 d2 = nu^T * R_model^{-1} * nu
+                // 注意：这里用R_model而非R_update，保证所有候选在同一标准下比较
+                // 马氏距离越小，该观测与该装甲ID的匹配越可信
                 const double d2 = mahalanobis_(nu, R_model);
-                // 无穷大或者超过门限matcher_gate_，直接丢弃该候选
+
+                // 门限过滤：d2无穷大（LDLT分解失败）或超过matcher_gate_，直接丢弃
+                // 这是一级粗筛，快速排除明显不匹配的组合
                 if (!std::isfinite(d2) || d2 >= matcher_gate_) {
                     continue;
                 }
 
                 // 总代价 = 观测马氏距离 + ID先验代价
+                // prior_cost_for_id基于上帧装甲ID和角速度预测本帧最可能的装甲ID
+                // 先验代价让搜索更有方向性，但不绝对约束
                 const double cost = d2 + prior_cost_for_id(id);
 
+                // 构造匹配候选结构体，保存完整信息
                 MatchCandidate<TargetInfo> candidate;
-                candidate.obs_index = obs_index;
-                candidate.armor_id  = id;
-                candidate.cost      = cost;
-                // 角度解环绕，生成真正送入EKF更新的观测向量
+                candidate.obs_index = obs_index;         // 观测在检测数组中的下标
+                candidate.armor_id  = id;                // 匹配的装甲逻辑ID
+                candidate.cost      = cost;              // 总代价（用于排序选优）
+                // 对观测角度做解环绕，根据预测值unwrap原始观测角度，避免±π跳变
+                // 保证送入EKF更新的观测向量连续平滑
                 candidate.z_update  = wrap_measurement_(z_pred, z_raw);
+                // 本次更新使用的R矩阵（前哨站已融合PnP协方差）
                 candidate.R_update  = R_update;
                 candidates.push_back(candidate);
             }

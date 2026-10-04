@@ -593,7 +593,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             if (!frame) {
                 return;
             }
-            // 全局能力标记未开启装甲识别，输出空检测包直接返回
+            // 未开启全局能力标记装甲识别，输出空检测包直接返回
             if (!core::capable(*cap, core::Capability::Armor)) {
                 detection_out.write(
                     ArmorDetectionBatch({}, frame->image, frame->timestamp_ns, frame->frame_id));
@@ -772,7 +772,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             measurements.reserve(detections->detections.size());
             // 遍历每一个合法装甲检测，执行PnP+BA优化
             for (const auto& detection : detections->detections) {
-                // 根据跟踪缓存是否有效生成多组先验位姿
+                // 根据跟踪缓存是否有效生成多组先验位姿得到的是struct PosePrior 结构体的向量包含先验旋转向量，平移向量，先验代价权重，目标id
                 const auto priors = snapshot_is_fresh
                                       ? make_pose_priors(
                                             detection, tracker_snapshot, T_camera_odom,

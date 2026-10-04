@@ -67,6 +67,11 @@ void register_tracker_systems(talos::Scheduler& scheduler, TrackerConfig&& confi
         "armor_tracker",
         // Lambda捕获：延迟构造的TrackerManager unique_ptr
         [manager = std::unique_ptr<TrackerManager>{}](
+            /*从当前Frame坐标系下到armor_frame坐标系下的
+            std::vector<ArmorMeasurementT<Frame>> measurements:(旋转矩阵+平移向量+装甲类型+置信度+距离到图像中心
+                                                                +PnP位姿协方差矩阵+PnP雅可比矩阵条件数+帧纳秒时间戳)
+            uint64_t timestamp_ns = 0;                         // 帧纳秒时间戳
+            uint64_t frame_id     = 0;                          // 帧编号           */
             talos::spmc<ArmorMeasurementBatch, MeasurementChannelTopic> meas_in,                     ///< 输入：装甲板测量批量（SPMC只读）
             talos::spmc_mut<TrackerOutputs, TrackerOutputChannelTopic> tracker_out,                 ///< 输出：tracker结果批量（SPMC只写）
             talos::res<TrackerConfig> config ///< 配置资源（只读，版本追踪）
@@ -76,7 +81,6 @@ void register_tracker_systems(talos::Scheduler& scheduler, TrackerConfig&& confi
             if (!manager) {
                 manager = std::make_unique<TrackerManager>(*config);
             }
-
             // 从输入通道读取测量数据批量
             // 如果无数据（通道为空或上游未生产），直接返回
             auto batch = meas_in.read();
