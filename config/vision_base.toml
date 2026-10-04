@@ -281,7 +281,7 @@ front_window_deg = 60.0  # 仅60度前方目标参与瞄准，过滤侧后方
 
 # 目标选择器核心配置
 [aimer.target_selection]  # ◈ 表20·L4目标选择·决策模式与超时
-decider = "Manned"               # 决策模式：Manned人工/自动自动瞄准
+decider = "Manned"               # 决策模式：Manned人工/Unmanned自动自动瞄准
 temp_lost_state_score = 0.05     # 临时丢失目标基础分数
 optical_stale_timeout_s = 0.25    # 视觉数据超时作废
 switch_margin = 0.08              # 切换目标分数差阈值，防止频繁切目标

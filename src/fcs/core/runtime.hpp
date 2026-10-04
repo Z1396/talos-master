@@ -193,6 +193,8 @@ struct FollowingState {
     void store(const bool active) noexcept { active_.store(active, std::memory_order_release); }
 
 private:
+    // 原子bool存储，多线程安全读写
+    // false=优先装甲自瞄，true=手控优先
     std::atomic<bool> active_{false};
 };
 
