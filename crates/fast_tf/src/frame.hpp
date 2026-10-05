@@ -424,54 +424,33 @@ template <typename System, typename Fn>
 Fn&& fn：回调函数，就是你上一段代码里面那个 lambda。
 constexpr：编译期可执行；当然也完全可以运行时调用。*/
 constexpr void for_each_coordinate_buffer(System&& system, Fn&& fn) {
-    //std::apply(tuple)的功能：把 tuple 的所有元素拆成一包参数包传给 lambda。
-    /*假设：
-    using CoordSystem = std::tuple<BufferIMU, BufferGimbal, BufferChassis>;
-    CoordSystem system;
-    调用std::apply(lambda, system)之后，lambda 里面：
-    xs... 就展开成：BufferIMU& xs0, BufferGimbal& xs1, BufferChassis& xs2。*/
+    /*`std::apply(F, TupleLike)`：
+    **第二个参数必须是「类 tuple 类型」（`std::tuple` / `std::pair` / `std::array` / 自定义满足 tuple 协议的结构体）**；
+    它把这个 tuple 里面**所有元素拆散开，变成一长串独立参数，传入第一个参数的可调用对象（lambda / 函数）**。*/
     std::apply(
-        //auto&&... xs 是参数包，把 tuple 每一个元素全部接进来。
+        // auto&&... xs：接收system tuple全部元素构成参数包
         [&](auto&&... xs) {
-            // 回调参数：帧类型标识 + 缓冲区引用
-            /*(expr , ...) 是 C++17 逗号折叠表达式。
-            对参数包里每一个xs，依次执行：fn(arg1, arg2)。
-            等价循环逻辑（伪代码）：
-            for(auto& xs : tuple里面每一个buffer)
-            {
-                fn(类型标签, xs);
-            }
-            ⚠️ 这不是运行时循环，编译期展开，tuple 有多少个 buffer，编译就生成多少份 fn 调用代码。*/
+            // C++17逗号折叠表达式，编译期依次展开，对tuple内每个buffer调用fn
             (
-            /*std::type_identity<T>{} 构造一个空的、零大小的编译期标签对象。
-            它唯一作用：把类型 T 当作一个函数参数传给回调 fn。
-            运行时这个对象大小为 0，不会产生任何内存开销。
-            回到你上一段代码回调内部：
-            [&](auto frame_tag, const auto& buffer) {
-                using Descendant = typename decltype(frame_tag)::type;
-                // Descendant就拿到 GimbalFrame / ChassisFrame
-            }
-            decltype(frame_tag) = std::type_identity<GimbalFrame>；
-            decltype(frame_tag)::type取出里面的内部别名GimbalFrame。
-            关键点：类型只能编译期传递，不能直接当作运行时参数；于是用type_identity包一层，把 “类型” 包装成一个可以传进函数的空对象。*/
-            fn(std::type_identity<
-                //decltype(xs)会带上引用、const；remove_cvref_t剥掉const & &&，拿到 buffer 的原始类型，例如BufferGimbal。
-                /*buffer_coord_of是项目自定义的 type‑trait（元函数）。
-                输入：buffer 的类型（例如BufferGimbal）
-                输出：这个 buffer 对应的子坐标系标签类型（就是前面代码的Descendant）。
-                示例：
-                // buffer_coord_of<BufferGimbal>::type → GimbalFrame;
-                // buffer_coord_of<BufferChassis>::type → ChassisFrame;
-                这个GimbalFrame、ChassisFrame是空的标签结构体，编译期元信息，没有运行时成员，里面存静态常量frame_id、using ancestor = xxx。*/
-                typename buffer_coord_of<std::remove_cvref_t<decltype(xs)>>::type>{},
-                //完美转发，保持原来的左值 / 右值、const 属性，把 buffer 引用传给回调。
-                std::forward<decltype(xs)>(xs)
-            ),
-             ...
+                fn(
+                    // type_identity：零开销编译期类型标签，用来传递坐标系类型
+                    std::type_identity<
+                        // remove_cvref_t：剥离引用/const修饰，拿到buffer原始类型
+                        // buffer_coord_of：自定义元函数，由Buffer类型映射到对应坐标系标签类型
+                        typename buffer_coord_of<std::remove_cvref_t<decltype(xs)>>::type>{},
+                    /*作用：实现完美转发，保留表达式xs的值类别（左值 / 右值），把xs原封不动转发出去。
+                    decltype(xs)：推导出xs的声明类型，包含引用修饰。
+                    std::forward<T>(arg)：根据模板参数T，决定把arg转成左值还是右值引用。
+                    典型场景：泛型 lambda、模板函数转发参数，避免拷贝，维持原参数的值属性。
+                    对比：std::move强制转为右值；std::forward是有条件转换。*/
+                    std::forward<decltype(xs)>(xs)
+                ),
+                ...
             );
         },
         std::forward<System>(system));
 }
+
 
 //================================================================================
 // 对外业务API：更新时序缓冲区、递归查询变换矩阵

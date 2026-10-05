@@ -192,7 +192,7 @@ public:
     static constexpr std::size_t capacity_value = is_static ? 1 : Range * Density;
     // 读写同步锁：TBB自旋读写锁，读多写少场景性能优于std::mutex
     // 大量查询读、少量push写，自旋rw锁非常适合TF场景
-    using mutex_type                            = tbb::spin_rw_mutex;
+    using mutex_type = tbb::spin_rw_mutex;
 
     // 动态缓冲区默认构造；requires(!is_static) C++20约束：只有动态缓冲区才允许这个构造函数
     Buffer() noexcept requires(!is_static) = default;
