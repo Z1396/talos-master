@@ -336,8 +336,8 @@ using FuckIntrinsicEulerRotf = Fuck<Coordinate, math_fuxk::Ros2EulerRotf>;
  * EdgeTransform<T>：存储父→子帧变换；5=最小缓存容量；500=最大采样点
  */
 template <typename T>
-using EphemeralBuffer = Buffer<EdgeTransform<T>, 5, 500>;
-
+using EphemeralBuffer = Buffer<EdgeTransform<T>,    5              ,500>;
+//                                               ↑秒(时长)      ↑每秒采样点数(密度)
 /**
  * @brief CoordinateSystem 全局坐标系根容器
  * tuple依次存储所有非根帧的时序变换缓冲区：

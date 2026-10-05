@@ -388,24 +388,26 @@ inline void publish_quanta_video(
  */
 inline void publish_jpeg_image(
     FoxgloveServer& server, const cv::Mat& image_bgr, uint64_t timestamp_ns) noexcept {
+    // 压缩后的图像数据缓冲区
     std::vector<uint8_t> compressed;
-    // JPEG质量45，平衡带宽与清晰度
+    // JPEG质量45，平衡带宽与清晰度;IMWRITE_JPEG_QUALITY：jpeg压缩质量参数，范围0-100，值越大压缩率越高，质量越差
     std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 45};
     // 图像编码失败直接丢弃
+    /*cv::imencode：将图像编码为指定格式,然后压缩到compressed缓冲区中，返回是否成功*/
     if (!cv::imencode(".jpg", image_bgr, compressed, params)) {
         return;
     }
 
     // 构造图像消息
-    ImageMessage msg;                                                          // 定义图像消息结构体实例，对应Foxglove CompressedImage消息
-    msg.payload.timestamp = timestamp_from_ns(timestamp_ns);                    // 给消息时间戳赋值：把纳秒时间戳转为Foxglove标准时间结构体(sec/nsec)
-    msg.payload.frame_id  = "camera_optical_frame";                            // 坐标系ID，光学相机坐标系，和TF坐标系对应，前端用来做3D图像对齐
-    msg.payload.format    = "jpeg";                                            // 图像压缩格式，告诉前端这是jpeg压缩图片
-    msg.payload.data      = std::vector<std::byte>(                            // 构造std::vector<std::byte>二进制字节容器，存放jpeg压缩后的图片数据
-        reinterpret_cast<const std::byte*>(compressed.data()),                 // 起始指针：把压缩缓冲区uint8_t*强转为std::byte*，C++17字节类型
+    ImageMessage msg;                                                    // 定义图像消息结构体实例，对应Foxglove CompressedImage消息
+    msg.payload.timestamp = timestamp_from_ns(timestamp_ns);         // 给消息时间戳赋值：把纳秒时间戳转为Foxglove标准时间结构体(sec/nsec)
+    msg.payload.frame_id  = "camera_optical_frame";                      // 坐标系ID，光学相机坐标系，和TF坐标系对应，前端用来做3D图像对齐
+    msg.payload.format    = "jpeg";                                      // 图像压缩格式，告诉前端这是jpeg压缩图片
+    msg.payload.data      = std::vector<std::byte>(                      // 构造std::vector<std::byte>二进制字节容器，存放jpeg压缩后的图片数据
+        reinterpret_cast<const std::byte*>(compressed.data()),    // 起始指针：把压缩缓冲区uint8_t*强转为std::byte*，C++17字节类型
         reinterpret_cast<const std::byte*>(compressed.data() + compressed.size())); // 结束指针，data+size指向缓冲区末尾，vector通过
 
-
+    //enqueue_message：将消息入队发送，线程安全调用，不会阻塞主线程这一步，消息会在后台线程中发送
     server.enqueue_message(std::move(msg));
 }
 
@@ -474,6 +476,11 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             talos::res<L2::ldm::LdmDetectorConfig> ldm_config) mutable {
             // 前置统一校验：Foxglove服务已初始化、输入通道存在可读数据
             // foxglove_ready：封装逻辑：服务非空+通道有数据，无数据直接跳过本轮渲染
+            /*
+            *server —— 解 res 句柄 ，产出`shared_ptr<FoxgloveServer>` 
+            *(*server) —— 先`*` 剥 res 拿到 shared_ptr，再 `->` 解 shared_ptr ，到达`FoxgloveServer` 本体，
+            det_in表示装甲检测批量帧通道引用
+            */
             if (!foxglove_ready(*server, det_in)) {
                 return;
             }
@@ -497,6 +504,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             // 根据帧是否启用检测器ROI切换矩形颜色
             const cv::Scalar roi_color = tac::to_cv_bgr(batch->has_detector_roi ? tac::Image::ROI_VALID : tac::Image::ROI_MISSING);
             cv::rectangle(img_bgr, batch->detector_roi, roi_color, tac::Image::LINE_MEDIUM, cv::LINE_AA);
+            
             // -------------------------- 绘制相机光心十字标记 --------------------------
             // 从相机内参取出主点cx cy（图像光学中心）
             const double cx = cam->camera_matrix(0, 2);
@@ -525,16 +533,16 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 cv::Scalar(0, 255, 255) // RB
             };
 
-            // -------------------------- 遍历绘制所有装甲检测结果 --------------------------
+            // -- 遍历绘制所有装甲检测结果进行可视化绘制(包含检测框、角点、文字(名称/类型/敌方颜色/置置信度)) -----------
             for (const auto& det : batch->detections) {
                 // 循环绘制4个角点 + 带箭头边线
                 for (size_t j = 0; j < det.corners.size(); j++) {
                     auto pp1 = det.corners[j];
                     auto pp2 = det.corners[(j + 1) % 4];
                     // 绘制角点小圆点
-                    //cv::circle(
-                        //img_bgr, pp1, 1, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
-                    // 带箭头边线，箭头大小随线段长度自适应
+                    cv::circle(
+                        img_bgr, pp1, 1, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM);
+                    //带箭头边线，箭头大小随线段长度自适应
                     //cv::arrowedLine(
                         // img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_MEDIUM,
                         // cv::LINE_AA, 0, 10.0 / cv::norm(pp1 - pp2));
@@ -543,7 +551,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                         img_bgr, pp1, pp2, corner_colors[(j + 1) % 4], tac::Image::LINE_THIN, cv::LINE_AA);
                 }
 
-                // 装甲名称/类型/敌方颜色文字
+                // 装甲名称/类型/敌方颜色文字放在检测框下方20px
                 cv::Point2f text_pos(det.rect.x, det.rect.y + det.rect.height + 20);
                 std::string name_type = fmt::format(
                     "{} {} {}", magic_enum::enum_name(det.name), magic_enum::enum_name(det.type),
@@ -552,7 +560,7 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                     img_bgr, name_type, text_pos, cv::FONT_HERSHEY_SIMPLEX, tac::Image::TEXT_SMALL,
                     text_color, tac::Image::TEXT_THIN, cv::LINE_AA);
 
-                // 网络置信度文字
+                // 网络置信度文字放在检测框下方40px
                 cv::Point2f conf_pos(det.rect.x, det.rect.y + det.rect.height + 40);
                 std::string conf_str = fmt::format("conf: {:.2f}", det.confidence);
                 cv::putText(
@@ -721,6 +729,9 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
                 // Mcap离线录包模式：使用Quanta H265硬件编码器输出视频流
                 // video_state持久保存编码器，分辨率不变时复用编码器，无需重复创建
                 detail::publish_quanta_video(
+                    //*server表示拿到shared_ptr<FoxgloveServer> 服务单例智能指针，*(*server)表示解引用，获取foxglove_server服务实例指针
+                    // video_state持久保存编码器，分辨率不变时复用编码器，无需重复创建
+                    // img_bgr表示当前帧图像，batch->timestamp_ns表示当前帧时间戳（纳秒级）
                     *(*server), video_state, foxglove_cfg->quanta, img_bgr, batch->timestamp_ns);
             } else {
                 // WebSocket实时调试模式：单帧压缩为JPEG图片逐帧发送，延迟低
