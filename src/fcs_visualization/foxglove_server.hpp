@@ -312,6 +312,8 @@ private:
     template <typename Def>
     void dispatch_one(const FoxgloveMsg<Def>& m) noexcept {
         // 获取对应通道
+        /*channels_.*Def::member表示获取Def::member对应的通道
+        Def::member是一个枚举值，对应FoxgloveChannels中的一个成员变量*/
         auto& opt_ch = channels_.*(Def::member);
         if (!opt_ch)
             return;
