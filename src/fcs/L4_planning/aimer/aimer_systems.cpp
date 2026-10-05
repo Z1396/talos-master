@@ -367,13 +367,15 @@ struct ArmorCandidateCollection {
     // 如果是机器人状态，调用aimer的aim函数进行弹道解算
     if (const auto* robot_state = tracker.robot_state()) {
         return aimer.aim(
-            *robot_state, context, gimbal, muzzle, tracker.timestamp_ns, current_ns, 0.0,
+            *robot_state, context, gimbal, muzzle, tracker.timestamp_ns, 
+            current_ns, 0.0,
             bullet_speed, solver);
     }
     // 如果是前哨站状态，调用aimer的aim函数进行弹道解算
     if (const auto* outpost_state = tracker.outpost_state()) {
         return aimer.aim(
-            *outpost_state, context, gimbal, muzzle, tracker.timestamp_ns, current_ns, 0.0,
+            *outpost_state, context, gimbal, muzzle, tracker.timestamp_ns, 
+            current_ns, 0.0,
             bullet_speed, solver);
     }
     // 都不匹配，返回错误信息
@@ -808,7 +810,8 @@ struct AimContext {
 
         // 获取或创建该目标的相位状态引用
         auto& phase_state = phase_states[key];
-        // 更新瞄准阶段(整车中心/单装甲)
+
+        // 判断到底是哪一级的旋转速度，更新瞄准阶段（整车中心/单装甲）
         advance_armor_aim_phase(
             aimer_cfg, target_abs_v_yaw(tracker), tracker.target_jumped, phase_state.phase,
             phase_state.overflow_count);
@@ -1319,7 +1322,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             }
             // 结构化绑定：gimbal云台位姿，muzzle枪口位姿，ts_ns变换对应的时间戳
             const auto& [gimbal, muzzle, ts_ns] = *xf;
-
+ 
             // 组装瞄准上下文，把本帧所有不变参数打包，传递给各个决策函数
             const AimContext ctx{
                 // 云台变换
@@ -1358,7 +1361,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             const auto fallback =
                 pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
 
-            // ========== 目标优先级逻辑：1.装甲板优先 ==========
+            // ========== 目标优先级逻辑：1.装甲板优先 ========== 
             // try_armor：装甲目标选择、弹道计算，输出瞄准决策std::optional<Decision>
             auto decision = try_armor(
                 tracker_vec, ctx, active_armor_target_decider, decider_state, cfg->aimer,

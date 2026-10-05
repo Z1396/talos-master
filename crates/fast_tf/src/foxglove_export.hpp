@@ -44,6 +44,7 @@ public:
 
         // 遍历所有坐标系帧缓存，回调处理每一组父子帧变换
         // 遍历所有坐标变换buffer；回调里面每个回调对应一组【父坐标系 → 子坐标系】的变换缓存
+        // frame_tag 是编译期标签类型，不是运行时字符串;buffer 是当前子帧变换缓存引用可以直接访问所有变换记录
         for_each_coordinate_buffer(system, [&](auto frame_tag, const auto& buffer) {
             // 提取当前子帧类型、父祖先帧类型（编译期模板推导）
             // frame_tag 是编译期标签类型，不是运行时字符串

@@ -432,7 +432,6 @@ inline void publish_jpeg_image(
 /// 额外同步发布TF坐标变换、相机标定内参，支撑前端3D可视化
 /// @param app ECS调度器实例，用于注册pool_compute并行图像渲染任务
 void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
-
     // =========================================================================
     // L1 图像可视化发布系统：原图叠加检测图层推流至Foxglove
     // 调度类型：talos::pool_compute 线程池并行执行，不阻塞视觉主线程
@@ -444,12 +443,11 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
     app.add_system<talos::pool_compute>(
         "foxglove_l1_image_pub",
         // 系统持久状态捕获：lambda每次执行复用这两个状态，不会重复创建编码器/缓存
-        // mutable
-        // 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
-        /*    video_state H.265 视频编码器状态（避免每帧重建编码器） ldm_state
+        // mutable 允许修改捕获的局部状态变量（QuantaPublisherState/LdmOverlayState内部有可修改成员）
+        /* video_state H.265 视频编码器状态（避免每帧重建编码器） ldm_state
            LDM（能量机关）数据缓存（保留上一帧数据用于叠加）*/
-        [video_state = 
-            detail::QuantaPublisherState{}, ldm_state = detail::LdmOverlayState{}](
+        [video_state = detail::QuantaPublisherState{}, 
+               ldm_state = detail::LdmOverlayState{}](
             // 输入通道1：装甲板神经网络检测批量帧（原图+所有装甲检测结果）
             talos::spmc<ArmorDetectionBatch, DetectionChannelTopic> det_in,
             // 输入通道2：LDM能量机关光斑blob原始检测数据
@@ -479,7 +477,6 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
             if (!foxglove_ready(*server, det_in)) {
                 return;
             }
-
             // 读取装甲检测批量帧（包含原图+所有装甲检测框）
             auto batch = det_in.read();
             // 空帧 / 图像数据为空，无需渲染，直接退出
@@ -489,6 +486,8 @@ void register_l1_sensor_systems(talos::scheduler::Scheduler& app) {
 
             // 1. 同步发布当前帧全部TF坐标变换
             // 前端Foxglove依赖TF实现3D坐标、目标空间位置可视化
+            /*1.进入publish_tf函数先拿到std::optional<fast_tf::FoxgloveExporter> tf_exporter_; ->tf_exporter_->publish_all(tf_buffer, timestamp_ns);
+              2.*/
             (*server)->publish_tf(*tf_buffer, batch->timestamp_ns);
 
             // clone深拷贝，避免修改原始图像帧缓存，不影响其他系统读取原图

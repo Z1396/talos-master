@@ -2,8 +2,8 @@
 // 头文件保护，防止多次包含造成重复定义
 
 #include "L4_planning/aimer/armor_target_decider.hpp"
-#include "core/armor_types.hpp"          // 装甲枚举 ArmorName、ArmorTargetDeciderKind
-#include "toml/ext/containers.hpp"       // TOML反射扩展，支持结构体自动解析
+#include "core/armor_types.hpp"    // 装甲枚举 ArmorName、ArmorTargetDeciderKind
+#include "toml/ext/containers.hpp" // TOML反射扩展，支持结构体自动解析
 
 namespace fcs::L4 {
 // L4：规划层（Planning），负责目标选择、自瞄有限状态机、弹道参考轨迹生成
@@ -15,11 +15,11 @@ namespace fcs::L4 {
  * 分值越高越优先选中；权重越大，该维度对选择结果影响越强
  */
 struct TargetSelectionWeights {
-    double image_center{5.0};    // 图像中心权重：装甲越靠近画面中心越优先
-    double track_state{3.0};     // 跟踪状态权重：稳定跟踪目标优先
-    double tof{1.5};             // 飞行时间权重：子弹飞行时间越短优先（近距离目标）
-    double gimbal_effort{1.0};   // 云台转动代价：云台需要转动幅度越小优先
-    double armor_name{0.5};      // 装甲类型优先级权重（英雄/哨兵/基地等）
+    double image_center{5.0};  // 图像中心权重：装甲越靠近画面中心越优先
+    double track_state{3.0};   // 跟踪状态权重：稳定跟踪目标优先
+    double tof{1.5};           // 飞行时间权重：子弹飞行时间越短优先（近距离目标）
+    double gimbal_effort{1.0}; // 云台转动代价：云台需要转动幅度越小优先
+    double armor_name{0.5};    // 装甲类型优先级权重（英雄/哨兵/基地等）
 };
 
 /**
@@ -27,10 +27,10 @@ struct TargetSelectionWeights {
  * 所有代价需要除以参考值做归一化，把不同量纲的数据统一映射到相近区间
  */
 struct TargetSelectionRefs {
-    double image_center_ref_px{300.0};    // 图像中心距离参考像素
-    double tof_ref_s{0.35};               // 子弹飞行时间参考值(s)
-    double yaw_effort_ref_deg{20.0};      // 云台yaw转动角度参考(°)
-    double pitch_effort_ref_deg{10.0};    // 云台pitch转动角度参考(°)
+    double image_center_ref_px{300.0}; // 图像中心距离参考像素
+    double tof_ref_s{0.35};            // 子弹飞行时间参考值(s)
+    double yaw_effort_ref_deg{20.0};   // 云台yaw转动角度参考(°)
+    double pitch_effort_ref_deg{10.0}; // 云台pitch转动角度参考(°)
 };
 
 /**
@@ -38,16 +38,16 @@ struct TargetSelectionRefs {
  * 用于区分优先级：比如哨兵、基地装甲可以设置更高基础分，优先打击
  */
 struct TargetSelectionArmorNameScore {
-    double sentry{0.5};       // 哨兵装甲
-    double one{0.5};          // 一号装甲
-    double two{0.5};          // 二号装甲
-    double three{0.5};        // 三号装甲
-    double four{0.5};         // 四号装甲
-    double five{0.5};         // 五号装甲
-    double outpost{0.5};      // 前哨站装甲
-    double base{0.5};         // 基地普通装甲
-    double base_large{0.5};   // 基地大装甲
-    double invalid{0.0};      // 无效装甲，最低分，绝不优先选择
+    double sentry{0.5};     // 哨兵装甲
+    double one{0.5};        // 一号装甲
+    double two{0.5};        // 二号装甲
+    double three{0.5};      // 三号装甲
+    double four{0.5};       // 四号装甲
+    double five{0.5};       // 五号装甲
+    double outpost{0.5};    // 前哨站装甲
+    double base{0.5};       // 基地普通装甲
+    double base_large{0.5}; // 基地大装甲
+    double invalid{0.0};    // 无效装甲，最低分，绝不优先选择
 
     /**
      * @brief 根据装甲类型获取基础分数
@@ -101,15 +101,17 @@ struct AimerConfig {
     /// 包含相机曝光、图像处理、通信延迟、云台机械响应延迟
     double delay{0.01};
 
-    // 四状态有限状态机阈值（单人、整车、成对装甲逻辑）
-    // up：进入状态阈值；down：退出状态阈值（滞环，防止抖动）
-    double single_whole_up{1.5};    // 进入【单人模式】阈值
-    double single_whole_down{1.0};  // 退出【单人模式】阈值
-    double whole_pair_up{6.5};      // 进入【整车模式】阈值
-    double whole_pair_down{7.5};    // 退出【整车模式】阈值
-    double pair_center_up{16.5};    // 进入【成对中心模式】阈值
-    double pair_center_down{15.0};  // 退出【成对中心模式】阈值
-    int transfer_thresh{50};        // 状态切换稳定帧数阈值
+    // 四状态瞄准FSM滞环阈值（状态从低到高：SingleArmor → WholeCarArmor → WholeCarPair →
+    // WholeCarCenter） 相邻两状态共用一对阈值构成滞环：up = 升档门（数值较低），down =
+    // 降档门（数值较高）， 两门之间的角速度区间是缓冲带，落在带内不累积计数——防止临界转速下状态抖动
+    // 注：命名中的状态名指该对阈值管辖的状态对，而非单个状态
+    double single_whole_up{1.5};   // SingleArmor↔WholeCarArmor 升档门：|v_yaw| 超过它才累积升档
+    double single_whole_down{1.0}; // SingleArmor↔WholeCarArmor 降档门：低于它才累积降回单板
+    double whole_pair_up{6.5};     // WholeCarArmor↔WholeCarPair 升档门
+    double whole_pair_down{7.5};   // WholeCarArmor↔WholeCarPair 降档门：低于它累积退回整车建模
+    double pair_center_up{16.5};   // WholeCarPair↔WholeCarCenter 升档门
+    double pair_center_down{15.0}; // WholeCarPair↔WholeCarCenter 降档门：低于它累积退回双板
+    int transfer_thresh{50};       // 状态切换稳定帧数阈值：条件需连续满足该帧数才真正切换
 
     /// 单装甲锁定前视窗口(角度)
     /// 只有装甲落在云台当前朝向±该角度内，才允许锁定
@@ -129,9 +131,9 @@ struct AimerConfig {
  * 仅控制轨迹预测区间，物理限位（云台最大角度、发射频率）放在L5武器控制器
  */
 struct ReferenceTrajectoryConfig {
-    int horizon_ahead{50};  // 向前预测步数（未来轨迹）
-    int horizon_back{50};   // 向后回溯步数（历史轨迹平滑）
-    double dt{0.01};        // 轨迹离散时间步长 10ms
+    int horizon_ahead{50}; // 向前预测步数（未来轨迹）
+    int horizon_back{50};  // 向后回溯步数（历史轨迹平滑）
+    double dt{0.01};       // 轨迹离散时间步长 10ms
 };
 
 /**
@@ -145,4 +147,4 @@ struct L4Config {
     ReferenceTrajectoryConfig reference_trajectory{};
 };
 
-} // namespace fcs::L4_planning
+} // namespace fcs::L4
