@@ -538,6 +538,9 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                             ARMOR_HEIGHT_SMALL, // [double]立方体Y轴高度，单位米。固定常量，对应小装甲高度
                         tac::Geometry::
                             ARMOR_WIDTH) // [double]立方体X轴宽度，单位米。固定常量，对应装甲板宽度
+                    // 装甲板本体坐标系可视化（RViz风格TF轴）：X轴(红)=板面法线即装甲板朝向，
+                    // Y轴(绿)=板面横向，Z轴(蓝)=板面纵向；三根轴跟随PnP解算姿态旋转
+                    .axes(tac::Geometry::AXIS_LENGTH)
                     // 在立方体上附加文字标签，文字做y轴负方向偏移，避免文字压在装甲模型上
                     .text_with_offset(      // ⑤ 文字标签
                         // 格式化字符串：装甲名字 + 装甲类型，magic_enum把枚举值转字符串
@@ -561,7 +564,7 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                     // 添加元数据：PnP求解条件数，科学计数法输出
                     .metadata("pnp_condition",
                               fmt::format("{:.3e}",
-                                          m.pnp_condition_number)) // [string]PnP条件数科学计数。默认值:1e6。>1000视为不可信
+                                          m.pnp_condition_number)) // [string]PnP条件数科学计数。默认值:1e6。正常稳定在1e4量级，冲向1e6钳位上限才代表真退化
                     // 添加元数据：协方差矩阵第0行，matrix4_row_string把矩阵一行格式化为字符串
                     .metadata("pnp_cov[0]",
                               matrix4_row_string(m.pnp_cov_ypdr, 0)) // [string]4×4协方差第0行字符串"[ex,ex,ex,ex]"
@@ -844,7 +847,6 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             if (!detail::foxglove_ready(*server, meas_in)) {
                 return;
             }
-
             auto batch = meas_in.read();
             if (!batch) {
                 return;
@@ -863,6 +865,8 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
 
             // 遍历每一个装甲PnP测量结果
             for (const auto& m : batch->measurements) {
+                // 提取odom系下的装甲板位姿。注意：m.transform已由armor_solver系统
+                // 在PnP解算后用meas.reframe(T_odom_camera)从相机系转换到odom系
                 const auto t = m.transform.translation();
                 const auto q = m.transform.quaternion();
                 // 位姿分解得到roll pitch yaw欧拉角，结构化绑定
@@ -893,16 +897,16 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                     m.confidence; ///< [float]PnP检测置信度。默认值:0.0。取值范围:[0.0,1.0]，越接近1越可信
                 mj["position"] = {
                     t.x(), t.y(),
-                    t.z()};       ///< [array<double,3>]装甲在odom坐标系下三维位置[x,y,z]，单位米
+                    t.z()};       ///< [array<double,3>]在odom坐标系下的三维位置[x,y,z]，单位米
                 mj["orientation"] = {
                     q.x(), q.y(), q.z(),
-                    q.w()};       ///< [array<double,4>]装甲姿态四元数[x,y,z,w]，单位弧度
+                    q.w()}; ///< [array<double,4>]在odom坐标系下的的姿态四元数[x,y,z,w]，单位弧度
                 mj["euler"]["roll"] = r; ///< [double]欧拉角roll滚转，单位弧度。取值范围:[-π,π]
                 mj["euler"]["pitch"] =
                     p;                   ///< [double]欧拉角pitch俯仰，单位弧度。取值范围:[-π/2,π/2]
-                mj["euler"]["yaw"] = y;  ///< [double]欧拉角yaw装甲偏航角，单位弧度。取值范围:[-π,π]
+                mj["euler"]["yaw"] = y;  ///< [double]欧拉角yaw偏航角，单位弧度。取值范围:[-π,π]
                 mj["distance"] =
-                    t.norm(); ///< [double]装甲到传感器原点直线距离，单位米。取值范围:[0,+∞)
+                    t.norm(); ///< [double]装甲板到odom原点(里程计原点)的直线距离，注意不是到相机的距离，单位米。取值范围:[0,+∞)
 
                 // PnP协方差维度说明：bearing_yaw=方位偏航角，bearing_pitch=俯仰角，log_distance=对数距离，armor_yaw=装甲自身偏航角
                 mj["pnp_geometry"]["order"] = {
@@ -914,19 +918,26 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 mj["pnp_geometry"]["diag"] = matrix4_diag_to_json(
                     m.pnp_cov_ypdr); ///< [array<double,4>]协方差对角线元素，代表各状态方差。默认值:[1e6,1e6,1e6,1e6]
                 mj["pnp_geometry"]["condition"] =
-                    m.pnp_condition_number; ///< [double]PnP求解条件数，数值越大求解越不稳定。默认值:1e6。取值范围:[1,+∞)，>1000视为不可信
+                    m.pnp_condition_number; ///< [double]PnP海森矩阵条件数(λmax/λmin)。因参数量纲不平衡，正常稳定在1e4量级，属健康状态；关注突跳：冲向1e6钳位上限才代表真退化(板侧对/角点缺失/极远距离)
                 mj["pnp_geometry"]["note"] =
                     "normalized‑plane PnP covariance propagated to measurement "
                     "coordinates"; ///< [string]备注：归一化平面PnP，协方差传播至测量坐标系。固定文本
-                // TF树查询有效时，计算相机观测yaw与世界yaw角度偏差（度）
+                // TF树查询有效时，计算方位yaw与装甲板朝向yaw的角度偏差（度）
                 if (tf_lookup) {
+                    // target_in_ref是odom系下的装甲板位姿（PnP结果已reframe到odom系）
                     auto target_in_ref = (m.transform);
-
+                    // target_pos_yaw是方位角：位置向量(x,y)的atan2方向，"装甲板在哪个方位"
                     auto target_pos_yaw = fcs::L3::xyz2ypd(target_in_ref.translation())[0];
+                    // target_yaw是装甲板朝向角：姿态四元数分解出的yaw，"装甲板法线朝哪"
+                    // 取值范围:[-π,π]
                     auto [roll, pitch, target_yaw] = target_in_ref.euler_rot().rpy();
 
                     // shortest_rad：最短角度差，弧度转角度存入json
                     mj["delta_angle"] =
+                        // target_yaw是装甲板朝向角，取值范围:[-π,π]
+                        // target_pos_yaw是odom系下的装甲板方位角，取值范围:[-π,π]
+                        // target_yaw -
+                        // target_pos_yaw是装甲板朝向角与odom系下的装甲板方位角的角度偏差（弧度）
                         L3::shortest_rad(target_pos_yaw, target_yaw) * 180.0 / std::numbers::pi;
                 }
 
@@ -956,9 +967,11 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
             }
 
             // 局部lambda：统一JPG消息组装与发布（仿rune_systems的publish模式）
-            /*`auto builder` 是 C++14 泛型 lambda ：等价于模板参数。为什么必须 auto？—— 每个 lambda 表达式的类型都是编译器独一无二生成的 
-            （`[]{return BinaryImageMessage{};}` 和`[]{return PatternImageMessage{};}` 是两个完全不同的类型），
-            你无法写出它的具体类型名，只能让编译器推导。每次调用`publish` 都会实例化出一个对应版本的 lambda。*/
+            /*`auto builder` 是 C++14 泛型 lambda ：等价于模板参数。为什么必须 auto？—— 每个 lambda
+            表达式的类型都是编译器独一无二生成的 （`[]{return BinaryImageMessage{};}` 和`[]{return
+            PatternImageMessage{};}` 是两个完全不同的类型），
+            你无法写出它的具体类型名，只能让编译器推导。每次调用`publish` 都会实例化出一个对应版本的
+            lambda。*/
             auto publish = [&](const std::vector<uint8_t>& bytes, auto builder) {
                 if (bytes.empty()) {
                     return;
@@ -968,9 +981,10 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 msg.payload.frame_id  = "camera_optical_frame";
                 msg.payload.format    = "jpeg";
                 msg.payload.data      = std::vector<std::byte>(
-                    /*作用：强制类型转换，把 bytes.data() 返回的指针，转为 const std::byte*（字节常量指针）
-                    bytes.data()：一般是 std::vector<T> / std::string 等容器，返回指向底层存储的原生指针
-                    std::byte：C++17 引入，专门表示原始字节，不做算术运算，适合二进制数据
+                    /*作用：强制类型转换，把 bytes.data() 返回的指针，转为 const
+                    std::byte*（字节常量指针） bytes.data()：一般是 std::vector<T> / std::string
+                    等容器，返回指向底层存储的原生指针 std::byte：C++17
+                    引入，专门表示原始字节，不做算术运算，适合二进制数据
                     reinterpret_cast：底层二进制层面强制转指针类型，不做任何类型安全检查，仅改变指针解释方式
                     ⚠️ 注意：reinterpret_cast 风险高，仅用于底层二进制数据操作。*/
                     reinterpret_cast<const std::byte*>(bytes.data()),

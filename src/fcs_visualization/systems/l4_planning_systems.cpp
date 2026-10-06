@@ -363,49 +363,98 @@ inline void append_selection_trace_metadata(
  * @param entry 目标选择器单条候选打分记录
  * @return 全量打分维度JSON，前端可用于表格展示排名
  */
+/**
+ * @brief 将L4层目标选择追踪记录结构体，序列化为nlohmann::json对象
+ * @param entry FCS框架L4规划层的目标选择追踪条目，保存单个候选目标的全部打分、状态信息
+ * @return 序列化后的json，用于日志记录 / Foxglove前端调试可视化
+ * @note [[nodiscard]] 强制要求调用方必须接收返回值，防止不小心丢弃序列化结果
+ * @note inline 内联函数，减少函数调用开销，适合这种简单转换的小函数
+ */
 [[nodiscard]] inline nlohmann::json
-    json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
+json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
     return nlohmann::json{
-        {                    "rank",                                  entry.rank                                    },
-        {             "target_name",                           std::string(magic_enum::enum_name(entry.target_name))},
-        {            "target_color",                          std::string(magic_enum::enum_name(entry.target_color))},
-        {            "track_status",                          std::string(magic_enum::enum_name(entry.track_status))},
-        {               "aim_valid",                                                                 entry.aim_valid},
-        { "was_previously_selected",                                                   entry.was_previously_selected},
-        {                "selected",                                                                  entry.selected},
-        {               "runner_up",                                                                 entry.runner_up},
-        {               "aim_error",                                                                 entry.aim_error},
-        {           "target_center",          entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
-          : nlohmann::json(nullptr)                                             },
-        {"image_center_distance_px",               std::isfinite(entry.image_center_distance_px)
-               ? nlohmann::json(entry.image_center_distance_px)
-               : nlohmann::json(nullptr)                                        },
-        {           "optical_age_s",                                                             entry.optical_age_s},
-        {                   "tof_s",
-         std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s) : nlohmann::json(nullptr)                         },
-        {              "distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
- : nlohmann::json(nullptr)                                                      },
-        {          "yaw_effort_deg",                         std::isfinite(entry.yaw_effort_deg)
-                         ? nlohmann::json(entry.yaw_effort_deg)
-                         : nlohmann::json(nullptr)                              },
-        {        "pitch_effort_deg",                       std::isfinite(entry.pitch_effort_deg)
-                       ? nlohmann::json(entry.pitch_effort_deg)
-                       : nlohmann::json(nullptr)                                },
-        {      "image_center_score",                                                        entry.image_center_score},
-        {       "track_state_score",                                                         entry.track_state_score},
-        {               "tof_score",                                                                 entry.tof_score},
-        {     "gimbal_effort_score",                                                       entry.gimbal_effort_score},
-        {        "armor_name_score",                                                          entry.armor_name_score},
-        {   "image_center_weighted",                                                     entry.image_center_weighted},
-        {    "track_state_weighted",                                                      entry.track_state_weighted},
-        {            "tof_weighted",                                                              entry.tof_weighted},
-        {  "gimbal_effort_weighted",                                                    entry.gimbal_effort_weighted},
-        {     "armor_name_weighted",                                                       entry.armor_name_weighted},
-        {            "weighted_sum",                                                              entry.weighted_sum},
-        {            "total_weight",                                                              entry.total_weight},
-        {             "total_score",                                                               entry.total_score},
+        // 候选目标的排序序号，本次目标筛选里的排名
+        { "rank", entry.rank },
+
+        // 目标名称枚举，magic_enum::enum_name 编译期拿到枚举名字符串，转std::string存入json
+        { "target_name", std::string(magic_enum::enum_name(entry.target_name)) },
+        // 目标颜色枚举（红/蓝等），转枚举名字符串
+        { "target_color", std::string(magic_enum::enum_name(entry.target_color)) },
+        // 跟踪状态枚举：丢失/稳定跟踪/刚检测到等状态
+        { "track_status", std::string(magic_enum::enum_name(entry.track_status)) },
+
+        // 瞄准解算是否有效，bool
+        { "aim_valid", entry.aim_valid },
+        // 上一帧是否是被选中的目标
+        { "was_previously_selected", entry.was_previously_selected },
+        // 当前帧是否被选为最终瞄准目标
+        { "selected", entry.selected },
+        // 备选目标（亚军，第二名候选目标）
+        { "runner_up", entry.runner_up },
+
+        // 瞄准误差（角度/距离误差，视结构体定义）
+        { "aim_error", entry.aim_error },
+
+        // 目标中心三维坐标（std::optional<vec3>）
+        // 如果有值，调用json_vec3自定义函数把vec3转json；无值则填入null
+        { "target_center", entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
+                                               : nlohmann::json(nullptr) },
+
+        // 目标在图像上距离图像中心的像素距离
+        // 判定：如果是合法有限浮点数才写入，NaN/Inf则填null，避免json写入非法浮点导致解析报错
+        { "image_center_distance_px", std::isfinite(entry.image_center_distance_px)
+                                           ? nlohmann::json(entry.image_center_distance_px)
+                                           : nlohmann::json(nullptr) },
+
+        // 视觉目标的光学年龄，单位秒：目标已经被连续跟踪的时长
+        { "optical_age_s", entry.optical_age_s },
+
+        // 子弹飞行时间Time of Flight，秒
+        // 非法浮点(NaN/Inf)填充null，防止json损坏
+        { "tof_s", std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s)
+                                              : nlohmann::json(nullptr) },
+
+        // 目标距离，单位米
+        { "distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
+                                                        : nlohmann::json(nullptr) },
+
+        // 云台需要转动的偏航角（yaw），单位度
+        { "yaw_effort_deg", std::isfinite(entry.yaw_effort_deg)
+                                ? nlohmann::json(entry.yaw_effort_deg)
+                                : nlohmann::json(nullptr) },
+        // 云台需要转动的俯仰角（pitch），单位度
+        { "pitch_effort_deg", std::isfinite(entry.pitch_effort_deg)
+                                  ? nlohmann::json(entry.pitch_effort_deg)
+                                  : nlohmann::json(nullptr) },
+
+        // ========== 下面全是目标选择打分的各个分项分数、权重、加权后的值（L4目标选择器核心）==========
+        // 图像中心分数：目标离图像中心越近，分数越高
+        { "image_center_score", entry.image_center_score },
+        // 跟踪状态分数：跟踪越稳定，分数越高
+        { "track_state_score", entry.track_state_score },
+        // 飞行时间(TOF)分数，飞行时间越短得分越高
+        { "tof_score", entry.tof_score },
+        // 云台转动代价分数：云台需要转的角度越小，分数越高
+        { "gimbal_effort_score", entry.gimbal_effort_score },
+        // 装甲类型/名称分数，比如优先选择大装甲
+        { "armor_name_score", entry.armor_name_score },
+
+        // 每个分项对应的权重系数
+        { "image_center_weighted", entry.image_center_weighted },
+        { "track_state_weighted", entry.track_state_weighted },
+        { "tof_weighted", entry.tof_weighted },
+        { "gimbal_effort_weighted", entry.gimbal_effort_weighted },
+        { "armor_name_weighted", entry.armor_name_weighted },
+
+        // 加权求和（各分项*权重累加）
+        { "weighted_sum", entry.weighted_sum },
+        // 所有权重总和
+        { "total_weight", entry.total_weight },
+        // 目标综合总分，L4依靠这个total_score排序，选出最优目标
+        { "total_score", entry.total_score },
     };
 }
+
 
 /**
  * @brief 完整一帧目标选择日志序列化
@@ -962,7 +1011,7 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             // ======== MPC轨迹可视化总开关 ========
             // false = 本话题只渲染击打装甲板虚影，MPC参考/优化轨迹与弹道线全部关闭；
             // 调试MPC时改回true即可，下方代码全部保留
-            constexpr bool kEnableMpcTrajectoryViz = false;
+            constexpr bool kEnableMpcTrajectoryViz = true;
             if (kEnableMpcTrajectoryViz) {
                 // MPC调试数据有效：渲染MPC预测轨迹
                 if (cmd && cmd->viz_debug) {

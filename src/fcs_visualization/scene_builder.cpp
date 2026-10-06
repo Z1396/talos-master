@@ -142,9 +142,9 @@ EntityBuilder& EntityBuilder::sphere() {
     // 定义球体图元结构体
     ::foxglove::schemas::SpherePrimitive prim;
     // 使用builder当前缓存的位姿
-    prim.pose  = current_pose_;
+    prim.pose = current_pose_;
     // 如果没有设置size，使用默认0.1m的尺寸
-    prim.size  = current_size_.value_or(::foxglove::schemas::Vector3{0.1, 0.1, 0.1});
+    prim.size = current_size_.value_or(::foxglove::schemas::Vector3{0.1, 0.1, 0.1});
     // 如果没有设置颜色，回退到预设战术颜色
     prim.color = current_color_.value_or(tactical::L3::TRACKING_LOCKED);
     // 将球体推入实体的spheres数组
@@ -158,13 +158,52 @@ EntityBuilder& EntityBuilder::cube(double width, double height, double depth) {
     // 定义立方体图元结构体
     ::foxglove::schemas::CubePrimitive prim;
     // 使用builder当前缓存位姿
-    prim.pose  = current_pose_;
+    prim.pose = current_pose_;
     // 立方体尺寸完全由入参传入，不读取内部current_size_
-    prim.size  = {width, height, depth};
+    prim.size = {width, height, depth};
     // 未设置颜色，使用战术回退色
     prim.color = current_color_.value_or(tactical::L2::MEASUREMENT_GHOST);
     // 将立方体推入实体cubes数组
     entity_.cubes.push_back(prim);
+    // 返回自身引用，支持链式调用
+    return *this;
+}
+
+/// @brief 在当前位姿处添加X/Y/Z三根坐标轴箭头（RViz风格TF轴）
+/// 箭头图元默认指向自身X轴正方向；通过在当前姿态上叠加局部旋转，
+/// 把三根箭头分别转到本坐标系的X/Y/Z轴方向，颜色固定红/绿/蓝
+EntityBuilder& EntityBuilder::axes(double length) {
+    // 引入战术配色命名空间：Axis轴颜色、Geometry轴尺寸、Velocity箭头比例
+    using namespace tactical;
+
+    // 当前姿态四元数：未设置姿态时退化为单位四元数（直接画世界系轴）
+    Eigen::Quaterniond base_q = Eigen::Quaterniond::Identity();
+    if (current_pose_.orientation.has_value()) {
+        const auto& q = *current_pose_.orientation;
+        base_q        = Eigen::Quaterniond(q.w, q.x, q.y, q.z).normalized();
+    }
+
+    // 单根轴箭头：位置取当前位姿平移，朝向 = 当前姿态 × 局部旋转
+    const auto add_axis = [&](const Eigen::Quaterniond& local_rot,
+                              const ::foxglove::schemas::Color& color) {
+        ::foxglove::schemas::ArrowPrimitive prim;
+        prim.pose = make_pose(
+            current_pose_.position.value_or(::foxglove::schemas::Vector3{}),
+            make_quaternion((base_q * local_rot).normalized()));
+        prim.shaft_length   = length * Velocity::ARROW_SHAFT_RATIO;
+        prim.shaft_diameter = Geometry::AXIS_SHAFT_DIAMETER;
+        prim.head_length    = length * Velocity::ARROW_HEAD_RATIO;
+        prim.head_diameter  = Geometry::AXIS_HEAD_DIAMETER;
+        prim.color          = color;
+        entity_.arrows.push_back(prim);
+    };
+
+    // +X：恒等旋转（装甲板模型X轴即板面法线，就是"朝向"方向）
+    add_axis(Eigen::Quaterniond::Identity(), Axis::X);
+    // +Y：绕Z轴+90°，把默认+X转到+Y
+    add_axis(Eigen::Quaterniond(Eigen::AngleAxisd(M_PI_2, Eigen::Vector3d::UnitZ())), Axis::Y);
+    // +Z：绕Y轴-90°，把默认+X转到+Z
+    add_axis(Eigen::Quaterniond(Eigen::AngleAxisd(-M_PI_2, Eigen::Vector3d::UnitY())), Axis::Z);
     // 返回自身引用，支持链式调用
     return *this;
 }
@@ -174,13 +213,13 @@ EntityBuilder& EntityBuilder::text(std::string content, double font_size) {
     // 定义文字图元结构体
     ::foxglove::schemas::TextPrimitive prim;
     // std::move转移字符串所有权，避免拷贝
-    prim.text      = std::move(content);
+    prim.text = std::move(content);
     // 使用builder当前缓存位姿
-    prim.pose      = current_pose_;
+    prim.pose = current_pose_;
     // 设置字体大小
     prim.font_size = font_size;
     // 没有设置颜色，使用文本默认战术颜色
-    prim.color     = current_color_.value_or(tactical::Text::PRIMARY);
+    prim.color = current_color_.value_or(tactical::Text::PRIMARY);
     // billboard开启，文字永远朝向相机，不会旋转歪掉
     prim.billboard = tactical::Text::BILLBOARD_ENABLED;
     // 将文字推入实体texts数组
@@ -208,11 +247,11 @@ EntityBuilder& EntityBuilder::text_with_offset(
         text_pose.position->z += offset_z;
     }
     // 文字使用叠加偏移后的位姿副本
-    prim.pose      = text_pose;
+    prim.pose = text_pose;
     // 设置字体大小
     prim.font_size = font_size;
     // 未设置颜色使用文本默认战术色
-    prim.color     = current_color_.value_or(tactical::Text::PRIMARY);
+    prim.color = current_color_.value_or(tactical::Text::PRIMARY);
     // 开启广告牌模式，面向相机
     prim.billboard = tactical::Text::BILLBOARD_ENABLED;
     // 将文字推入实体texts数组
@@ -236,15 +275,15 @@ EntityBuilder& EntityBuilder::line_strip(
     // 定义线条图元结构体
     ::foxglove::schemas::LinePrimitive line;
     // 设置线条类型：连续折线
-    line.type      = ::foxglove::schemas::LinePrimitive::LineType::LINE_STRIP;
+    line.type = ::foxglove::schemas::LinePrimitive::LineType::LINE_STRIP;
     // 使用builder当前缓存位姿
-    line.pose      = current_pose_;
+    line.pose = current_pose_;
     // 设置线条粗细
     line.thickness = thickness;
     // move转移vector，避免点数组拷贝
-    line.points    = std::move(points);
+    line.points = std::move(points);
     // 设置线条颜色
-    line.color     = color;
+    line.color = color;
     // 将线条移动推入实体lines数组
     entity_.lines.push_back(std::move(line));
     // 返回自身引用，支持链式调用
@@ -261,15 +300,15 @@ EntityBuilder& EntityBuilder::line_list(
     // 定义线条图元结构体
     ::foxglove::schemas::LinePrimitive line;
     // 设置线条类型：两两配对独立线段
-    line.type      = ::foxglove::schemas::LinePrimitive::LineType::LINE_LIST;
+    line.type = ::foxglove::schemas::LinePrimitive::LineType::LINE_LIST;
     // 使用builder当前缓存位姿
-    line.pose      = current_pose_;
+    line.pose = current_pose_;
     // 设置线条粗细
     line.thickness = thickness;
     // move转移点数组，避免拷贝
-    line.points    = std::move(points);
+    line.points = std::move(points);
     // 设置线条颜色
-    line.color     = color;
+    line.color = color;
     // 移动推入实体线条数组
     entity_.lines.push_back(std::move(line));
     // 返回自身引用，支持链式调用
@@ -286,15 +325,15 @@ EntityBuilder& EntityBuilder::line_loop(
     // 定义线条图元结构体
     ::foxglove::schemas::LinePrimitive line;
     // 设置线条类型：自动首尾闭合环线
-    line.type      = ::foxglove::schemas::LinePrimitive::LineType::LINE_LOOP;
+    line.type = ::foxglove::schemas::LinePrimitive::LineType::LINE_LOOP;
     // 使用builder当前缓存位姿
-    line.pose      = current_pose_;
+    line.pose = current_pose_;
     // 设置线条粗细
     line.thickness = thickness;
     // move转移点数组
-    line.points    = std::move(points);
+    line.points = std::move(points);
     // 设置线条颜色
-    line.color     = color;
+    line.color = color;
     // 移动推入实体线条数组
     entity_.lines.push_back(std::move(line));
     // 返回自身引用，支持链式调用
@@ -306,15 +345,15 @@ EntityBuilder& EntityBuilder::cylinder(double diameter, double height) {
     // 定义圆柱体图元结构体
     ::foxglove::schemas::CylinderPrimitive prim;
     // 使用builder当前缓存位姿
-    prim.pose         = current_pose_;
+    prim.pose = current_pose_;
     // x=y截面直径，z为圆柱高度
-    prim.size         = ::foxglove::schemas::Vector3{diameter, diameter, height};
+    prim.size = ::foxglove::schemas::Vector3{diameter, diameter, height};
     // 未设置颜色使用战术回退色
-    prim.color        = current_color_.value_or(tactical::L3::TRACKING_LOCKED);
+    prim.color = current_color_.value_or(tactical::L3::TRACKING_LOCKED);
     // 底面缩放系数，1.0代表正常圆柱
     prim.bottom_scale = 1.0;
     // 顶面缩放系数，1.0代表正常圆柱
-    prim.top_scale    = 1.0;
+    prim.top_scale = 1.0;
     // 移动推入实体cylinders数组
     entity_.cylinders.push_back(std::move(prim));
     // 返回自身引用，支持链式调用
@@ -387,9 +426,11 @@ EntityBuilder& EntityBuilder::merge_primitives(const ::foxglove::schemas::SceneE
     // 合并线条数组
     entity_.lines.insert(entity_.lines.end(), other.lines.begin(), other.lines.end());
     // 合并三角面片数组
-    entity_.triangles.insert(entity_.triangles.end(), other.triangles.begin(), other.triangles.end());
+    entity_.triangles.insert(
+        entity_.triangles.end(), other.triangles.begin(), other.triangles.end());
     // 合并圆柱体数组
-    entity_.cylinders.insert(entity_.cylinders.end(), other.cylinders.begin(), other.cylinders.end());
+    entity_.cylinders.insert(
+        entity_.cylinders.end(), other.cylinders.begin(), other.cylinders.end());
     // 合并外部3D模型数组
     entity_.models.insert(entity_.models.end(), other.models.begin(), other.models.end());
     // 返回自身引用，支持链式调用
@@ -406,7 +447,7 @@ EntityBuilder& EntityBuilder::metadata(std::string key, std::string value) {
     // 定义键值对元数据结构体
     ::foxglove::schemas::KeyValuePair kv;
     // move转移key字符串
-    kv.key   = std::move(key);
+    kv.key = std::move(key);
     // move转移value字符串
     kv.value = std::move(value);
     // 将kv键值对推入实体metadata数组
@@ -428,7 +469,7 @@ EntityBuilder& EntityBuilder::lifetime(uint64_t ns) {
     // 定义foxglove时长结构体，包含sec、nsec
     ::foxglove::schemas::Duration duration;
     // 纳秒除以1e9得到完整秒数，强转int32_t
-    duration.sec  = static_cast<int32_t>(ns / 1000000000);
+    duration.sec = static_cast<int32_t>(ns / 1000000000);
     // 取模得到剩余纳秒部分，强转uint32_t
     duration.nsec = static_cast<uint32_t>(ns % 1000000000);
     // 将时长赋值给实体lifetime字段

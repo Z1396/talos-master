@@ -99,6 +99,9 @@ struct ArmorDetection {
      * @nodiscard 禁止忽略返回值
      */
     [[nodiscard]] cv::Point2f center() const noexcept {
+        // 计算四个角点的平均值，得到中心点
+        // 图像坐标系下，中心点为四个角点的平均值
+        // 用于后续的3D测量和可视化
         return (corners[0] + corners[1] + corners[2] + corners[3]) * 0.25f;
     }
 

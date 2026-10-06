@@ -180,6 +180,8 @@ public:
         builder.entity_.id       = fmt::format("{}.{}", layer, entity_id);
         // frame_id 设置为模板传入坐标系的字符串名称，fast_tf编译期获取
         builder.entity_.frame_id = T::frame_id;
+        // layer 设置为传入的字符串，用于Foxglove渲染分层
+        // layer 用于Foxglove渲染分层，不同layer的实体会分属不同的渲染层
         builder.layer_           = std::move(layer);
         return builder;
     }
@@ -286,6 +288,11 @@ public:
     /// @brief Add a cylinder primitive (usable as ring indicator)
     /// @brief 添加圆柱体，可以用来画圆环标记
     EntityBuilder& cylinder(double diameter, double height);
+
+    /// @brief Add XYZ axis arrows at current pose (RViz-style TF axes)
+    /// @brief 在当前位姿处添加X/Y/Z三根坐标轴箭头（RViz风格的TF坐标系可视化）
+    /// 颜色固定为Axis::X红/Axis::Y绿/Axis::Z蓝；X轴即当前姿态的"朝向"方向
+    EntityBuilder& axes(double length = tactical::Geometry::AXIS_LENGTH);
 
     // ========================================================================
     // PRIMITIVE MERGING (encapsulation‑safe)
