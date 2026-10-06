@@ -77,7 +77,7 @@ struct FireDecision {
  * @param cfg 开火决策配置参数
  * @param cur_yaw 当前云台yaw角度(弧度)
  * @param cur_pitch 当前云台pitch角度(弧度)
- * @param target_yaw 目标yaw角度(弧度)
+ * @param target_yaw 目标yaw角度(弧度),装甲板朝向角
  * @param target_pitch 目标pitch角度(弧度)
  * @param distance 目标距离(米)
  *

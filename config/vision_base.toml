@@ -5,7 +5,7 @@
 # TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
 # Axera：爱芯AX650嵌入式NPU专用模型推理
 backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
-detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
+detect_color = "Red"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
 capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、LDM大符、Rune小符、Energy能量机关
 
 # ====================== [quanta_filter] 图像预处理流水线 ======================

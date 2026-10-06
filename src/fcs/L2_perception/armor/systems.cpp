@@ -787,10 +787,11 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                     // 前哨站装甲特殊角度过滤逻辑，消除目标歧义
                     if (result->name == ArmorName::Outpost) {
                         // 将相机系位姿转换到里程计坐标系
+                        // target_in_ref是相机系下的装甲板位姿
                         auto target_in_ref = T_odom_camera * result->transform;
-                        // 分解平移向量得到平面偏航角
+                        // 分解平移向量得到平面偏航角，target_pos_yaw是方位角，取值范围:[-π,π]
                         auto target_pos_yaw = core::math::xyz2ypd(target_in_ref.translation())[0];
-                        // 取出目标自身欧拉旋转
+                        // 取出目标自身欧拉旋转，target_yaw是装甲板朝向角，取值范围:[-π,π]
                         auto [roll, pitch, target_yaw] = target_in_ref.euler_rot().rpy();
                         // 角度差超过25度判定为歧义目标，直接过滤丢弃
                         auto delta_angle = core::math::normalize_angle(target_yaw - target_pos_yaw)

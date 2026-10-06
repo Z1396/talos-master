@@ -278,6 +278,37 @@ public:
         return gt;
     }
 
+    // ====================== 生产者发布接口（网络桥/测试用） ======================
+    /**
+     * @brief 生产者：全局写入底盘观测数据（单变量覆盖，无三缓冲）
+     * talos_ipc_bridge 跨机桥使用：接收到仿真 UDP 包后落地到共享内存
+     */
+    void publish_chassis_observation(const ChassisObservation& observation) const {
+        meta_->chassis_observation = observation;
+    }
+
+    /**
+     * @brief 生产者：全局写入仿真真值批量数据（单变量覆盖）
+     * talos_ipc_bridge 跨机桥使用
+     */
+    void publish_ground_truth(const GroundTruthBatch& batch) const {
+        meta_->ground_truth = batch;
+    }
+
+    /**
+     * @brief 消费者：读取最新云台指令（borrow 语义，取出后标记已消费）
+     * talos_ipc_bridge 跨机桥使用：Talos 写入指令 → 桥取出 → UDP 回传给仿真
+     * @return 存在新指令返回 GimbalCmd，无新指令返回 nullopt
+     */
+    [[nodiscard]] std::optional<GimbalCmd> recv_gimbal_cmd() const {
+        GimbalOps ops(&meta_->gimbal_cmd);
+        const auto slot = ops.borrow();
+        if (!slot) {
+            return std::nullopt;
+        }
+        return **slot;
+    }
+
     /**
      * @brief 读取仿真运行状态（是否跟随目标等标识）
      * 数据存储在元数据尾部预留空间，旧版本Rust生产者无此字段，timestamp=0表示无效

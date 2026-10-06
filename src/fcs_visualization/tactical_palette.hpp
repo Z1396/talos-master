@@ -263,6 +263,11 @@ constexpr double ARMOR_HEIGHT_SMALL = 0.135;   // 小装甲板高度
 constexpr double ARMOR_HEIGHT_BIG   = 0.23;    // 大装甲板高度
 constexpr double ARMOR_WIDTH        = 0.125;   // 装甲板宽度
 constexpr double ARMOR_TILT_ANGLE   = 0.2618; // 弧度，装甲板倾斜角
+
+// 坐标系轴箭头（axes图元）几何参数，单位米
+constexpr double AXIS_LENGTH         = 0.12;  // 轴箭头总长度（杆+头）
+constexpr double AXIS_SHAFT_DIAMETER = 0.008; // 轴箭杆直径，比速度箭头细，避免遮挡装甲模型
+constexpr double AXIS_HEAD_DIAMETER  = 0.020; // 轴箭头头部直径
 } // namespace Geometry
 
 // 时间相关可视化参数
