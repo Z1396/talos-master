@@ -22,7 +22,7 @@ trajectory.gravity = 9.81
 
 [traditional]
 # Traditional 传统图像处理模块（L2层灯条二值化、装甲检测）
-advanced_binary = false
+advanced_binary = true
 # 是否启用高级自适应二值化
 # false：使用固定阈值二值，算力占用低；光照稳定场景使用
 # true：自适应阈值，强光、逆光环境鲁棒性更强，消耗更多CPU
