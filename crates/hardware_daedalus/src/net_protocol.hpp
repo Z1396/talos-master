@@ -65,9 +65,19 @@ struct PacketHeader {
     uint32_t _pad2;        // 偏移12 ：对齐填充
     uint64_t seq;          // 偏移16 ：发送序号，单调递增（诊断丢包用）
     uint64_t timestamp_ns; // 偏移24 ：发送方时间戳（桥会改写为 NUC 时钟）
+    //最后刚好偏移32
 };
+
+/*- 含义：**编译期强制保证 PacketHeader 整个包头必须严格等于 32 字节**
+- 如果因为编译器自动内存填充 (padding)，结构体变成 36 字节，**编译直接失败，打印后面那句提示字符串***/
 static_assert(sizeof(PacketHeader) == 32, "PacketHeader must be 32 bytes");
+
+/*- `offsetof(结构体类型, 成员名)`：**计算这个成员距离结构体起始地址的字节偏移**，需要头文件 `<cstddef>`
+- 含义：`seq` 这个成员，必须放在从结构体开头算起**第 16 字节的位置**
+- 一旦因为结构体成员顺序调整、编译器 padding，偏移不是 16 → 编译报错*/
 static_assert(offsetof(PacketHeader, seq) == 16, "PacketHeader.seq offset mismatch");
+
+//含义：`timestamp_ns` 这个纳秒时间戳成员，必须在结构体起始位置往后**24 字节**处。
 static_assert(offsetof(PacketHeader, timestamp_ns) == 24, "PacketHeader.timestamp_ns offset mismatch");
 
 // ====================== TCP 图像帧头 ======================

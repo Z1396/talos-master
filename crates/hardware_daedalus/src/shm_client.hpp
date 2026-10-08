@@ -133,19 +133,28 @@ public:
      * @return 初始化完成的ShmClient，包含初始化好的三缓冲通道
      */
     [[nodiscard]] static std::expected<ShmClient, ShmError> create() {
-        // 创建元数据共享内存段
+        // 创建元数据共享内存段meta_region是ShmMetaRegion大小，用于存储三缓冲、相机内参、心跳、真值等控制信息
         auto meta_result = ShmRegion::create(SHM_NAME_META, sizeof(ShmMetaRegion));
         if (!meta_result) {
             return std::unexpected(meta_result.error());
         }
-
-        // 创建图像像素池共享内存段
+        // 创建图像像素池共享内存段image_pool_region是IMAGE_POOL_SIZE大小，用于存放所有图像原始像素数据
         auto pool_result = ShmRegion::create(SHM_NAME_IMAGE_POOL, IMAGE_POOL_SIZE);
         if (!pool_result) {
             return std::unexpected(pool_result.error());
         }
 
-        // 获取元数据裸指针，初始化头部信息
+        // 获取元数据裸指针，初始化头部信息meta_result->as<ShmMetaRegion>()将ShmRegion指针转换为ShmMetaRegion指针，方便访问元数据字段
+        /* 为什么敢这么转？“直接”的前提有四个
+        裸的`void*` 强转本身不检查任何东西，合法性全部来自这套 IPC 的纪律：
+        ① 大小刚好 ：`create(SHM_NAME_META, sizeof(ShmMetaRegion))` 分配的内存就是按这个结构体的尺寸来的，不多不少。
+        ② 布局跨语言锁定 ：`ShmMetaRegion` 里全是定长数组/POD 字段，没有指针、没有虚表；
+        每个结构体都用手动`_pad` 凑齐固定字节数 +`static_assert(sizeof(...))` 编译期锁死，Rust 端`#[repr(C)]` 逐字段一致 → 两边看到的字节排列一模一样。
+        ③ 对齐满足 ：`ShmMetaRegion` 要求 64 字节对齐，而 mmap 返回的地址是 按页（4096 字节）对齐 的，远远满足。
+        ④ 运行期验明正身 ：转完紧接着就查 magic 和 version ——确认这段内存真的是“我们这套协议”写的，而不是残留的垃圾文件。
+        ## 一句话
+        C++ 的内存映射 IPC 本质就是这一招： 两个进程约定“这段字节就是某个结构体”，然后把 mmap 的裸指针盖上结构体的类型标签直接用 
+        。所谓“直接转”，是因为类型约定在编译期（static_assert）和运行期（magic 校验）都已经钉死了，`static_cast` 只是最后盖章那一下。*/
         auto* meta = meta_result->as<ShmMetaRegion>();
 
         // 填充共享内存头部标识
@@ -162,7 +171,7 @@ public:
         // 底层ShmRegion::create会调用memset全内存清零，会覆盖三缓冲合法初始状态
         // 标准初始状态规范：state=1，write_idx=0，read_idx=2
         init_triple_buffer(meta->image);
-        // 批量初始化5路位姿三缓冲
+        // 批量初始化5路位姿三缓冲write_idx=0，read_idx=2
         for (auto& pose : meta->poses) {
             init_triple_buffer(pose);
         }
@@ -359,6 +368,7 @@ public:
         }
 
         PoseOps ops(&meta_->poses[index]);
+        // borrow_mut 获取可修改的写入槽位
         auto& meta         = ops.borrow_mut();
         meta.frame_seq     = pose.frame_seq;
         meta.position[0]   = static_cast<float>(pose.x);
@@ -438,22 +448,35 @@ public:
      * @param timestamp_ns 帧时间戳
      */
     void publish_image(const cv::Mat& image, const uint64_t seq, const uint64_t timestamp_ns) const {
+        /*ImageOps是一个智能指针，用于安全访问和修改图像元数据结构体ImageOps的内部状态是：
+        - state：三缓冲状态，0=无新数据，1=有新数据
+        - write_idx：生产者写入槽位，0/1/2
+        - read_idx：消费者上次读取槽位，0/1/2
+        传&meta_->image代表写入图像元数据结构体，不是图像像素矩阵
+        ops是一个智能指针，用于安全访问和修改图像元数据结构体ImageOps的内部状态*/
         ImageOps ops(&meta_->image);
+        // borrow_mut 获取可修改的write_idx槽位（0/1/2 三缓冲循环）的元数据结构体引用其实就是meta_->image[write_idx]
         auto& meta = ops.borrow_mut();
 
         // 轮换图像缓冲ID 0/1/2 三缓冲循环
         uint8_t buffer_id = meta.buffer_id;
+        // 算法介绍：三缓冲写入，生产者写入当前槽位，消费者读取前一个槽位。永远写入当前槽位，读取前一个槽位。
+        // 作用：避免生产者写入与消费者读取冲突，确保数据一致性
         buffer_id         = (buffer_id + 1) % 3;
 
         // 计算目标像素内存地址
         uint8_t* dst = image_pool_ + buffer_id * IMAGE_SIZE;
         // 区分连续/非连续Mat，安全拷贝像素到共享内存
+        // isContinuous()：判断图像是否内存连续，即所有像素在内存中是连续存储的
+        // 作用：避免在非连续Mat上使用memcpy，导致数据不一致
         if (image.isContinuous()) {
             // 内存连续，一次性memcpy
+            // memcpy参数注释：dst：目标内存地址，image.data：源内存地址，IMAGE_SIZE：字节数量
             std::memcpy(dst, image.data, IMAGE_SIZE);
         } else {
             // 行不连续，逐行拷贝
             for (int row = 0; row < image.rows; ++row) {
+                // memcpy参数注释：dst：目标内存地址，image.ptr(row)：源内存地址，image.cols * image.channels()：字节数量
                 std::memcpy(
                     dst + row * image.cols * image.channels(), image.ptr(row),
                     image.cols * image.channels());
@@ -469,7 +492,7 @@ public:
         // 图像格式映射：灰度=2，BGR=1
         meta.format       = image.type() == CV_8UC1 ? 2 : 1;
 
-        // 发布新帧，消费者可读取
+        // 只是更新元数据，不发布新帧
         ops.publish();
     }
 

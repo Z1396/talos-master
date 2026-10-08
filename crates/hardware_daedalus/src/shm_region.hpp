@@ -178,10 +178,14 @@ public:
         // 将 fd 指向的文件截断/扩展到 length 字节
         // 成功：返回 0
         // 失败：返回 -1，设置 errno*/
+        //static_cast<off_t>(size) < 0：将size_t转换为off_t(是signed int)类型，确保与系统truncate参数匹配,如果<0则失败
+        //static_cast:是编译期类型转换，确保类型安全
         if (ftruncate(fd, static_cast<off_t>(size)) < 0) {
             // 扩容失败，先关闭fd、删除残留空文件，再返回错误
             close(fd);
+            // 删除残留空文件，避免后续打开失败
             std::filesystem::remove(path);
+            // 扩容失败，返回错误码
             return std::unexpected(ShmError::TruncateFailed);
         }
 
@@ -196,11 +200,18 @@ public:
         if (ptr == MAP_FAILED) {
             // 映射失败，清理资源后返回错误
             close(fd);
+            // 删除残留空文件，避免后续打开失败
             std::filesystem::remove(path);
+            // 映射失败，返回错误码
             return std::unexpected(ShmError::MapFailed);
         }
 
         // 新建共享内存默认全部清零，避免残留脏数据
+        // memset()：C库函数，将内存区域设置为指定值（0表示清零）
+        //各个参数解析：
+        // ptr：要清零的内存区域起始地址
+        // 0：设置为0，清零内存
+        // size：要清零的字节数
         std::memset(ptr, 0, size);
 
         // 调用私有构造函数构造实例，owner=true 标记为创建所有者
