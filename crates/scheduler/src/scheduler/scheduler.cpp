@@ -565,13 +565,14 @@ auto Scheduler::unsafe_hot_add_system(std::unique_ptr<SystemBase> system) -> Bui
         // 为新增定时系统启动独立后台线程
         const auto idx = fixed_rate_systems_.size() - 1;
         FixedRateContext ctx{
-            .system       = new_entry.system.get(),
-            .policy       = new_entry.policy,
-            .lifecycle    = &lifecycle_,
-            .scheduler    = this,
-            .world        = &world_,
-            .system_index = idx,
+            .system       = new_entry.system.get(), // 新增系统实例指针
+            .policy       = new_entry.policy, // 新增系统执行策略
+            .lifecycle    = &lifecycle_, // 新增系统生命周期指针
+            .scheduler    = this, // 新增系统调度器指针
+            .world        = &world_, // 新增系统通道缓冲区指针
+            .system_index = idx, // 新增系统索引
         };
+        // 启动新增定时系统的后台线程
         fixed_rate_threads_.emplace_back([ctx]() mutable { run_fixed_rate_thread(ctx); });
     } else {
         // 计算系统仅绑定通道，无独立线程，由主线程TBB池调度
@@ -1940,7 +1941,7 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
 
     // 读取配置的运行频率，单位Hz（每秒执行次数）
     const auto frequency = ctx.policy.frequency_hz;
-    // 绑定当前系统专属的性能统计对象引用，用于记录循环耗时、延迟直方图
+    // 绑定当前系统专属的性能统计对象引用，用于记录循环耗时、延迟直方图等指标
     auto& stats = ctx.scheduler->fixed_rate_stats_[ctx.system_index];
     // 判断当前系统是否属于输出型系统：执行完成后会产生数据传递给下游系统
     const bool write_mode = counts_written_calls(ctx.system->meta());
@@ -2002,12 +2003,11 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
     while (keep_running()) [[likely]] {
         // 把下一次执行时间点向后推移一个完整周期
         next_tick += period;
-
         // 开启计时探针
         primitive::LatencyProbe probe;
         // 执行业务系统逻辑，获取是否产出输出
         const bool written = ctx.system->run(*ctx.world);
-        // 读取本次执行耗时ns
+        // 读取本次执行耗时ns(从探针创建到当前时间)
         const auto elapsed = probe.elapsed_ns();
 
         // 统一执行统计、唤醒逻辑

@@ -11,7 +11,7 @@ height = 1080 # 图像高度
 [camera.profile]
 trigger_mode = false     # 是否使用外部触发模式
 invert_image = false     # 是否翻转图像
-exposure_time_us = 2000 # 曝光时间(微秒)
+exposure_time_us = 2000  # 曝光时间(微秒)
 gain = 12.0              # 相机增益
 
 [extrinsic.gimbal_yaw.gimbal_pitch]

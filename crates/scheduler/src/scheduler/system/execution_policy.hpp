@@ -53,7 +53,7 @@ struct fixed_rate_base {
     static constexpr std::uint32_t frequency_hz   = FreqHz;
     // CPU核心亲和性编号
     static constexpr std::int32_t cpu_affinity    = Affinity;
-    // 线程优先级
+    // 线程优先级，0为默认优先级
     static constexpr std::int32_t thread_priority = Priority;
     // 是否主动通知调度器：根据Topic类型自动推导
     static constexpr bool notifies                = std::is_same_v<Topic, NotifyingTopic>;
@@ -79,6 +79,10 @@ struct fixed_rate_base {
  * ```
  */
 template <std::uint32_t FreqHz = 0, std::int32_t Affinity = -1, std::int32_t Priority = 0>
+//FreqHz 执行频率(Hz)，0 = 全速运行
+//Affinity CPU核心绑定，-1 = 不绑定
+//Priority 线程优先级，0 = 默认优先级
+//NotifyingTopic 主动通知调度器
 using fixed_rate = detail::fixed_rate_base<FreqHz, Affinity, Priority, detail::NotifyingTopic>;
 
 /**
