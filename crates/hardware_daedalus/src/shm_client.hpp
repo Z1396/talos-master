@@ -240,7 +240,8 @@ public:
         // 索引越界直接返回空
         if (index > 4)
             return std::nullopt;
-
+        // 位姿三缓冲操作封装，绑定元数据内位姿通道
+        // borrow：无锁借用最新就绪帧，无新数据返回空
         PoseOps ops(&meta_->poses[index]);
         const auto slot = ops.borrow();
         if (!slot) {

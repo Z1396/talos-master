@@ -5,7 +5,7 @@
 # TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
 # Axera：爱芯AX650嵌入式NPU专用模型推理
 backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
-detect_color = "Red"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
+detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
 capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、LDM大符、Rune小符、Energy能量机关
 
 # ====================== [quanta_filter] 图像预处理流水线 ======================
@@ -58,7 +58,7 @@ enable_psy_trellis = true          # 码率控制Trellis优化，提升画质
 psy_trellis = 0.0
 
 # 亮度通道高斯降噪子配置
-[quanta_filter.denoise_luma]  # ◈ 表02·预处理子表·亮度通道高斯降噪参数
+[quanta_filter.denoise_luma]        # ◈ 表02·预处理子表·亮度通道高斯降噪参数
 kernel_size = 5                    # 高斯核大小 5x5
 sigma_x = 1.0                      # X方向高斯模糊系数
 sigma_y = 1.0                      # Y方向高斯模糊系数
@@ -247,20 +247,20 @@ height = 0.05     # IMU安装高度
 
 ## [tracker.outpost] 前哨站大符跟踪器
 [tracker.outpost]  # ◈ 表17·前哨站跟踪器·匹配门限与状态机
-matcher_gate = 9.0
-lost_threshold = 1.0
-tracking_threshold = 4
+matcher_gate = 9.0   # 马氏距离门限，超过则不匹配当前观测
+lost_threshold = 1.0 # 丢失超时(s)，超时释放跟踪
+tracking_threshold = 4 # 连续4帧匹配成功进入稳定跟踪状态
 
 [tracker.outpost.model]  # ◈ 表18·前哨站跟踪·卡尔曼噪声参数
-sigma_q_xy = 8.0
-sigma_q_z = 0.1
-sigma_a_yaw = 2.71327412
-meas_yaw_var_floor = 5e-3
-meas_pitch_var_floor = 5e-3
-meas_log_dist_var_floor = 2.5e-3
-meas_dist_k = 0.42
-meas_armor_yaw_var_floor = 9e-3
-yaw_log_k = 0.0005
+sigma_q_xy = 8.0   # XY平面过程噪声
+sigma_q_z = 0.1    # Z深度过程噪声
+sigma_a_yaw = 2.71327412 # 旋转加速度噪声
+meas_yaw_var_floor = 5e-3 # 偏航观测最小方差下限
+meas_pitch_var_floor = 5e-3 # 俯仰观测最小方差下限  
+meas_log_dist_var_floor = 2.5e-3 # 距离观测下限  
+meas_dist_k = 0.42 # 距离角度噪声系数
+meas_armor_yaw_var_floor = 9e-3 # 装甲偏航观测下限
+yaw_log_k = 0.0005 # 装甲距离噪声系数
 
 # ============================================================================
 # L4 Aim 自动瞄准决策层：目标选择、状态机、弹道解算
@@ -270,13 +270,13 @@ yaw_log_k = 0.0005
 delay = 0.0  # 全链路系统延迟补偿(秒)：曝光+图像处理+通信+云台响应补偿
 
 # 四状态自瞄FSM切换阈值（单灯→成对灯→完整装甲状态切换）
-single_whole_up = 1.5
-single_whole_down = 1.0
-whole_pair_up = 8.5
-whole_pair_down = 9.5
-pair_center_up = 9.0
-pair_center_down = 6.0
-transfer_thresh = 20
+single_whole_up = 1.5 # 单灯上阈值
+single_whole_down = 1.0 # 单灯下阈值
+whole_pair_up = 8.5 # 成对灯上阈值
+whole_pair_down = 9.5 # 成对灯下阈值
+pair_center_up = 9.0 # 成对灯中心上阈值
+pair_center_down = 6.0 # 成对灯中心下阈值
+transfer_thresh = 20 # 切换阈值（距离）：20m
 front_window_deg = 60.0  # 仅60度前方目标参与瞄准，过滤侧后方
 
 # 目标选择器核心配置
@@ -296,10 +296,10 @@ armor_name = 6.5        # 装甲优先级权重（最重要）
 
 # 打分参考基准值
 [aimer.target_selection.refs]  # ◈ 表22·L4目标选择·打分归一化基准值
-image_center_ref_px = 300.0
-tof_ref_s = 0.35
-yaw_effort_ref_deg = 20.0
-pitch_effort_ref_deg = 10.0
+image_center_ref_px = 300.0 # 画面中心参考像素值（300px）
+tof_ref_s = 0.35 # 距离参考值（0.35s）
+yaw_effort_ref_deg = 20.0 # 云台偏航参考值（20°）
+pitch_effort_ref_deg = 10.0 # 云台俯仰参考值（10°）
 
 # 不同装甲类型基础优先级分数（越高越优先打击）
 [aimer.target_selection.armor_name_score]  # ◈ 表23·L4目标选择·装甲类型优先级分数
@@ -338,15 +338,15 @@ rho = 1.225          # 空气密度 kg/m³
 # ============================================================================
 # [fire_decision] 开火判断逻辑
 [fire_decision]  # ◈ 表26·L5开火判断·误差阈值与射击窗口尺寸
-fire_thresh = 0.008444444  # 预测弹着点与目标误差阈值(rad)，小于允许开火
+fire_thresh = 0.008444444  # 预测弹着点与目标误差阈值(rad)，小于允许开火相当于0.008444444弧度误差=0.5°
 # 物理射击窗口尺寸（米）
-shooting_range_h = 0.12
-shooting_range_w_small = 0.12
-shooting_range_w_large = 0.24
+shooting_range_h = 0.32     # 射击窗口高度（原参0.12m）
+shooting_range_w_small = 0.42 # 射击窗口宽度（原参0.12m）
+shooting_range_w_large = 0.44 # 射击窗口宽度（原参0.24m）
 
 # MPC模型预测控制器总开关
 [mpc_weapon]  # ◈ 表27·L5 MPC云台控制·总开关/调试/俯仰限位
-enabled = true
+enabled = true # 开启MPC控制器开关
 enable_debug = true                # 输出MPC调试日志
 reference_age_threshold_s = 0.5   # 轨迹参考数据0.5s过期作废
 

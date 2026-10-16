@@ -1,7 +1,7 @@
 # ===================== 全局默认配置（主机名无匹配时生效） =====================
 # 硬件/数据传输后端类型
 # 可选值对应程序枚举：Daedalus / Direct / CameraOnly / Chiral
-backend = "CameraOnly"
+backend = "Daedalus"
 
 # 机器人型号，对应 config/robot/[名称].toml 配置文件
 # 可选：infantry(步兵)、hero(英雄)、sentry(哨兵)、drone(无人机) 等
