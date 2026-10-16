@@ -235,7 +235,8 @@ struct DaedalusImu {
     void system(
         talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
         [[maybe_unused]] core::trajectory::bullet_speed_mut bullet_speed,
-        [[maybe_unused]] core::detecting_color_mut detecting_color, core::following_mut following,
+        [[maybe_unused]] core::detecting_color_mut detecting_color, 
+        core::following_mut following,
         [[maybe_unused]] core::imu_state_mut imu_state,
         talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
         talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept

@@ -371,90 +371,90 @@ inline void append_selection_trace_metadata(
  * @note inline 内联函数，减少函数调用开销，适合这种简单转换的小函数
  */
 [[nodiscard]] inline nlohmann::json
-json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
+    json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& entry) {
     return nlohmann::json{
         // 候选目标的排序序号，本次目标筛选里的排名
-        { "rank", entry.rank },
+        {                    "rank",                                  entry.rank                                    },
 
         // 目标名称枚举，magic_enum::enum_name 编译期拿到枚举名字符串，转std::string存入json
-        { "target_name", std::string(magic_enum::enum_name(entry.target_name)) },
+        {             "target_name",                           std::string(magic_enum::enum_name(entry.target_name))},
         // 目标颜色枚举（红/蓝等），转枚举名字符串
-        { "target_color", std::string(magic_enum::enum_name(entry.target_color)) },
+        {            "target_color",                          std::string(magic_enum::enum_name(entry.target_color))},
         // 跟踪状态枚举：丢失/稳定跟踪/刚检测到等状态
-        { "track_status", std::string(magic_enum::enum_name(entry.track_status)) },
+        {            "track_status",                          std::string(magic_enum::enum_name(entry.track_status))},
 
         // 瞄准解算是否有效，bool
-        { "aim_valid", entry.aim_valid },
+        {               "aim_valid",                                                                 entry.aim_valid},
         // 上一帧是否是被选中的目标
-        { "was_previously_selected", entry.was_previously_selected },
+        { "was_previously_selected",                                                   entry.was_previously_selected},
         // 当前帧是否被选为最终瞄准目标
-        { "selected", entry.selected },
+        {                "selected",                                                                  entry.selected},
         // 备选目标（亚军，第二名候选目标）
-        { "runner_up", entry.runner_up },
+        {               "runner_up",                                                                 entry.runner_up},
 
         // 瞄准误差（角度/距离误差，视结构体定义）
-        { "aim_error", entry.aim_error },
+        {               "aim_error",                                                                 entry.aim_error},
 
         // 目标中心三维坐标（std::optional<vec3>）
         // 如果有值，调用json_vec3自定义函数把vec3转json；无值则填入null
-        { "target_center", entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
-                                               : nlohmann::json(nullptr) },
+        {           "target_center",          entry.target_center ? nlohmann::json(json_vec3(*entry.target_center))
+          : nlohmann::json(nullptr)                                             },
 
         // 目标在图像上距离图像中心的像素距离
         // 判定：如果是合法有限浮点数才写入，NaN/Inf则填null，避免json写入非法浮点导致解析报错
-        { "image_center_distance_px", std::isfinite(entry.image_center_distance_px)
-                                           ? nlohmann::json(entry.image_center_distance_px)
-                                           : nlohmann::json(nullptr) },
+        {"image_center_distance_px",               std::isfinite(entry.image_center_distance_px)
+               ? nlohmann::json(entry.image_center_distance_px)
+               : nlohmann::json(nullptr)                                        },
 
         // 视觉目标的光学年龄，单位秒：目标已经被连续跟踪的时长
-        { "optical_age_s", entry.optical_age_s },
+        {           "optical_age_s",                                                             entry.optical_age_s},
 
         // 子弹飞行时间Time of Flight，秒
         // 非法浮点(NaN/Inf)填充null，防止json损坏
-        { "tof_s", std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s)
-                                              : nlohmann::json(nullptr) },
+        {                   "tof_s",
+         std::isfinite(entry.tof_s) ? nlohmann::json(entry.tof_s) : nlohmann::json(nullptr)                         },
 
         // 目标距离，单位米
-        { "distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
-                                                        : nlohmann::json(nullptr) },
+        {              "distance_m", std::isfinite(entry.distance_m) ? nlohmann::json(entry.distance_m)
+ : nlohmann::json(nullptr)                                                      },
 
         // 云台需要转动的偏航角（yaw），单位度
-        { "yaw_effort_deg", std::isfinite(entry.yaw_effort_deg)
-                                ? nlohmann::json(entry.yaw_effort_deg)
-                                : nlohmann::json(nullptr) },
+        {          "yaw_effort_deg",                         std::isfinite(entry.yaw_effort_deg)
+                         ? nlohmann::json(entry.yaw_effort_deg)
+                         : nlohmann::json(nullptr)                              },
         // 云台需要转动的俯仰角（pitch），单位度
-        { "pitch_effort_deg", std::isfinite(entry.pitch_effort_deg)
-                                  ? nlohmann::json(entry.pitch_effort_deg)
-                                  : nlohmann::json(nullptr) },
+        {        "pitch_effort_deg",                       std::isfinite(entry.pitch_effort_deg)
+                       ? nlohmann::json(entry.pitch_effort_deg)
+                       : nlohmann::json(nullptr)                                },
 
-        // ========== 下面全是目标选择打分的各个分项分数、权重、加权后的值（L4目标选择器核心）==========
+        // ==========
+        // 下面全是目标选择打分的各个分项分数、权重、加权后的值（L4目标选择器核心）==========
         // 图像中心分数：目标离图像中心越近，分数越高
-        { "image_center_score", entry.image_center_score },
+        {      "image_center_score",                                                        entry.image_center_score},
         // 跟踪状态分数：跟踪越稳定，分数越高
-        { "track_state_score", entry.track_state_score },
+        {       "track_state_score",                                                         entry.track_state_score},
         // 飞行时间(TOF)分数，飞行时间越短得分越高
-        { "tof_score", entry.tof_score },
+        {               "tof_score",                                                                 entry.tof_score},
         // 云台转动代价分数：云台需要转的角度越小，分数越高
-        { "gimbal_effort_score", entry.gimbal_effort_score },
+        {     "gimbal_effort_score",                                                       entry.gimbal_effort_score},
         // 装甲类型/名称分数，比如优先选择大装甲
-        { "armor_name_score", entry.armor_name_score },
+        {        "armor_name_score",                                                          entry.armor_name_score},
 
         // 每个分项对应的权重系数
-        { "image_center_weighted", entry.image_center_weighted },
-        { "track_state_weighted", entry.track_state_weighted },
-        { "tof_weighted", entry.tof_weighted },
-        { "gimbal_effort_weighted", entry.gimbal_effort_weighted },
-        { "armor_name_weighted", entry.armor_name_weighted },
+        {   "image_center_weighted",                                                     entry.image_center_weighted},
+        {    "track_state_weighted",                                                      entry.track_state_weighted},
+        {            "tof_weighted",                                                              entry.tof_weighted},
+        {  "gimbal_effort_weighted",                                                    entry.gimbal_effort_weighted},
+        {     "armor_name_weighted",                                                       entry.armor_name_weighted},
 
         // 加权求和（各分项*权重累加）
-        { "weighted_sum", entry.weighted_sum },
+        {            "weighted_sum",                                                              entry.weighted_sum},
         // 所有权重总和
-        { "total_weight", entry.total_weight },
+        {            "total_weight",                                                              entry.total_weight},
         // 目标综合总分，L4依靠这个total_score排序，选出最优目标
-        { "total_score", entry.total_score },
+        {             "total_score",                                                               entry.total_score},
     };
 }
-
 
 /**
  * @brief 完整一帧目标选择日志序列化
@@ -546,6 +546,36 @@ json_target_selection_trace_entry(const ::fcs::L4::TargetSelectionTraceEntry& en
     target_json["aim_phase"] = std::string(magic_enum::enum_name(snapshot.aim_phase)); // 瞄准阶段
     target_json["selected_armor_id"]       = snapshot.selected_armor_id;       // 当前最优装甲ID
     target_json["rough_selected_armor_id"] = snapshot.rough_selected_armor_id; // 粗选装甲ID
+
+    // ===================== 上位机处理延迟 process_latency（调试用） =====================
+    // 起点：snapshot.tracker.timestamp_ns —— L3 的测量/图像时间戳
+    //   依据：aim_tracker_target() 把它作为 measurement_ns 参数传进 Aimer::aim()，
+    //   而 aimer 内部算的 age = current_ns - measurement_ns 就是"图像 → 当前"的年龄，
+    //   说明该字段就是【相机曝光时刻（已做曝光中点修正）】
+    // 终点：本帧 JSON 序列化发布的当前时刻 fcs::clock::now_ns()
+    // 含义：从"相机曝光"到"这份指令级数据被推送出去"的全部上位机耗时，单位毫秒
+    // 说明：不含最后"下发到下位机"的那一跳（≤1 个 250Hz 周期 4ms），
+    //       也不含 comm_latency / 云台响应（那两项只能由下位机侧提供）
+    if (snapshot.tracker.timestamp_ns != 0) {
+        // 与 aimer 内部一致：先转 int64_t 再作差，避免时间戳异常时的无符号下溢
+        const int64_t now_ns  = static_cast<int64_t>(::fcs::clock::now_ns());
+        const int64_t meas_ns = static_cast<int64_t>(snapshot.tracker.timestamp_ns);  
+        // 单位【毫秒】——这是"时间差"，不是"频率"。
+        // 切勿写成 1e9/diff：那只是"若把该操作串行重复、每秒能做几次"，
+        // 与流水线的更新率无关；而且它会撞上当前仿真的源头帧率(约16Hz)，
+        // 极易被误读成"系统只能跑十几赫兹"。
+        target_json["process_latency_ms"] = static_cast<double>(now_ns - meas_ns) * 1e-6;
+
+        // 把总延迟拆成两段，用于定位时间花在哪一环：
+        //   latency_to_l4_ms    = 采集 → L4 算出这条快照（含各级排队/等触发）
+        //   latency_l4_to_pub_ms = L4 算出 → 可视化序列化发布（应 ≤ 一个可视化系统周期）
+        // 正常预期：第二段只有几 ms；若第一段就占了大头，说明是流水线各级的排队累加
+        const int64_t l4_ns                 = static_cast<int64_t>(snapshot.timestamp_ns);
+        // 从跟踪时间戳到采集 → L4 算出这条快照（含各级排队/等触发）
+        target_json["latency_to_l4_ms"]     = static_cast<double>(l4_ns - meas_ns) * 1e-6; 
+        // L4 算出 → 可视化序列化发布（应 ≤ 一个可视化系统周期）
+        target_json["latency_l4_to_pub_ms"] = static_cast<double>(now_ns - l4_ns) * 1e-6;
+    }
 
     return target_json;
 }
