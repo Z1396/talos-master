@@ -752,6 +752,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     world.insert_resource(cam_info);
 
     // ===================== IMU就绪：注册 1000Hz IMU读取系统 =====================
+    // 其实就是固定1000Hz周期执行，读取IMU数据、更新TF、写通道
     if (imu_ready) {
         // fixed_rate<1000,1>：固定1000Hz周期执行
         scheduler.add_system<talos::fixed_rate<1000, 1>>(

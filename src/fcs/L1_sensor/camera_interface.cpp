@@ -163,7 +163,7 @@ auto HikInput::recv(const std::chrono::milliseconds timeout) noexcept
     retry_ = kReconnectRetryLimit;
     return Frame{
         .seq          = seq_++,
-        .timestamp_ns = now_ns(),
+        .timestamp_ns = now_ns(), 
         .image        = std::move(*result),
     };
 }
@@ -182,8 +182,8 @@ auto HikInput::camera_info() const noexcept -> const CameraConfig& {
  * 修正后时间戳更贴合画面实际成像时刻，提升PnP、滤波时序精度
  */
 auto HikInput::now_ns() const noexcept -> uint64_t {
-    const auto now = clock::now_ns();
-    return now - (exposure_time_ns_ / 2);
+    const auto now = clock::now_ns();  // 获取当前系统时间戳（纳秒）
+    return now - (exposure_time_ns_ / 2);  // 修正后时间戳
 }
 
 // ============================================================================

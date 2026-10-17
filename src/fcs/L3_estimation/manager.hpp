@@ -186,15 +186,17 @@ public:
         // 步骤2-4：遍历所有tracker，执行预测-更新循环
         // ----------------------------------------------------------------------
         for (auto& [key, tracker] : trackers_) {
-            uint64_t& last_ts = last_timestamp_ns_[key];
+            uint64_t& last_ts = last_timestamp_ns_[key];  // 获取当前tracker的最后更新时间戳
 
             // 计算时间间隔dt（纳秒转秒）
             double dt = 0.0;
+            // 判断当前时间戳是否大于最后更新时间戳，且最后更新时间戳不是0，避免除0错误
+            // 计算时间间隔dt（秒），用于预测阶段更新
             if (measurements.timestamp_ns > last_ts && last_ts != 0) {
                 //`timestamp_ns` 单位是**纳秒 (ns)**，`1s = 1e9 ns`，除以 `1e9`，就是把**纳秒 → 秒
                 dt = static_cast<double>(measurements.timestamp_ns - last_ts) / 1e9;
             }
-            last_ts = measurements.timestamp_ns;
+            last_ts = measurements.timestamp_ns; // 更新最后更新时间戳为当前时间戳
 
             // 预测阶段（时间更新）：仅对非Idle tracker执行
             // 注意：TempLost状态也需要预测，用于超时检测
@@ -228,7 +230,7 @@ public:
             // 收集输出：仅返回非Idle状态的tracker（语义：有效跟踪目标）
             if (tracker->status() != TrackerStatus::Idle) {
                 auto output         = tracker->get_output();
-                output.timestamp_ns = measurements.timestamp_ns;
+                output.timestamp_ns = measurements.timestamp_ns; // 更新输出时间戳为当前时间戳
                 updated_outputs.push_back(std::move(output));
             }
         }

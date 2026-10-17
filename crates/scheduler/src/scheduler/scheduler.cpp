@@ -1748,8 +1748,11 @@ void Scheduler::print_stats() const {
     // systems：系统数组；stats：对应性能统计数组；print_fn：单行打印自定义逻辑
     auto print_system_stats = [&](const auto& systems, const auto& stats, auto print_fn) {
         for (std::size_t i = 0; i < systems.size(); ++i) {
+            // 系统入口（包含系统实例和调度策略）
             const auto& entry     = systems[i];
+            // 系统统计信息（延迟直方图、执行次数、记录次数、唤醒次数）
             const auto& sys_stats = stats[i];
+            // 调用自定义打印函数，传入系统入口、统计信息和总运行秒数
             print_fn(entry, sys_stats, elapsed_sec);
         }
     };
@@ -1820,43 +1823,47 @@ auto Scheduler::get_stats_json() const -> std::string {
     const double elapsed_sec = elapsed.count();
 
     // 读取全局计算循环原子统计
+    // 计算总运行次数
     const auto cycles       = compute_cycles_.load(std::memory_order_relaxed);
+    // 计算总运行时长（纳秒）
     const auto total_time   = compute_total_time_ns_.load(std::memory_order_relaxed);
+    // 计算上一次更新时间戳（纳秒）
     const auto last_time    = compute_last_time_ns_.load(std::memory_order_relaxed);
+    // 计算总唤醒次数
     const auto notify_total = sum_notify_counts();
 
     json root;
-    root["runtime_seconds"] = elapsed_sec;
+    root["runtime_seconds"] = elapsed_sec;   // 总运行时长（秒）
 
     // 填充计算循环全局指标
     json& compute_json           = root["compute_loop"];
-    compute_json["cycles"]       = cycles;
-    compute_json["frequency_hz"] = static_cast<double>(cycles) / elapsed_sec;
+    compute_json["cycles"]       = cycles;   // 总运行次数
+    compute_json["frequency_hz"] = static_cast<double>(cycles) / elapsed_sec;   // 实际运行频率（Hz）
     compute_json["avg_time_ms"] =
-        cycles > 0 ? (static_cast<double>(total_time) / 1e6 / static_cast<double>(cycles)) : 0.0;
-    compute_json["last_time_ms"]   = static_cast<double>(last_time) / 1e6;
-    compute_json["total_notifies"] = notify_total;
+        cycles > 0 ? (static_cast<double>(total_time) / 1e6 / static_cast<double>(cycles)) : 0.0;   // 平均运行时间（毫秒）
+    compute_json["last_time_ms"]   = static_cast<double>(last_time) / 1e6;   // 上一次更新时间戳（毫秒）
+    compute_json["total_notifies"] = notify_total;   // 总唤醒次数
 
     // 内部工具：将完整延迟分位数批量写入JSON对象
     auto add_latency_stats = [](json& sys, const auto& latency, double) {
-        sys["sampled_runs"] = latency.sample_count;
-        sys["min_ms"]       = static_cast<double>(latency.min_ns) / 1e6;
-        sys["p50_ms"]       = static_cast<double>(latency.p50_ns) / 1e6;
-        sys["p95_ms"]       = static_cast<double>(latency.p95_ns) / 1e6;
-        sys["p99_ms"]       = static_cast<double>(latency.p99_ns) / 1e6;
-        sys["p999_ms"]      = static_cast<double>(latency.p999_ns) / 1e6;
-        sys["mean_ms"]      = static_cast<double>(latency.mean_ns) / 1e6;
-        sys["max_ms"]       = static_cast<double>(latency.max_ns) / 1e6;
-        sys["stddev_ms"]    = static_cast<double>(latency.stddev_ns) / 1e6;
+        sys["sampled_runs"] = latency.sample_count;   // 有效记录次数
+        sys["min_ms"]       = static_cast<double>(latency.min_ns) / 1e6;   // 最小延迟（毫秒）
+        sys["p50_ms"]       = static_cast<double>(latency.p50_ns) / 1e6;   // 50%延迟（毫秒）
+        sys["p95_ms"]       = static_cast<double>(latency.p95_ns) / 1e6;   // 95%延迟（毫秒）
+        sys["p99_ms"]       = static_cast<double>(latency.p99_ns) / 1e6;   // 99%延迟（毫秒）
+        sys["p999_ms"]      = static_cast<double>(latency.p999_ns) / 1e6;   // 99.9%延迟（毫秒）
+        sys["mean_ms"]      = static_cast<double>(latency.mean_ns) / 1e6;   // 平均延迟（毫秒）
+        sys["max_ms"]       = static_cast<double>(latency.max_ns) / 1e6;   // 最大延迟（毫秒）
+        sys["stddev_ms"]    = static_cast<double>(latency.stddev_ns) / 1e6;   // 标准差（毫秒）
     };
 
     // 统一生成系统JSON数据模板，消除重复循环
     auto generate_system_stats = [&](const auto& systems, const auto& stats, json& arr,
                                      auto add_extra_fn) {
         for (std::size_t i = 0; i < systems.size(); ++i) {
-            const auto& entry     = systems[i];
-            const auto& sys_stats = stats[i];
-            const auto latency    = sys_stats.latency_hist.compute();
+            const auto& entry     = systems[i]; // 系统入口
+            const auto& sys_stats = stats[i];// 系统统计信息
+            const auto latency    = sys_stats.latency_hist.compute();  // 计算延迟统计
 
             json sys;
             // 写入通用延迟指标
@@ -1877,22 +1884,23 @@ auto Scheduler::get_stats_json() const -> std::string {
             const auto exec_count = stats.execution_count.load(std::memory_order_relaxed);
             const auto record_cnt = stats.record_count.load(std::memory_order_relaxed);
             const bool write_mode = counts_written_calls(entry.system->meta());
-            sys["target_hz"]      = entry.policy.frequency_hz;
-            sys["notifies"]       = notify_cnt;
-            sys["executions"]     = exec_count;
-            sys["runs"]           = record_cnt;
-            sys["actual_hz"]      = static_cast<double>(record_cnt) / elapsed_sec;
-            sys["count_mode"]     = write_mode ? "written_calls" : "run_calls";
+            sys["target_hz"]      = entry.policy.frequency_hz;   // 目标频率（Hz）
+            sys["notifies"]       = notify_cnt;   // 唤醒次数
+            sys["executions"]     = exec_count;  // 执行次数
+            sys["runs"]           = record_cnt;  // 有效记录次数
+            sys["actual_hz"]      = static_cast<double>(record_cnt) / elapsed_sec;   // 实际运行频率（Hz）
+            sys["count_mode"]     = write_mode ? "written_calls" : "run_calls";   // 计数模式（written_calls/run_calls）
         });
 
     // 填充计算系统JSON数组
     json& compute_arr = root["compute_systems"] = json::object();
     generate_system_stats(
         compute_systems_, compute_stats_, compute_arr,
+        // 写入计算系统专属指标：运行次数、实际运行频率（Hz）
         [elapsed_sec](json& sys, const auto&, const auto& stats) {
             const auto run_count = stats.run_count.load(std::memory_order_relaxed);
-            sys["runs"]          = run_count;
-            sys["actual_hz"]     = static_cast<double>(run_count) / elapsed_sec;
+            sys["runs"]          = run_count;   // 运行次数
+            sys["actual_hz"]     = static_cast<double>(run_count) / elapsed_sec;   // 实际运行频率（Hz）    
         });
 
     // 序列化JSON为字符串返回

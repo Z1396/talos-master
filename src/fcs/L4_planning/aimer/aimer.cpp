@@ -556,7 +556,7 @@ std::expected<TargetPrediction, std::string> Aimer::aim_generic(
     // 设置瞄准阶段
     output.aim_phase       = context.phase;
 
-    // 计算目标年龄（从测量到当前的时间差，秒）
+    // 计算目标年龄（从测量到当前的时间差，秒）从现在到取图那一刻的时间差
     const double age =
         static_cast<double>(static_cast<int64_t>(current_ns) - static_cast<int64_t>(measurement_ns))
         * 1e-9;

@@ -559,19 +559,19 @@ inline void append_selection_trace_metadata(
     if (snapshot.tracker.timestamp_ns != 0) {
         // 与 aimer 内部一致：先转 int64_t 再作差，避免时间戳异常时的无符号下溢
         const int64_t now_ns  = static_cast<int64_t>(::fcs::clock::now_ns());
-        const int64_t meas_ns = static_cast<int64_t>(snapshot.tracker.timestamp_ns);  
+        const int64_t meas_ns = static_cast<int64_t>(snapshot.tracker.timestamp_ns);   // 取图那一刻的时间戳，单位纳秒
         // 单位【毫秒】——这是"时间差"，不是"频率"。
         // 切勿写成 1e9/diff：那只是"若把该操作串行重复、每秒能做几次"，
         // 与流水线的更新率无关；而且它会撞上当前仿真的源头帧率(约16Hz)，
         // 极易被误读成"系统只能跑十几赫兹"。
-        target_json["process_latency_ms"] = static_cast<double>(now_ns - meas_ns) * 1e-6;
+        target_json["process_latency_ms"] = static_cast<double>(now_ns - meas_ns) * 1e-6;   // 上位机处理延迟，单位毫秒
 
         // 把总延迟拆成两段，用于定位时间花在哪一环：
         //   latency_to_l4_ms    = 采集 → L4 算出这条快照（含各级排队/等触发）
         //   latency_l4_to_pub_ms = L4 算出 → 可视化序列化发布（应 ≤ 一个可视化系统周期）
         // 正常预期：第二段只有几 ms；若第一段就占了大头，说明是流水线各级的排队累加
         const int64_t l4_ns                 = static_cast<int64_t>(snapshot.timestamp_ns);
-        // 从跟踪时间戳到采集 → L4 算出这条快照（含各级排队/等触发）
+        // 从跟踪时间戳到采集 →  相机取图算出这条快照（含各级排队/等触发）
         target_json["latency_to_l4_ms"]     = static_cast<double>(l4_ns - meas_ns) * 1e-6; 
         // L4 算出 → 可视化序列化发布（应 ≤ 一个可视化系统周期）
         target_json["latency_l4_to_pub_ms"] = static_cast<double>(now_ns - l4_ns) * 1e-6;

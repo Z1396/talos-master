@@ -1357,7 +1357,7 @@ void register_aimer_systems(talos::Scheduler& scheduler, L4Config&& config) {
             // 读取L3跟踪器最新一帧全部跟踪目标输出
             const auto tracker_vec = tracker_in.read_current();
 
-            // 获取兜底目标：当完全没有新决策输出时，ROI模块可以继续使用上一个有效目标
+            // 获取兜底目标：当完全没有新决策输出时，ROI模块可以继续使用上一个有效目标fallback是选中目标
             const auto fallback =
                 pick_readback_tracker_fallback(tracker_vec, decider_state.selected_key);
 
