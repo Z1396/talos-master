@@ -682,6 +682,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             // 调试帧透传：仅传统后端产生二值化/数字裁剪调试图（其他后端take返回空）
             // 注意：ARMOR_DEBUG_FRAME通道为调试专用，正式比赛可注释下行write彻底关闭
             if (backend->get()->template holds<TraditionalBackend>()) {
+                // 如果传统后端有调试帧，透传给Foxglove显示 dbg 是一个智能指针，指向数字裁剪图与二值化图的内存地址
                 if (auto dbg =
                         backend->get()->template get<TraditionalBackend>().take_debug_frame()) {
                     dbg->timestamp_ns = frame->timestamp_ns;

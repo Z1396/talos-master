@@ -115,25 +115,15 @@ public:
 
         // 3. 提取就绪槽索引（低2位）
         auto ready_idx = expected & INDEX_MASK;
-
         // 4. 尝试 CAS（Compare-And-Swap）：原子地更新 state
         // 期望值：expected（当前的 state）
         // 目标值：desired = read_idx（清除 FLAG_NEW，保留读索引）
-        // 
-        // compare_exchange_strong 伪代码：
-        // if (state == expected) {
-        //     state = desired;
-        //     return true;
-        // } else {
-        //     expected = state;  // 更新 expected 为当前值
-        //     return false;
-        // }
         if (auto desired = buf_->read_idx; !buf_->state.compare_exchange_strong(
                 expected, desired, 
                 std::memory_order_acq_rel,  // 成功时的内存序：获取-释放
-                std::memory_order_acquire)) {  // 失败时的内存序：获取
+                std::memory_order_acquire)) 
+            {  // 失败时的内存序：获取
             // CAS 失败：生产者可能在同时发布数据
-            
             // 重新检查：是否还有新数据？
             // expected 已被 compare_exchange_strong 更新为当前 state
             if (!(expected & FLAG_NEW)) {

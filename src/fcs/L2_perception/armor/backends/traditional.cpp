@@ -25,10 +25,12 @@ namespace {
         return {};
     }
     std::vector<uint8_t> encoded;
+    // 编码参数：quality 60，平衡清晰度与WebSocket带宽
     std::vector<int> params{cv::IMWRITE_JPEG_QUALITY, 60};
     if (!cv::imencode(".jpg", img, encoded, params)) {
         return {};
     }
+    // 编码成功，返回JPEG字节流
     return encoded;
 }
 
@@ -100,7 +102,7 @@ TraditionalBackend::DetectionResult
     if (input.empty()) {
         return std::unexpected("Empty image passed to traditional backend");
     }
-
+    // 获取传统装甲检测器配置参数
     const auto& cfg = get_config();
 
     // 步骤1：图像预处理，生成二值图，把灯条区域凸显出来
@@ -199,9 +201,12 @@ TraditionalBackend::DetectionResult
 
         // 数字裁剪图：20x28单通道，放大4倍转BGR便于观察，无候选装甲时留空
         if (!best_number_img.empty()) {
-            cv::Mat number_vis;
+            cv::Mat number_vis;// 调试图：数字裁剪图放大4倍，转BGR便于观察
+            // 缩放20x28到80x56，保持数字清晰度
             cv::resize(best_number_img, number_vis, cv::Size(), 4.0, 4.0, cv::INTER_NEAREST);
+            // 转换为BGR格式，方便显示
             cv::cvtColor(number_vis, number_vis, cv::COLOR_GRAY2BGR);
+            // 编码为JPEG，方便Foxglove发布
             dbg.number_jpeg = encode_debug_jpeg(number_vis);
         }
         pending_debug_ = std::move(dbg);

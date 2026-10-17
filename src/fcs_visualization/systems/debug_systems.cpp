@@ -233,12 +233,12 @@ void register_debug_systems(talos::scheduler::Scheduler& app, talos::Scheduler* 
                 if (!server_ptr->is_initialized()) {
                     return;
                 }
-
                 // scheduler_ptr->get_stats_json():调度器内部直接输出完整性能统计json字符串
                 std::string json_str = scheduler_ptr->get_stats_json();
 
                 // PerfStatsMessage：二进制消息，payload存放原始json字节
                 PerfStatsMessage msg;
+                // 转换为字节流，方便Foxglove发布
                 msg.payload = json_to_bytes(json_str);
                 // enqueue_message：底层websocket消息入队，异步发送，不阻塞当前system
                 server_ptr->enqueue_message(std::move(msg));
