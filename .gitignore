@@ -54,3 +54,9 @@ llvm.sh*
 bin
 三方项目代码风格与性能对比分析.md
 Talos与Daedalus系统一体化分析报告.md
+AGENTS.md
+SYSTEM_TOPOLOGY.md
+PROJECT_GUIDE.md
+.gitignore
+DEPLOY.md
+diff.md
