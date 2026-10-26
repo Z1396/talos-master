@@ -269,6 +269,7 @@ public:
      * @return timestamp_ns=0代表无有效数据，返回nullopt
      */
     [[nodiscard]] std::optional<ChassisObservation> recv_chassis_observation() const {
+        // 直接读取全局结构体，无三缓冲
         const auto observation = meta_->chassis_observation;
         if (observation.timestamp_ns == 0) {
             return std::nullopt;

@@ -243,6 +243,22 @@ auto CameraInterface::create_ipc(std::shared_ptr<ipc::ShmClient> client) noexcep
     info.width  = ipc_info.width;
     info.height = ipc_info.height;
 
+    // 兜底：仿真端尚未发布 CameraInfo（UDP type=4）时，共享内存里 width/height 为 0。
+    // Daedalus 模式的图像池尺寸是编译期固定的 IMAGE_WIDTH×IMAGE_HEIGHT，
+    // 这里直接回退到该常量，避免把 0×0 传给下游 Quanta 编码器导致启动失败
+    // （ffmpeg buffersrc 无法解析 video_size="0x0"）。
+    if (info.width == 0 || info.height == 0) {
+        SPDLOG_WARN(
+            "ipc camera_info has empty resolution ({})x({}), fallback to {}x{}",
+            ipc_info.width, ipc_info.height, ipc::IMAGE_WIDTH, ipc::IMAGE_HEIGHT);
+        info.width  = ipc::IMAGE_WIDTH;
+        info.height = ipc::IMAGE_HEIGHT;
+    }
+    // 内参全零说明仿真端还没发过标定参数，PnP 会失效，明确提示而不是静默继续
+    if (ipc_info.fx == 0.0 || ipc_info.fy == 0.0) {
+        SPDLOG_WARN("ipc camera_info intrinsics are zero (fx={}, fy={}); PnP will be invalid", ipc_info.fx, ipc_info.fy);
+    }
+
     // 构造上层相机接口返回
     return CameraInterface(IpcInput(std::move(client), std::move(info)));
 }
