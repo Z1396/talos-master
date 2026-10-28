@@ -245,6 +245,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
     const auto trajectory_cfg = scheduler.world().get_res<L4::L4Config>()->reference_trajectory;
 
     // 步骤2:将L5配置插入资源容器，整个调度器内所有system都可以读取这份L5配置
+    const bool mpc_enabled = config.mpc_weapon.enabled;
     scheduler.world().insert_resource(config);
 
     // 步骤3:创建轨迹优化器实例，使用shared_ptr避免大对象拷贝
@@ -257,7 +258,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
         "enhanced_weapon_control",
         // lambda捕获：系统私有持久状态，仅本system可以访问
         // optimizer：MPC优化器共享指针；trajectory_cfg：弹道参考配置；fire_cfg：开火判定参数
-        [optimizer, trajectory_cfg, fire_cfg = config.fire_decision](
+        [optimizer, trajectory_cfg, fire_cfg = config.fire_decision, mpc_enabled](
             // 输入SPMC通道：接收L4瞄准输出的控制意图
             talos::spmc<fcs::L4::ControlIntent, ControlIntentChannelTopic> intent_in,
             // 全局资源：fast_tf坐标变换缓存，查询云台当前姿态
@@ -283,16 +284,19 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                     // 分支1：TrackCommand 持续跟踪模式（打移动装甲目标主要走这里）
                     // ==============================================
                     [&](const L4::TrackCommand& cmd) {
-                        // 步骤1：调用MPC轨迹优化器，对运动目标做预测弹道求解
-                        // 返回std::expected，成功拿到WeaponCommand；失败携带错误信息
-                        auto opt = optimizer->optimize(cmd, now);
-                        // MPC优化成功就用优化结果；失败调用track_fallback降级兜底方案
-                        WeaponCommand wc = opt ? *opt : track_fallback(cmd, now);
-
-                        // 步骤2：记录降级原因，MPC求解失败时打印警告日志，方便调试Foxglove看报错
-                        if (!opt) {
-                            wc.degradation_reason = opt.error();
-                            SPDLOG_WARN("MPC optimization failed: {}", opt.error());
+                        // 步骤1：生成武器指令。
+                        // Daedalus 联调优先保证指令率稳定：mpc_weapon.enabled=false 时跳过 MPC，
+                        // 直接使用 L4 参考轨迹中心点，避免 MPC 偶发长阻塞（统计里见过 388ms）。
+                        WeaponCommand wc;
+                        if (mpc_enabled) {
+                            auto opt = optimizer->optimize(cmd, now);
+                            wc = opt ? *opt : track_fallback(cmd, now);
+                            if (!opt) {
+                                wc.degradation_reason = opt.error();
+                                SPDLOG_WARN("MPC optimization failed: {}", opt.error());
+                            }
+                        } else {
+                            wc = track_fallback(cmd, now);
                         }
 
                         // 步骤3：查询当前真实云台姿态（从fast_tf插值获取）

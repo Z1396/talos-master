@@ -25,3 +25,7 @@ target_link_libraries(talos_ipc_bridge PRIVATE
     magic_enum
     pthread
 )
+
+# 注意：tests/ 下的 *_test.cpp 由 crate() 的 _crate_add_tests() 自动扫描并
+# 创建同名可执行目标 + CTest 条目（见 cmake/crate-utils.cmake），
+# 因此这里不再显式 add_executable/add_test，避免目标重名导致 CMake 配置失败。

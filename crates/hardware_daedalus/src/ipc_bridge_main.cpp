@@ -11,8 +11,8 @@
 // 落地方式：以生产者模式 ShmClient::create() 创建 /tmp 共享内存，
 // 把收到的数据 publish 进去；Talos 主程序零改动，仍 ShmClient::connect() 消费。
 //
-// 时域统一：所有数据（含图像）的 timestamp_ns 在接收时改写为 NUC 本机时钟，
-// 避免跨机时钟不同步污染 fast_tf 时序缓冲（无需 NTP 对时）。
+// 时域统一：图像与其配套 TF 位姿各自写为同一个 NUC 接收时刻，避免跨机时钟
+// 不同步污染 fast_tf 时序缓冲（无需 NTP 对时）。配对只认 frame_seq，不认到达顺序。
 //
 // 启动顺序：先启动本桥（创建共享内存），再启动 talos 主程序。
 //
@@ -22,6 +22,7 @@
 // 项目头文件：共享内存客户端（create/publish 接口）与网络线协议定义
 #include "shm_client.hpp"
 #include "net_protocol.hpp"
+#include "frame_synchronizer.hpp"
 
 // Linux 网络套接字：UDP/TCP 收发
 #include <arpa/inet.h>
@@ -73,6 +74,20 @@ uint64_t bridge_now_ns() {
                                      .count());
 }
 
+ShmClient::Pose to_shm_pose(const PoseMeta& pm, const uint64_t timestamp_ns) {
+    return ShmClient::Pose{
+        .x            = pm.position[0],
+        .y            = pm.position[1],
+        .z            = pm.position[2],
+        .qw           = pm.quaternion[0],
+        .qx           = pm.quaternion[1],
+        .qy           = pm.quaternion[2],
+        .qz           = pm.quaternion[3],
+        .frame_seq    = pm.frame_seq,
+        .timestamp_ns = timestamp_ns,
+    };
+}
+
 // TCP 精确接收 n 字节（处理内核部分送达），对端断开返回 false
 bool recv_exact(int fd, void* buf, size_t n) {
     auto* p = static_cast<uint8_t*>(buf);
@@ -103,7 +118,7 @@ bool recv_exact(int fd, void* buf, size_t n) {
  * @brief 循环接收仿真发来的小数据包，解析后落地到共享内存
  * 每收到一包都记录发送方地址（云台指令回传的目标）
  */
-void udp_recv_loop(ShmClient& client, int udp_fd) {
+void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync) {
     // 接收缓冲区：包头 + 最大载荷（真值批量1664B），2048字节富余
     uint8_t buf[sizeof(PacketHeader) + NET_MAX_PAYLOAD];
     sockaddr_in src{};
@@ -150,18 +165,22 @@ void udp_recv_loop(ShmClient& client, int udp_fd) {
             }
             PoseMeta pm{};
             std::memcpy(&pm, payload, sizeof(pm));
-            const ShmClient::Pose pose{
-                .x            = pm.position[0],
-                .y            = pm.position[1],
-                .z            = pm.position[2],
-                .qw           = pm.quaternion[0],
-                .qx           = pm.quaternion[1],
-                .qy           = pm.quaternion[2],
-                .qz           = pm.quaternion[3],
-                .frame_seq    = pm.frame_seq,
-                .timestamp_ns = bridge_now_ns(),
-            };
-            client.publish_pose(static_cast<PoseIndex>(header.index), pose);
+            // 0-3 是 TF 四路，4 是底盘观测兼容通道
+            // 其他通道（如相机/枪口）直接发布，不参与四路配对
+            if (header.index < FrameSynchronizer::kPoseCount) {
+                // TF 四路只入缓存；收到同 seq 图像时再成组发布，禁止“最新位姿配旧图像”。
+                frame_sync.push_pose(pm, header.index);
+            } else {
+                // 第 4 槽是底盘观测兼容通道，不参与相机/枪口 TF 配对。
+                client.publish_pose(
+                    static_cast<PoseIndex>(header.index), to_shm_pose(pm, bridge_now_ns()));
+            }
+            break;
+        }
+        case PacketType::ImageSync: {
+            if (got_len == IMAGE_SYNC_PAYLOAD_SIZE) {
+                frame_sync.notify_image_sync();
+            }
             break;
         }
         case PacketType::ChassisObserv: {
@@ -219,7 +238,7 @@ void udp_recv_loop(ShmClient& client, int udp_fd) {
  * @brief 循环接受仿真图像连接，按"40字节帧头+JPEG数据"分帧接收，
  *        解码后写入共享内存图像池（分辨率必须等于 IMAGE_WIDTH×IMAGE_HEIGHT）
  */
-void tcp_image_loop(ShmClient& client, uint16_t image_port) {
+void tcp_image_loop(ShmClient& client, uint16_t image_port, FrameSynchronizer& frame_sync) {
     // 创建 TCP 监听套接字
     // AF_INET: IPv4 协议族
     // SOCK_STREAM: 流式套接字，用于可靠的连接
@@ -332,8 +351,27 @@ void tcp_image_loop(ShmClient& client, uint16_t image_port) {
                 continue;
             }
 
-            // 6. 写入共享内存图像池，时间戳改写为 NUC 时钟
-            client.publish_image(mat, fh.seq, bridge_now_ns());
+            // 6. 只取与图像 seq 完全相同的四路 TF 位姿。UDP 偶发丢失时短暂等待；
+            // 仍不齐则丢帧，绝不借用相邻帧姿态（云台转动时那会变成假目标运动）。
+            const auto poses = frame_sync.wait_for_bundle(fh.seq, std::chrono::milliseconds(20));
+            if (!poses) {
+                ++drop_count;
+                if (drop_count % 100 == 1) {
+                    std::printf(
+                        "[bridge] image seq %llu missing matched poses (dropped %llu)\n",
+                        static_cast<unsigned long long>(fh.seq),
+                        static_cast<unsigned long long>(drop_count));
+                }
+                continue;
+            }
+
+            // 同一组数据共享一个 NUC 接收时刻，并严格先位姿、后图像提交。
+            // 图像元数据是消费者可见的提交标记，因此 Talos 读到图像时配套 TF 已就绪。
+            const uint64_t timestamp_ns = bridge_now_ns();
+            for (size_t i = 0; i < FrameSynchronizer::kPoseCount; ++i) {
+                client.publish_pose(static_cast<PoseIndex>(i), to_shm_pose((*poses)[i], timestamp_ns));
+            }
+            client.publish_image(mat, fh.seq, timestamp_ns);
             ++frame_count;
             // 7. 打印统计信息
             // 每 300 帧打印一次，避免输出过快
@@ -411,6 +449,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     ShmClient& client = *client_result;
+    FrameSynchronizer frame_sync; // UDP 位姿缓存 ↔ TCP 图像按 frame_seq 配对
     // 打印创建的共享内存文件名，方便调试
     std::printf("[bridge] shm created: %s + %s\n", SHM_NAME_META, SHM_NAME_IMAGE_POOL);
 
@@ -460,9 +499,9 @@ int main(int argc, char* argv[]) {
     > 重点：fd 只是一个数字，进程内所有线程共用同一个 socket，多个线程使用同一个 fd 是允许的（注意并发读写 socket 的竞争问题）。*/
     // udp_thread: UDP 接收线程，负责处理控制端口的 UDP 数据包，然后将数据写入共享内存
     //client: 共享引用 client 实例，避免复制构造函数,由create()函数创建一个路径然后打开共享内存文件然后设置好文件大小映射到进程内存空间
-    std::thread udp_thread(udp_recv_loop, std::ref(client), udp_fd);
+    std::thread udp_thread(udp_recv_loop, std::ref(client), udp_fd, std::ref(frame_sync));
     // tcp_thread: TCP 接收线程，负责处理图像端口的 TCP 数据流，然后将数据写入共享内存
-    std::thread tcp_thread(tcp_image_loop, std::ref(client), image_port);
+    std::thread tcp_thread(tcp_image_loop, std::ref(client), image_port, std::ref(frame_sync));
 
     // 4. 主循环 200Hz：心跳保活 + 云台指令轮询回传
     while (true) {

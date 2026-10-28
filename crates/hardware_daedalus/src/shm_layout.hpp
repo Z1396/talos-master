@@ -70,7 +70,7 @@ struct alignas(64) PoseMeta {
     uint64_t frame_seq;  // 绑定对应图像帧序号，用于时序对齐
     float position[3];   // 三维平移 x,y,z 单位米
     float quaternion[4]; // 单位四元数 w,x,y,z 旋转
-    uint64_t timestamp_ns;
+    uint64_t timestamp_ns; // 位姿采集纳秒时间戳
     uint8_t _pad[16];    // 填充补齐至64字节
 };
 static_assert(sizeof(PoseMeta) == 64, "PoseMeta must be 64 bytes");
@@ -80,7 +80,7 @@ static_assert(sizeof(PoseMeta) == 64, "PoseMeta must be 64 bytes");
  * 下发给云台电机的目标角度、距离、开火建议
  */
 struct alignas(32) GimbalCmd {
-    uint64_t timestamp_ns;
+    uint64_t timestamp_ns; // 云台指令发送纳秒时间戳
     float yaw_deg;       // 目标云台偏航角 度
     float pitch_deg;     // 目标云台俯仰角 度
     float distance_m;    // 目标直线距离，-1代表无有效目标

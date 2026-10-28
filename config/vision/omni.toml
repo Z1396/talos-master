@@ -1,17 +1,17 @@
 backend_type = "Axera"
 capabilities = ["Armor"]
 
-tracker.robot.tracking_threshold = 2
-tracker.robot.lost_threshold = 1.0
+tracker.robot.tracking_threshold = 2  # 视觉跟踪阈值，单位为像素
+tracker.robot.lost_threshold = 1.0  # 视觉丢失阈值，单位为像素
 
-fire_decision.fire_thresh = 6.28
-fire_decision.shooting_range_h = 10.0
-fire_decision.shooting_range_w_small = 10.0
-fire_decision.shooting_range_w_large = 10.0
+fire_decision.fire_thresh = 6.28  # 发射阈值，单位为弧度制
+fire_decision.shooting_range_h = 10.0  # 射击范围高度，单位为像素
+fire_decision.shooting_range_w_small = 10.0  # 射击范围宽度小，单位为像素
+fire_decision.shooting_range_w_large = 10.0  # 射击范围宽度大，单位为像素
 
-aimer.delay = 0.0
+aimer.delay = 0.0  # 自动瞄准延迟，单位为秒
 
-trajectory.type = "Ideal"
-trajectory.gravity = 0.0
+trajectory.type = "Ideal"  # 轨迹类型，可选值为 "Ideal" 或 "Real"
+trajectory.gravity = 0.0  # 重力加速度，单位为 m/s^2
 
-mpc_weapon.enabled = false
+mpc_weapon.enabled = false  # 是否启用 MPC 武器控制
