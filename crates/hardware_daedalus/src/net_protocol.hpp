@@ -16,7 +16,9 @@
 //
 // 结构体载荷直接复用 shm_layout.hpp 的内存布局（双方均 x86/ARM 小端，
 // 直接 memcpy 结构体字节，不做网络字节序转换）；
-// 所有 timestamp_ns 由桥接收时改写为 NUC 本机时钟，统一时域（替代 NTP 对时）
+// 时间戳统一改写为 NUC 本机时钟，统一时域（替代 NTP 对时）。
+// 注意：图像 TCP 帧与位姿 UDP 帧都可能跳帧/乱序，最终发布必须按 frame_seq
+// 配对，禁止把“最新位姿”配到“旧图像”。IMAGE_SYNC 只是图像发送提示。
 // ============================================================================
 
 // 定长整型
@@ -48,7 +50,11 @@ enum class PacketType : uint8_t {
     Heartbeat     = 6, // 心跳（payload=0B，仅保活/记录仿真地址）
     GimbalCmd     = 7, // 云台指令回传（payload=GimbalCmd 32B，桥→仿真方向）
     ImageJpeg     = 8, // JPEG 图像（仅 TCP 通道，帧头见 ImageFrameHeader）
+    ImageSync     = 9, // 图像同步提示（UDP，payload=frame_seq:u64 + timestamp_ns:u64）
 };
+
+// 图像同步提示包载荷大小（frame_seq + timestamp_ns）
+static constexpr size_t IMAGE_SYNC_PAYLOAD_SIZE = 2 * sizeof(uint64_t);
 
 // ====================== UDP 控制包头 ======================
 /**

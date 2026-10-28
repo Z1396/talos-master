@@ -267,7 +267,7 @@ yaw_log_k = 0.0005 # 装甲距离噪声系数
 # ============================================================================
 # [aimer] 自瞄有限状态机、目标打分选择器
 [aimer]  # ◈ 表19·L4自瞄·延迟补偿与FSM状态机阈值
-delay = 0.0  # 全链路系统延迟补偿(秒)：曝光+图像处理+通信+云台响应补偿
+delay = 0.20  # 全链路系统延迟补偿(秒)：曝光+图像处理+通信+云台响应补偿
 
 # 四状态自瞄FSM切换阈值（单灯→成对灯→完整装甲状态切换）
 single_whole_up = 1.5 # 单灯上阈值
@@ -338,21 +338,22 @@ rho = 1.225          # 空气密度 kg/m³
 # ============================================================================
 # [fire_decision] 开火判断逻辑
 [fire_decision]  # ◈ 表26·L5开火判断·误差阈值与射击窗口尺寸
-fire_thresh = 0.008444444  # 预测弹着点与目标误差阈值(rad)，小于允许开火相当于0.008444444弧度误差=0.5°
+fire_thresh = 0.0274533  # 预测弹着点与目标误差阈值(rad)，小于允许开火相当于0.0274533弧度误差=2.0°
 # 物理射击窗口尺寸（米）
-shooting_range_h = 0.32     # 射击窗口高度（原参0.12m）
-shooting_range_w_small = 0.42 # 射击窗口宽度（原参0.12m）
-shooting_range_w_large = 0.44 # 射击窗口宽度（原参0.24m）
+shooting_range_h = 0.15     # 射击窗口高度（原参0.15m）
+shooting_range_w_small = 0.15 # 射击窗口宽度（原参0.15m）
+shooting_range_w_large = 0.28 # 射击窗口宽度（原参0.28m）
 
 # MPC模型预测控制器总开关
 [mpc_weapon]  # ◈ 表27·L5 MPC云台控制·总开关/调试/俯仰限位
-enabled = true # 开启MPC控制器开关
-enable_debug = true                # 输出MPC调试日志
+enabled = false # 开启MPC控制器开关
+enable_debug = false                # 输出MPC调试日志
 reference_age_threshold_s = 0.5   # 轨迹参考数据0.5s过期作废
 
 # 云台俯仰机械限位(弧度) ±40°
-pitch_min = -0.69813169  # -40deg
-pitch_max = 0.69813169   # 40deg
+pitch_min = -1.047198  # -60deg
+pitch_max = 1.047198   # 60deg
+
 
 # MPC求解器核心参数
 [mpc_weapon.mpc]  # ◈ 表28·L5 MPC求解器（迭代次数/收敛容差）
