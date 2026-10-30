@@ -341,6 +341,7 @@ public:
         const auto& newest = at_logical(size_ - 1);
 
         // ========== 处理查询时间超出缓冲区区间 ==========
+        // 除了clamped（夹紧插值）模式，其他模式超出区间报错
         if constexpr (std::same_as<Mode, clamped_t>) {
             // clamped模式：截断，超出直接返回首尾样本，不报错，不做外推
             if (ts < oldest.timestamp) {
@@ -369,13 +370,15 @@ public:
 
         // 线性查找小于等于ts的最大时间戳样本下标（floor下界）
         const std::size_t lower_idx = find_floor_from_latest(ts);
+        // 获取小于等于ts的最大时间戳样本
+        // 不存在时，返回最新样本（floor下界）
         const auto& lower           = at_logical(lower_idx);
         // 精确匹配时间戳，直接返回
         if (lower.timestamp == ts) {
             return materialize(lower);
         }
 
-        // ========== 按不同模式分支处理 ==========
+        // ========== 按不同模式分支处理 exact_t（精确匹配模式） ==========
         if constexpr (std::same_as<Mode, exact_t>) {
             // exact模式无完全匹配直接报错
             return std::unexpected(
@@ -383,7 +386,9 @@ public:
                     "Buffer::lookup({}ns, exact): no exact match, "
                     "nearest floor={}ns, buffer range=[{}, {}]",
                     ts, lower.timestamp, oldest.timestamp, newest.timestamp));
-        } else if constexpr (std::same_as<Mode, nearest_t>) {
+        } 
+        // ========== 按不同模式分支处理 nearest_t（就近模式） ==========
+        else if constexpr (std::same_as<Mode, nearest_t>) {
             // nearest就近模式：比较前后两个样本时间差，返回更近的
             if (lower_idx + 1 >= size_) {
                 // 下界已是最后一个样本，无下一个，直接返回
@@ -399,7 +404,8 @@ public:
             const auto prev_delta = ts - lower.timestamp;
             const auto next_delta = next.timestamp - ts;
             return materialize(prev_delta <= next_delta ? lower : next);
-        } else {
+        } 
+        else {
             // interpolate线性插值模式
             if (lower.timestamp > ts) {
                 return materialize(oldest);
@@ -407,7 +413,7 @@ public:
             if (lower_idx + 1 >= size_) {
                 return materialize(lower);
             }
-
+            // 获取下一个样本
             const auto& next = at_logical(lower_idx + 1);
             const auto dt    = next.timestamp - lower.timestamp;
             // 两个样本时间戳完全相同，直接取下界，避免除以0

@@ -34,9 +34,8 @@ auto IpcInput::try_recv() const noexcept -> std::optional<Frame> {
         // 没有新图像，返回空
         return std::nullopt;
     }
-
     // 关键注释解读：
-    // 共享内存里的image是依附recv出来的临时对象的引用
+    // 共享内存里的image是依附recv出来的临时对象的引用离开try_recv后就被销毁
     // 外部Frame生命周期更长，如果直接引用会悬垂引用，必须拷贝图像
     // clone() 完整拷贝Mat内存，分配独立内存，安全持久持有图像
     cv::Mat copied = result->image.clone();
@@ -66,7 +65,7 @@ auto IpcInput::recv(const std::chrono::milliseconds timeout) const noexcept
     // 在超时时间内循环轮询
     while (clock::now() < deadline) {
         if (auto frame = try_recv()) {
-            // 读到图像直接返回
+            // 读到图像直接返回该帧的Frame（和expect一样*表示引用内部数据，因为可能为空nullopt）
             return *frame;
         }
         // 没帧休眠1ms让出CPU，避免忙等占满CPU

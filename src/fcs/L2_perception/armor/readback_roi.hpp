@@ -62,10 +62,12 @@ public:
     /**
      * @brief 拷贝构造：加锁读取源对象快照
      */
+    // TrackerReadbackCache 是一个多线程安全的缓存类，用于存储和读取跟踪器数据快照
     TrackerReadbackCache(const TrackerReadbackCache& other) noexcept {
-        std::scoped_lock lock(other.mutex_);
-        snapshot_ = other.snapshot_;
-    }
+        /*`std::scoped_lock`（C++17，头文件 `<mutex>`）是 **RAII 锁封装器**，主打：**一次锁住多个互斥量、自动防死锁、出作用域自动解锁，不能手动解锁**。*/
+        std::scoped_lock lock(other.mutex_);   // 读取时加锁，确保线程安全
+        snapshot_ = other.snapshot_;               // 深拷贝源对象快照
+       }
 
     /**
      * @brief 拷贝赋值：双锁保护，防止并发读写
@@ -74,16 +76,18 @@ public:
         if (this == &other) {
             return *this;
         }
-        std::scoped_lock lock(mutex_, other.mutex_);
-        snapshot_ = other.snapshot_;
+        // 深拷贝源对象快照前，先加锁确保线程安全
+        std::scoped_lock lock(mutex_, other.mutex_);   // 写入时加锁，确保线程安全
+        snapshot_ = other.snapshot_;               // 深拷贝源对象快照
         return *this;
     }
 
     /**
      * @brief 移动构造：加锁读取源数据
      */
+    // TrackerReadbackCache 是一个多线程安全的缓存类，用于存储和读取跟踪器数据快照
     TrackerReadbackCache(TrackerReadbackCache&& other) noexcept {
-        std::scoped_lock lock(other.mutex_);
+        std::scoped_lock lock(other.mutex_);   // 移动时加锁，确保线程安全
         snapshot_ = other.snapshot_;
     }
 

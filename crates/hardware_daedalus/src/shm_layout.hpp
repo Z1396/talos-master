@@ -98,8 +98,8 @@ struct alignas(64) CameraInfo {
     double fx, fy;        // 相机焦距
     double cx, cy;        // 图像主点(光心)
     double distortion[5]; // 径向切向畸变 k1 k2 p1 p2 k3
-    uint32_t width;
-    uint32_t height;
+    uint32_t width;        // 实际图像宽
+    uint32_t height;       // 实际图像高
     uint8_t _pad[24];     // 填充补齐128字节
 };
 static_assert(sizeof(CameraInfo) == 128, "CameraInfo must be 128 bytes");
@@ -111,7 +111,7 @@ static_assert(sizeof(CameraInfo) == 128, "CameraInfo must be 128 bytes");
 struct alignas(64) ChassisObservation {
     uint64_t frame_seq;
     uint64_t timestamp_ns;
-    float dt_s;                      // 帧间隔时间
+    float dt_s;                   // 帧间隔时间
     float v_body[2];              // 底盘坐标系xy线速度
     float wz_radps;               // 底盘自转角速度
     float wheel_linear_mps[4];    // 四轮线速度 [左前、右前、左后、右后]
@@ -179,13 +179,13 @@ static_assert(sizeof(GroundTruthRune) == 128, "GroundTruthRune must be 128 bytes
  * 包含所有敌方机器人+能量机关列表
  */
 struct alignas(64) GroundTruthBatch {
-    uint64_t frame_seq;
-    uint64_t timestamp_ns;
+    uint64_t frame_seq;      // 帧序号
+    uint64_t timestamp_ns;   // 帧时间戳纳秒
     uint32_t target_count; // 有效机器人数量
     uint32_t rune_count;   // 有效能量机关数量
     GroundTruthTarget targets[GROUND_TRUTH_MAX_TARGETS]; // 机器人数组
     GroundTruthRune runes[GROUND_TRUTH_MAX_RUNES];       // 能量机关数组
-    uint8_t _pad[64];      // 尾部填充对齐
+    uint8_t _pad[64];      // 尾部填充对齐64字节
 };
 static_assert(sizeof(GroundTruthBatch) == 1664, "GroundTruthBatch must be 1664 bytes");
 
@@ -260,7 +260,7 @@ struct alignas(CACHE_LINE_SIZE) ShmHeader {
     uint64_t created_ns;   // 共享内存创建时间戳
     uint64_t heartbeat_ns; // 生产者心跳，消费者判断进程是否存活
     uint32_t image_width;  // 全局图像分辨率
-    uint32_t image_height;
+    uint32_t image_height; // 全局图像高度
     uint8_t _pad[32];      // 填充至64字节缓存行
 };
 static_assert(sizeof(ShmHeader) == 64, "ShmHeader must be 64 bytes");

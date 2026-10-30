@@ -620,7 +620,7 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                 return;
             }
 
-            // 取出查询到的静态变换矩阵
+            // 取出查询到的静态变换矩阵expect可以用.value()获取，确保有值
             auto T_odom_camera = tf_lookup.value();
             // 判断是否开启跟踪引导ROI裁剪功能
             /*作用机制

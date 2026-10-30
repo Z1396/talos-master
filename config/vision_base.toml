@@ -4,9 +4,9 @@
 # OnnxRuntime：通用CPU/GPU ONNX推理，跨平台通用
 # TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
 # Axera：爱芯AX650嵌入式NPU专用模型推理
-backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
+backend_type = "OnnxRuntime"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
 detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
-capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、LDM大符、Rune小符、Energy能量机关
+capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、Rune大符、Ldm小符、Quanta  (Foxglove高速视频流可视化推流)
 
 # ====================== [quanta_filter] 图像预处理流水线 ======================
 # 相机原图预处理模块：降噪、锐化、饱和度、轮廓增强、量化压缩
@@ -31,11 +31,11 @@ sharpen3_luma = 0                  # 三级亮度锐化强度
 
 # 三级色度锐化，强化红蓝装甲色彩边缘
 enable_sharpen1_chroma = true
-sharpen1_chroma = 2.0
+sharpen1_chroma = 2.0                # 一级色度锐化强度
 enable_sharpen2_chroma = true
-sharpen2_chroma = 0.0
+sharpen2_chroma = 0.0                # 二级色度锐化强度
 enable_sharpen3_chroma = true
-sharpen3_chroma = 0.0
+sharpen3_chroma = 0.0                # 三级色度锐化强度
 
 enable_luma_quantization = false   # 亮度通道量化压缩（降低色阶，减少算力，嵌入式用）
 luma_levels = 16                   # 量化后亮度分级
@@ -53,9 +53,9 @@ qp_edge_delta = 0                  # 边缘区域编码QP偏移（边缘更清�
 qp_interior_delta = 16             # 平坦区域QP偏移（省带宽）
 
 enable_psy_rd = true               # 人眼视觉优化：主观率失真优化
-psy_rd = 0.0
+psy_rd = 0.0                        # 人眼视觉优化：主观率失真优化系数
 enable_psy_trellis = true          # 码率控制Trellis优化，提升画质
-psy_trellis = 0.0
+psy_trellis = 0.0                   # 码率控制Trellis优化系数
 
 # 亮度通道高斯降噪子配置
 [quanta_filter.denoise_luma]        # ◈ 表02·预处理子表·亮度通道高斯降噪参数
@@ -249,7 +249,7 @@ height = 0.05     # IMU安装高度
 [tracker.outpost]  # ◈ 表17·前哨站跟踪器·匹配门限与状态机
 matcher_gate = 9.0   # 马氏距离门限，超过则不匹配当前观测
 lost_threshold = 1.0 # 丢失超时(s)，超时释放跟踪
-tracking_threshold = 4 # 连续4帧匹配成功进入稳定跟踪状态
+tracking_threshold = 3 # 连续3帧匹配成功进入稳定跟踪状态
 
 [tracker.outpost.model]  # ◈ 表18·前哨站跟踪·卡尔曼噪声参数
 sigma_q_xy = 8.0   # XY平面过程噪声
@@ -322,7 +322,7 @@ dt = 0.01             # 轨迹步长0.01s
 
 # ====================== [trajectory] 弹道物理模型 ======================
 [trajectory]  # ◈ 表25·弹道物理模型（阻力类型/重力/弹丸参数）
-type = "LinearDrag"  # 弹道模型：线性空气阻力模型
+type = "LinearDrag"  # 弹道模型：线性空气阻力模型(LinearDrag)/非线性空气阻力模型(Ideal)
 
 iteration_times = 10 # 迭代求解次数，迭代修正重力下坠
 gravity = 9.7997     # 本地重力加速度

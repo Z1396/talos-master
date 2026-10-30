@@ -55,8 +55,8 @@ namespace { // 匿名命名空间，内部工具仅当前编译单元可见
  */
 template <fast_tf::frame From, fast_tf::frame To>
 [[nodiscard]] auto capture_control_transform_snapshot(
-    const fast_tf::CoordinateSystem& tf_buffer, uint64_t timestamp_ns)
-    -> core::ControlTransformSnapshot {
+    const fast_tf::CoordinateSystem& tf_buffer, 
+    uint64_t timestamp_ns) -> core::ControlTransformSnapshot {
     // 初始化空快照，默认present=false（变换无效）
     core::ControlTransformSnapshot snapshot;
     // 时间钳位查找变换：找不到返回std::nullopt
@@ -88,17 +88,20 @@ template <fast_tf::frame From, fast_tf::frame To>
  */
 void publish_control_snapshot(
     talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
-    const fast_tf::CoordinateSystem& tf_buffer, const core::ImuState& imu_state,
-    ArmorColor detecting_color, double bullet_speed_raw, double bullet_speed,
+    const fast_tf::CoordinateSystem& tf_buffer, 
+    const core::ImuState& imu_state,
+    ArmorColor detecting_color, 
+    double bullet_speed_raw, 
+    double bullet_speed,
     uint64_t sample_timestamp_ns) {
     // 聚合初始化完整控制快照，一次性写入通道
     control_out.write(
         core::ControlResourceSnapshot{
-            .sample_timestamp_ns = sample_timestamp_ns, // 采样时间戳
+            .sample_timestamp_ns = sample_timestamp_ns,  // 采样时间戳
             .imu                 = imu_state,            // IMU姿态、角速度
             .detecting_color     = detecting_color,      // 目标装甲颜色
             .bullet_speed_raw    = bullet_speed_raw,     // MCU原始弹速
-            .bullet_speed        = bullet_speed,          // 限幅后可用弹速
+            .bullet_speed        = bullet_speed,         // 限幅后可用弹速
             // 底盘odom -> 云台俯仰轴变换
             .odom_to_gimbal_pitch =
                 capture_control_transform_snapshot<fast_tf::odom, fast_tf::gimbal_pitch_fuxk_frame>(
@@ -223,7 +226,6 @@ struct DaedalusImu {
      * @brief Talos ECS系统入口函数，调度器固定周期调用
      * 所有带 _mut 后缀都是资源/通道访问器：res_mut<> 代表读写访问world资源；spmc_mut<>代表写SPMC通道
      * noexcept：函数承诺不会抛出C++异常
-     *
      * @param tf_buffer 姿态变换树资源，读写，更新各个坐标系之间位姿
      * @param bullet_speed 子弹速度全局资源，[[maybe_unused]]标记参数暂时没使用，消除编译器“未使用参数”警告
      * @param detecting_color 识别颜色配置资源
@@ -233,29 +235,28 @@ struct DaedalusImu {
      * @param gt_out SPMC写端点：输出GroundTruth仿真真值数据包通道
      */
     void system(
-        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
-        [[maybe_unused]] core::trajectory::bullet_speed_mut bullet_speed,
-        [[maybe_unused]] core::detecting_color_mut detecting_color, 
-        core::following_mut following,
-        [[maybe_unused]] core::imu_state_mut imu_state,
-        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
-        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept
+        talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,               // 姿态变换树资源，读写，更新各个坐标系之间位姿
+        [[maybe_unused]] core::trajectory::bullet_speed_mut bullet_speed,  // 子弹速度全局资源，[[maybe_unused]]标记参数暂时没使用，消除编译器“未使用参数”警告
+        [[maybe_unused]] core::detecting_color_mut detecting_color,         // 识别颜色配置资源
+        core::following_mut following,                                     // 自动跟随开关（原子布尔）
+        [[maybe_unused]] core::imu_state_mut imu_state,                     // IMU状态全局资源，仿真中直接从仿真位姿解算roll/pitch/yaw填入
+        talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out, // SPMC写端点：输出控制快照快照通道
+        talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out // SPMC写端点：输出GroundTruth仿真真值数据包通道
+    ) noexcept
     {
         // 标记：本调度周期是否读到有效的位姿更新
         bool control_updated           = false;
         // 记录本周期最新的位姿时间戳（纳秒）
         uint64_t control_timestamp_ns  = 0;
-
         /**
          * 局部捕获lambda：一旦读到任意一个连杆位姿，就调用这个lambda
          * 标记control_updated=true，同时保存最大时间戳；多个不同连杆可能时间戳不一样，取std::max最新时间
          * [&] 引用捕获：全部外部变量按引用访问
          */
         const auto note_control_update = [&](uint64_t timestamp_ns) {
-            control_updated      = true;
-            control_timestamp_ns = std::max(control_timestamp_ns, timestamp_ns);
+            control_updated      = true;            // 标记有新的位姿更新
+            control_timestamp_ns = std::max(control_timestamp_ns, timestamp_ns); // 更新最大时间戳
         };
-
         // ==============================================
         // 1、读取云台(gimbal)仿真位姿，更新TF树 + 填充IMU欧拉角
         // ipc_device->recv_pose()：从共享内存读取指定类型位姿；返回std::optional<>，没有新数据就std::nullopt
@@ -296,7 +297,6 @@ struct DaedalusImu {
             // 标记本周期有位姿更新，记录时间戳
             note_control_update(pose->timestamp_ns);
         }
-
         // ==============================================
         // 2、读取底盘odom坐标系位姿（只有平移，旋转由云台承担）更新TF树
         // ==============================================
@@ -307,7 +307,6 @@ struct DaedalusImu {
                 pose->timestamp_ns);
             note_control_update(pose->timestamp_ns);
         }
-
         // ==============================================
         // 3、相机连杆位姿，更新TF树；视觉模块依赖这个坐标系做PnP、3D解算
         // ==============================================
@@ -319,7 +318,6 @@ struct DaedalusImu {
                 pose->timestamp_ns);
             note_control_update(pose->timestamp_ns);
         }
-
         // ==============================================
         // 4、枪口muzzle连杆完整位姿，弹道解算核心输入！炮口的位置姿态
         // ==============================================
@@ -337,7 +335,6 @@ struct DaedalusImu {
         if (const auto obs = ipc_device->recv_chassis_observation()) {
             // TODO：底盘速度、碰撞检测扩展
         }
-
         // ==============================================
         // 读取仿真运行时状态：自动跟随开关 following
         // following 是原子资源，load()读、store()写，多线程安全
@@ -352,7 +349,6 @@ struct DaedalusImu {
                 SPDLOG_INFO("daedalus following changed: {}", next_following);
             }
         }
-
         // ==============================================
         // 接收仿真GroundTruth真值包，写入SPMC通道供录制/调试使用
         // last_gt_timestamp_ns做去重：同一时间戳数据包不重复写通道，防止重复消费
@@ -363,7 +359,6 @@ struct DaedalusImu {
                 gt_out.write(*gt); // spmc_mut写端点，把真值包写入SPMC通道
             }
         }
-
         // ==============================================
         // 如果本周期读到任意有效位姿更新：发布一份完整控制快照到SPMC通道
         // 下游瞄准、录制模块消费control_out通道的数据
@@ -763,8 +758,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 talos::res_mut<fast_tf::CoordinateSystem> tf_buffer,
                 // 弹道相关资源：弹速、敌方颜色、云台能力、跟随状态、IMU状态
                 core::trajectory::bullet_speed_mut bullet_speed,
-                core::detecting_color_mut detecting_color, core::capabilities_mut capabilities,
-                core::following_mut following, core::imu_state_mut imu_state,
+                core::detecting_color_mut detecting_color, 
+                core::capabilities_mut capabilities,
+                core::following_mut following, 
+                core::imu_state_mut imu_state,
                 // spmc_mut：SPMC通道可变写入端 → 输出控制快照、真值数据（给Foxglove可视化/上层）
                 talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out,
                 talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) {
@@ -785,8 +782,8 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     scheduler.add_system<talos::fixed_rate<250, 1>>(
         "camera_reader",
         // 转移camera所有权、last_seq原子计数器到lambda
-        [camera = std::move(camera),
-          last_seq](talos::spmc_mut<ImageFrame, ImageChannelTopic> cam_out) {
+        [camera = std::move(camera), last_seq]
+        (talos::spmc_mut<ImageFrame, ImageChannelTopic> cam_out) {
             using namespace std::chrono_literals;
             // 阻塞读取图像帧，最长阻塞1s超时
             const auto frame = camera->recv(1s);
@@ -795,7 +792,6 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 SPDLOG_ERROR("read camera: {}", frame.error());
                 return;
             }
-
             // 取出当前帧号
             const auto seq  = frame->seq;
             // 无锁原子加载上一帧序号，relaxed内存序（纯统计，不需要同步）
@@ -810,7 +806,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
             // 提取图像，打包成ImageFrame写入SPMC通道，发给L2识别、Foxglove可视化
             auto img = frame->image;
             cam_out.write(fcs::ImageFrame{std::move(img), frame->timestamp_ns, seq});
-        });
+    });
 
 
 
