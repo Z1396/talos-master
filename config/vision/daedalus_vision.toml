@@ -8,14 +8,14 @@
 # vision_base.toml 默认窗口偏大（0.32m/0.42m），5m 目标容差约 2.4°，容易边缘开火。
 # 这里按“装甲板中心命中”口径收紧，提高单发精度；若射频过低再往 0.16m 放松。
 # ============================================================================
-fire_decision.fire_thresh = 0.0204533           # ~0.17° 角度下限，防止远距离容差过小
-fire_decision.shooting_range_h = 0.13         # 射击窗口高度（米）
-fire_decision.shooting_range_w_small = 0.13  # 小装甲板射击窗口宽度（米）
-fire_decision.shooting_range_w_large = 0.20  # 大装甲板射击窗口宽度（米）
+fire_decision.fire_thresh = 0.008444444           # ~0.17° 角度下限，防止远距离容差过小
+fire_decision.shooting_range_h = 0.12         # 射击窗口高度（米）
+fire_decision.shooting_range_w_small = 0.12  # 小装甲板射击窗口宽度（米）
+fire_decision.shooting_range_w_large = 0.24  # 大装甲板射击窗口宽度（米）
 
 # 全链路延迟补偿起始值：跨机网络 + JPEG + 检测/PnP/EKF + IPC 的保守估计。
 # 打移动靶时如果整体偏慢，按 10ms 步进往上调；偏超前则往小调。
-aimer.delay = 0.20
+aimer.delay = 0.17                  # 17ms 延迟补偿，根据实际情况调整
 
 # ============================================================================
 # L5 MPC 直通模式（Daedalus 联调专用）
@@ -23,7 +23,7 @@ aimer.delay = 0.20
 # 从 250Hz 掉到 100Hz 以下。联调阶段跳过 MPC，直接用 L4 参考轨迹，先保证指令率稳定。
 # 注意：必须写在根作用域（[traditional] 表之前），否则会被解析成 traditional.mpc_weapon。
 # ============================================================================
-mpc_weapon.enabled = false
+mpc_weapon.enabled = true
 mpc_weapon.enable_debug = false
 
 # L4 trajectory compensation overrides

@@ -15,6 +15,8 @@
 # 示例：
 #   ./build.sh --debug --asan          # Debug模式 + 开启内存检测
 #   ./build.sh --release -- ./a b c    # Release编译，运行程序并传入参数 a b c
+#   ./build.sh --no-ipc                # 只编译 talos，不带 talos_ipc_bridge
+#   ./build.sh --ipc                   # 单独编译 talos_ipc_bridge（不自动运行）
 # =============================================================================
 
 # -------------------------- 严格模式开启（Shell 脚本健壮性核心） --------------------------
@@ -87,6 +89,7 @@ die() {
 # -----------------------------------------------------------------------------
 BUILD_TYPE="Release"               # 编译模式：Release(发布版)/Debug(调试版)，默认Release
 BUILD_TARGET="talos"               # 默认编译目标产物名（可执行文件）
+ENABLE_IPC_BRIDGE="ON"             # 编译 talos 时是否顺带编译 talos_ipc_bridge（--no-ipc 关闭）
 ENABLE_CALIBRATION="OFF"           # 标定模块开关：ON/OFF，默认关闭
 ENABLE_ASAN="OFF"                  # ASAN 地址消毒器(内存泄漏/野指针/越界检测)开关
 ENABLE_TSAN="OFF"                  # TSAN 线程消毒器(线程竞态/死锁检测)开关
@@ -484,16 +487,32 @@ configure_cmake() {
     # 配置缓存文件：记录上一次CMake参数，参数不变则跳过重配
     local stamp_file="${BUILD_DIR}/.cmake_configure_args"
     local current_args="${CMAKE_CONFIGURE_ARGS[*]}"
+    local needs_reconfigure="ON"
 
     # 缓存文件存在，对比新旧参数
     if [[ -f "$stamp_file" ]]; then
         local cached_args
         cached_args="$(cat "$stamp_file")"  # cat 读取文件内容
         if [[ "$current_args" == "$cached_args" ]]; then
-            info "CMake cache is up-to-date. Skipping reconfigure."
-            return 0
+            needs_reconfigure="OFF"
         fi
-        info "Build configuration changed. Reconfiguring..."
+    fi
+
+    # 额外校验：CMakeCache 里的编译类型必须与本次请求一致。
+    # 防止「stamp 写着 Release、cache 却被 IDE/手动 cmake 改成了 Debug」导致跳过重配。
+    local cache_file="${BUILD_DIR}/CMakeCache.txt"
+    if [[ -f "$cache_file" ]]; then
+        local cache_build_type
+        cache_build_type="$(grep -m1 '^CMAKE_BUILD_TYPE:STRING=' "$cache_file" 2>/dev/null | cut -d'=' -f2 || true)"
+        if [[ -n "$cache_build_type" && "$cache_build_type" != "$BUILD_TYPE" ]]; then
+            warn "CMakeCache build type is ${cache_build_type}, requested ${BUILD_TYPE}. Reconfiguring."
+            needs_reconfigure="ON"
+        fi
+    fi
+
+    if [[ "$needs_reconfigure" == "OFF" ]]; then
+        info "CMake cache is up-to-date. Skipping reconfigure."
+        return 0
     fi
 
     info "Configuring CMake..."
@@ -510,9 +529,15 @@ build_target() {
         --build "$BUILD_DIR"  # cmake --build 指定构建目录
     )
 
+    # 计算本次要编译的目标列表：主目标 + 可选 talos_ipc_bridge
+    local build_targets=("${BUILD_TARGET}")
+    if [[ "$ENABLE_IPC_BRIDGE" == "ON" && "$BUILD_TARGET" == "talos" ]]; then
+        build_targets+=("talos_ipc_bridge")
+    fi
+
     # 非测试模式：只编译指定目标；测试模式编译全部目标
     if [[ "$ENABLE_TESTING" == "OFF" ]]; then
-        CMAKE_BUILD_ARGS+=(--target "${BUILD_TARGET}")
+        CMAKE_BUILD_ARGS+=(--target "${build_targets[@]}")
     fi
 
     # 开启详细编译日志
@@ -524,7 +549,7 @@ build_target() {
     if [[ "$ENABLE_TESTING" == "ON" ]]; then
         info "Building all targets (${BUILD_TYPE})..."
     else
-        info "Building ${BUILD_TARGET} (${BUILD_TYPE})..."
+        info "Building ${build_targets[*]} (${BUILD_TYPE})..."
     fi
     cmake "${CMAKE_BUILD_ARGS[@]}"
 
@@ -634,6 +659,17 @@ parse_args() {
                 BUILD_TARGET="talos-playground"
                 shift
                 ;;
+            --ipc|--bridge)
+                # 单独编译 IPC 桥（不自动运行：它通常以后台服务方式启动）
+                BUILD_TARGET="talos_ipc_bridge"
+                RUN_AFTER_BUILD="OFF"
+                shift
+                ;;
+            --no-ipc)
+                # 默认 talos 构建时不再顺带编译 talos_ipc_bridge
+                ENABLE_IPC_BRIDGE="OFF"
+                shift
+                ;;
             --no-run)
                 RUN_AFTER_BUILD="OFF"
                 shift
@@ -728,7 +764,7 @@ main() {
     info "Cross-compile: ${CROSS_COMPILE}"
     info "ASAN: ${ENABLE_ASAN}"
     info "TSAN: ${ENABLE_TSAN}"
-    info "Target: ${BUILD_TARGET}"
+    info "Target: ${BUILD_TARGET} (ipc_bridge=${ENABLE_IPC_BRIDGE})"
     info "Run after build: ${RUN_AFTER_BUILD}"
     info "Build log redaction: ${REDACT_BUILD_OUTPUT}"
 

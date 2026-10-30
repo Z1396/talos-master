@@ -60,16 +60,14 @@ namespace {
 // 发送序号计数器（诊断丢包用，每发一包+1）
 std::atomic<uint64_t> g_seq{1};
 
-// 仿真回传地址缓存：UDP 收包线程持续更新，云台回传线程读取
-std::mutex g_sim_addr_mutex;
-// 仿真回传地址缓存：UDP 收包线程持续更新，云台回传线程读取
-sockaddr_in g_sim_addr{};
-// 仿真回传地址有效性标志：UDP 收包线程更新，云台回传线程读取
-bool g_sim_addr_valid = false;
+std::mutex g_sim_addr_mutex;     // 保护仿真回传地址（UDP收包线程写、云台回传线程读）
+sockaddr_in g_sim_addr{};        // 仿真回传地址缓存
+bool g_sim_addr_valid = false; // 仿真回传地址有效性标志：UDP 收包线程更新，云台回传线程读取
 
 // 获取本机 system_clock 纳秒时间戳（NUC 时钟域，桥负责统一时域）
 uint64_t bridge_now_ns() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                        // 获取当前时间点（system_clock）time_since_epoch() 返回自 1970-01-01 00:00:00 UTC 起的纳秒数.count()表示纳秒级时间戳
                                      std::chrono::system_clock::now().time_since_epoch())
                                      .count());
 }
@@ -90,7 +88,9 @@ ShmClient::Pose to_shm_pose(const PoseMeta& pm, const uint64_t timestamp_ns) {
 
 // TCP 精确接收 n 字节（处理内核部分送达），对端断开返回 false
 bool recv_exact(int fd, void* buf, size_t n) {
+    // 接收缓冲区指针，类型转换为 uint8_t*，方便偏移
     auto* p = static_cast<uint8_t*>(buf);
+    // 已接收字节数
     size_t got = 0;
     while (got < n) {
         /*- TCP 收数据。`ssize_t`是有符号整数（可以返回负数代表错误）
@@ -103,7 +103,9 @@ bool recv_exact(int fd, void* buf, size_t n) {
         > 0：读到多少字节
         - =0：**对端 TCP 连接正常关闭**
         - <0：发生错误
-        > 你封装的`recv_exact`就是为了解决 TCP**流式无边界**问题：一次 recv 不一定读完你想要的全部字节，循环读直到凑够 n 字节。*/
+        > 你封装的`recv_exact`就是为了解决 TCP**流式无边界**问题：一次 recv 不一定读完你想要的全部字节，循环读直到凑够 n 字节。
+        r 表示实际读到的接收字节数
+        */
         const ssize_t r = ::recv(fd, p + got, n - got, 0);
         if (r <= 0) {
             return false;
@@ -121,8 +123,8 @@ bool recv_exact(int fd, void* buf, size_t n) {
 void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync) {
     // 接收缓冲区：包头 + 最大载荷（真值批量1664B），2048字节富余
     uint8_t buf[sizeof(PacketHeader) + NET_MAX_PAYLOAD];
-    sockaddr_in src{};
-    socklen_t src_len = sizeof(src);
+    sockaddr_in src{};       // 发送方地址缓存,sockaddr_in类型是struct sockaddr_in,包含IP地址和端口号等信息
+    socklen_t src_len = sizeof(src); // 发送方地址缓存大小,socklen_t类型是unsigned int表示地址长度
 
     while (true) {
         // recvfrom: 从指定地址接收数据包，阻塞等待新数据,会时刻更新 src 地址信息
@@ -136,6 +138,7 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
         PacketHeader header{};
         // memcpy: 复制buf到本地结构体header
         std::memcpy(&header, buf, sizeof(header));
+        // 校验魔数/版本是否匹配
         if (header.magic != NET_MAGIC || header.version != NET_VERSION) {
             continue;
         }
@@ -159,11 +162,18 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
 
         // 按类型分发落地；时间戳统一改写为 NUC 本机时钟
         switch (static_cast<PacketType>(header.type)) {
+        // 位姿
         case PacketType::Pose: {
             if (header.index > 4 || got_len != sizeof(PoseMeta)) {
                 break;
             }
             PoseMeta pm{};
+            /* std::memcpy: 复制 payload 到 pm 结构体 
+            参数:
+            - `dest`：目标内存地址
+            - `src`：源内存地址
+            - `n`：要复制的字节数
+            */
             std::memcpy(&pm, payload, sizeof(pm));
             // 0-3 是 TF 四路，4 是底盘观测兼容通道
             // 其他通道（如相机/枪口）直接发布，不参与四路配对
@@ -177,12 +187,14 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
             }
             break;
         }
+        // 图像同步
         case PacketType::ImageSync: {
             if (got_len == IMAGE_SYNC_PAYLOAD_SIZE) {
                 frame_sync.notify_image_sync();
             }
             break;
         }
+        // 底盘观测
         case PacketType::ChassisObserv: {
             if (got_len != sizeof(ChassisObservation)) {
                 break;
@@ -193,6 +205,7 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
             client.publish_chassis_observation(obs);
             break;
         }
+        // 仿真真值批量
         case PacketType::GroundTruth: {
             if (got_len != sizeof(GroundTruthBatch)) {
                 break;
@@ -203,6 +216,7 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
             client.publish_ground_truth(batch);
             break;
         }
+        // 相机信息
         case PacketType::CameraInfo: {
             if (got_len != sizeof(CameraInfo)) {
                 break;
@@ -213,6 +227,7 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
             client.publish_camera_info(info);
             break;
         }
+        // 自瞄运行时状态
         case PacketType::RuntimeState: {
             if (got_len != sizeof(RuntimeState)) {
                 break;
@@ -275,8 +290,8 @@ void tcp_image_loop(ShmClient& client, uint16_t image_port, FrameSynchronizer& f
     ::listen(listen_fd, 1);
     std::printf("[bridge] image TCP listening on :%u\n", image_port);
 
-    uint64_t frame_count = 0;
-    uint64_t drop_count  = 0;
+    uint64_t frame_count = 0; // 帧计数器，用于统计接收的帧数
+    uint64_t drop_count  = 0; // 丢弃帧计数器，用于统计丢弃的帧数
 
     while (true) {
         /*- **TCP 独有，阻塞函数！
@@ -372,6 +387,7 @@ void tcp_image_loop(ShmClient& client, uint16_t image_port, FrameSynchronizer& f
                 client.publish_pose(static_cast<PoseIndex>(i), to_shm_pose((*poses)[i], timestamp_ns));
             }
             client.publish_image(mat, fh.seq, timestamp_ns);
+            // 帧计数器增加
             ++frame_count;
             // 7. 打印统计信息
             // 每 300 帧打印一次，避免输出过快
@@ -414,16 +430,17 @@ bool forward_gimbal_cmd(ShmClient& client, int udp_fd) {
     // 组包：32字节包头 + GimbalCmd 载荷
     std::vector<uint8_t> packet(sizeof(PacketHeader) + sizeof(GimbalCmd));
     PacketHeader header{};
-    header.magic        = NET_MAGIC;
-    header.version      = NET_VERSION;
-    header.payload_len  = sizeof(GimbalCmd);
-    header.type         = static_cast<uint8_t>(PacketType::GimbalCmd);
-    header.index        = 0;
-    header.seq          = g_seq.fetch_add(1, std::memory_order_relaxed);
-    header.timestamp_ns = bridge_now_ns();
-    std::memcpy(packet.data(), &header, sizeof(header));
-    std::memcpy(packet.data() + sizeof(header), &*cmd_opt, sizeof(GimbalCmd));
-
+    header.magic        = NET_MAGIC;                    // 包头魔数，用于校验包完整性
+    header.version      = NET_VERSION;                  // 版本号，用于识别协议版本
+    header.payload_len  = sizeof(GimbalCmd);            // 载荷长度，单位字节
+    header.type         = static_cast<uint8_t>(PacketType::GimbalCmd); // 包类型，GimbalCmd
+    header.index        = 0;                                        // 包索引，0 开始
+    // 从全局序列号获取下一个序列号
+    header.seq          = g_seq.fetch_add(1, std::memory_order_relaxed); // 序列号，用于唯一标识每个包
+    header.timestamp_ns = bridge_now_ns();                                // 包发送时间，单位纳秒
+    std::memcpy(packet.data(), &header, sizeof(header));       // 复制包头到包数据
+    std::memcpy(packet.data() + sizeof(header), &*cmd_opt, sizeof(GimbalCmd)); // 复制云台指令到包数据
+    // 发送包到仿真地址
     ::sendto(
         udp_fd, packet.data(), packet.size(), 0, reinterpret_cast<const sockaddr*>(&dst),
         sizeof(dst));
@@ -455,7 +472,7 @@ int main(int argc, char* argv[]) {
 
     // 2. 创建 UDP 控制套接字并绑定端口
     // socket: 创建套接字返回文件描述符，失败返回 -1 并设置 errno
-    // AF_INET: IPv4 地址族，SOCK_DGRAM: UDP 套接字类型
+    // AF_INET: IPv4 地址族，SOCK_DGRAM: UDP 套接字类型,0: 协议默认值
     const int udp_fd = ::socket(AF_INET, SOCK_DGRAM, 0);
     if (udp_fd < 0) {
         std::perror("[bridge] udp socket");
@@ -496,9 +513,18 @@ int main(int argc, char* argv[]) {
     这里会拷贝一份 int 的值给到子线程。
     fd 本质只是一个数字编号，拷贝数字完全没问题，不需要`std::ref`。
     子线程内部用这个数字调用`recvfrom(udp_fd, ...)`，访问同一个内核 socket 对象。
-    > 重点：fd 只是一个数字，进程内所有线程共用同一个 socket，多个线程使用同一个 fd 是允许的（注意并发读写 socket 的竞争问题）。*/
-    // udp_thread: UDP 接收线程，负责处理控制端口的 UDP 数据包，然后将数据写入共享内存
-    //client: 共享引用 client 实例，避免复制构造函数,由create()函数创建一个路径然后打开共享内存文件然后设置好文件大小映射到进程内存空间
+    > 重点：fd 只是一个数字，进程内所有线程共用同一个 socket，多个线程使用同一个 fd 是允许的（注意并发读写 socket 的竞争问题）。
+    参数4：`std::ref(frame_sync)`
+    FrameSynchronizer 类型的引用包装器，**值传递**。
+    这里会拷贝一份 FrameSynchronizer 的引用给到子线程。
+    子线程内部用这个引用调用`frame_sync`的方法，访问共享内存。
+    */
+    /*udp_thread: UDP 接收线程，负责处理控制端口的 UDP 数据包，然后将数据写入共享内存
+    client: 共享引用 client 实例，避免复制构造函数,由create()函数创建一个路径然后打开共享内存文件然后设置好文件大小映射到进程内存空间
+    thread: std::thread 类，用于创建线程
+    template< class Function, class... Args >
+    explicit thread( Function&& f, Args&&... args );
+    */ 
     std::thread udp_thread(udp_recv_loop, std::ref(client), udp_fd, std::ref(frame_sync));
     // tcp_thread: TCP 接收线程，负责处理图像端口的 TCP 数据流，然后将数据写入共享内存
     std::thread tcp_thread(tcp_image_loop, std::ref(client), image_port, std::ref(frame_sync));
@@ -507,7 +533,7 @@ int main(int argc, char* argv[]) {
     while (true) {
         client.update_heartbeat();
         // 5. 云台指令轮询回传
-        // forward_gimbal_cmd: 云台指令回传函数，负责将云台指令发送到仿真回传地址
+        // forward_gimbal_cmd: 云台指令回传函数，负责将云台指令通过UDP从共享内存发送到仿真回传地址
         forward_gimbal_cmd(client, udp_fd);
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }

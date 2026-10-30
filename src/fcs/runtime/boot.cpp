@@ -258,9 +258,9 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
         只保存【起始指针 + 元素数量】，零开销，用来替代裸指针 + 长度成对传参的老旧写法。*/
         std::span<const core::Capability>(config.vision.capabilities.get())));
 
-    // 3. 目标跟踪模式状态机：自瞄优先 / 能量机关优先
+    // 3. 目标跟踪模式状态机：无人自动模式（unmanned 决策器）/有人手控/跟随模式（manned 决策器）
     static_cast<void>(world.emplace_resource<core::FollowingState>());
-    // 4. 装甲检测图像裁剪ROI区域配置存入全局
+    // 4. 装甲检测图像裁剪ROI区域配置存入全局资源
     world.insert_resource(config.vision.armor->readback_roi);
     // 5. L2层检测结果缓存资源，存放单帧装甲检测数据
     world.insert_resource(L2::TrackerReadbackCache{});
@@ -388,7 +388,6 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     }
 
     // ===================== 步骤10：Quanta视频流、离线录制系统注册 =====================
-
     auto quanta_cfg   = config.vision.quanta;        // 复制视频基础配置
     quanta_cfg.filter = config.vision.quanta_filter; // 补充图像滤波参数
     // 从硬件初始化结果读取相机分辨率

@@ -239,10 +239,12 @@ public:
     [[nodiscard]] std::optional<Pose> recv_pose(const PoseIndex index) const {
         // 索引越界直接返回空
         if (index > 4)
+        {
             return std::nullopt;
+        }
         // 位姿三缓冲操作封装，绑定元数据内位姿通道
-        // borrow：无锁借用最新就绪帧，无新数据返回空
         PoseOps ops(&meta_->poses[index]);
+        // borrow：无锁借用最新就绪帧，无新数据返回空
         const auto slot = ops.borrow();
         if (!slot) {
             return std::nullopt;
@@ -251,15 +253,15 @@ public:
         // 解析位姿结构体到对外Pose类型
         const auto& pose = **slot;
         return Pose{
-            .x            = pose.position[0],
-            .y            = pose.position[1],
-            .z            = pose.position[2],
-            .qw           = pose.quaternion[0],
-            .qx           = pose.quaternion[1],
-            .qy           = pose.quaternion[2],
-            .qz           = pose.quaternion[3],
-            .frame_seq    = pose.frame_seq,
-            .timestamp_ns = pose.timestamp_ns,
+            .x            = pose.position[0],        // 位置x
+            .y            = pose.position[1],        // 位置y
+            .z            = pose.position[2],        // 位置z
+            .qw           = pose.quaternion[0],      // 旋转w
+            .qx           = pose.quaternion[1],      // 旋转x
+            .qy           = pose.quaternion[2],      // 旋转y
+            .qz           = pose.quaternion[3],      // 旋转z
+            .frame_seq    = pose.frame_seq,        // 帧序号
+            .timestamp_ns = pose.timestamp_ns,    // 帧时间戳纳秒
         };
     }
 
@@ -509,9 +511,9 @@ private:
      */
     template <typename TripleBuffer>
     static void init_triple_buffer(TripleBuffer& buf) {
-        buf.state.store(1, std::memory_order_relaxed);
-        buf.write_idx = 0;
-        buf.read_idx  = 2;
+        buf.state.store(1, std::memory_order_relaxed);  // 初始化状态为无新数据
+        buf.write_idx = 0;                            // 初始化写者索引为0
+        buf.read_idx  = 2;                            // 初始化读者索引为2
     }
 
     /**
@@ -529,12 +531,10 @@ private:
      * 移动传入两块共享内存区域，并缓存内存映射指针
      */
     ShmClient(ShmRegion meta_region, ShmRegion pool_region)
-        : meta_region_(std::move(meta_region))
-        , pool_region_(std::move(pool_region))
-        // 缓存元数据结构体指针，避免重复调用as<>
-        , meta_(meta_region_.as<ShmMetaRegion>())
-        // 缓存图像池像素内存起始地址
-        , image_pool_(static_cast<uint8_t*>(pool_region_.data())) {}
+        : meta_region_(std::move(meta_region))          // 移动构造，转移 meta_region 所有权
+        , pool_region_(std::move(pool_region))          // 移动构造，转移 pool_region 所有权
+        , meta_(meta_region_.as<ShmMetaRegion>())       // 缓存元数据结构体指针，避免重复调用as<>
+        , image_pool_(static_cast<uint8_t*>(pool_region_.data())) {}// 缓存图像池像素内存起始地址
 
     // 元数据共享内存管理对象（三缓冲、相机内参、心跳、真值）
     ShmRegion meta_region_;

@@ -547,17 +547,22 @@ template <frame Target, frame Source, frame CurrentFrame>
 constexpr auto lookup_clamped(const CoordinateSystem& system, TransformMatrixd<CurrentFrame, Source> acc, timestamp_ns_t ns) noexcept 
         -> std::expected<TransformMatrixd<Target, Source>, std::string> 
 {
+    // 编译期强校验：Source必须是Target后代，否则直接编译失败，杜绝非法跨树查询
     static_assert(is_descendant_of<Source, Target>(), "Source must be a descendant of Target");
-    if constexpr (std::is_same_v<CurrentFrame, Target>) 
-    {
+    // 递归终止：当前帧等于目标帧，返回累积复合变换
+    if constexpr (std::is_same_v<CurrentFrame, Target>) {
         return acc;
-    } else if constexpr (root_frame<CurrentFrame>) {
+    }
+    // 遍历到根帧仍未命中，返回错误信息
+    else if constexpr (root_frame<CurrentFrame>) {
         return std::unexpected(
             fmt::format(
                 "lookup_clamped({} -> {}, {}ns): traversed past root without finding target, "
                 "stopped at root frame '{}'",
                 Source::frame_id, Target::frame_id, ns, CurrentFrame::frame_id));
-    } else {
+    }
+    // 正常向上一层父帧递归
+    else {  
         const auto& buffer = buffer_of<CurrentFrame>(system);
         // 区别：使用clamped夹紧插值策略
         auto result        = buffer.lookup(ns, clamped);

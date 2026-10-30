@@ -180,8 +180,8 @@ using capabilities     = res<CapabilityState>;     // 只读访问
 using capabilities_mut = res_mut<CapabilityState>; // 可写修改
 
 /**
- * @brief 目标跟随模式状态（自瞄/能量机关优先）
- * 原子bool多线程无锁标记，true=优先跟踪能量机关，false=优先装甲自瞄
+ * @brief 目标跟随模式状态（有人/无人目标决策切换）
+ * 原子bool多线程无锁标记：false=无人自动模式，true=有人手控/跟随模式
  */
 struct FollowingState {
     // 读取当前跟随模式开关
@@ -194,8 +194,8 @@ struct FollowingState {
 
 private:
     // 原子bool存储，多线程安全读写
-    // false=优先装甲自瞄，true=手控优先
-    std::atomic<bool> active_{false};
+    // false=无人自动模式（unmanned 决策器），true=有人手控/跟随模式（manned 决策器）
+    std::atomic<bool> active_{true};
 };
 
 // ========== 跟随模式全局ECS资源别名 ==========
@@ -229,6 +229,10 @@ inline constexpr std::array all_capabilities{
  * @param state 全局能力状态
  * @param cap 需要查询的功能
  * @return true=已开启；false=关闭
+ * - `state.load()`：拿到**当前整张开关表（mask，一个 uint8_t）**，比如 `0b00000101`
+ * - `capability_bit(cap)`：拿到**只保留目标那一位、其余全是 0 的模板**。比如查 Armor 就是 `0b00000001`
+ * - `&` 是**按位与 **规则：
+ * > 只有两边同一个 bit 都是 1，结果这个 bit 才是 1；其他情况全部变成 0。
  */
 [[nodiscard]] inline auto capable(const CapabilityState& state, const Capability cap) noexcept
     -> bool {
