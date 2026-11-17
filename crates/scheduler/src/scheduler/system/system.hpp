@@ -395,6 +395,7 @@ public:
      */
     System(std::string name, F func) noexcept
         : func_(std::move(func))
+        // extract_system_meta<F, Policy>(std::move(name))：根据 F 类型和 Policy 策略，生成系统元数据
         , meta_(extract_system_meta<F, Policy>(std::move(name))) {}
 
     /**
@@ -422,7 +423,8 @@ public:
      */
     bool run([[maybe_unused]] World& world) noexcept override {
         written_ = false;
-        // 解包参数元组，调用函数
+        // 解包参数元组，调用函数std::apply()，将参数元组解包为参数列表
+        // 例如：func_(arg1, arg2, arg3) -> func_(arg1, arg2, arg3)
         std::apply(func_, *cached_args_);
         return written_;
     }
@@ -457,7 +459,14 @@ template <typename F, typename Policy = default_policy>
     // remove_reference 只去引用
     std::remove_reference_t<const int&> → const int
     // decay 去引用 + 剥const
-    std::decay_t<const int&> → int*/
+    std::decay_t<const int&> → int
+    
+    为什么不用std::remove_cvref_t<F>？
+    类型工具	        去除引用	去除顶层     const/volatile	数组退化	函数退化
+    remove_reference_t	是	        否	            否	                    否
+    remove_cvref_t	    是	        是	            否	                    否
+    decay_t	            是	        是	            是	                    是
+    */
     return std::make_unique<System<std::decay_t<F>, Policy>>(
         /*std::forward<F>(func) 配合 decay 完整流程
         入参 F&& func：万能引用，既能接收左值 lambda，也能接收右值临时 lambda；

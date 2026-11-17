@@ -124,7 +124,7 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     auto cam_trans = config.gimbal_yaw.gimbal_pitch.camera_link.translation;
     // 读取相机安装滚转/俯仰/偏航角度（单位度）
     auto cam_rot = config.gimbal_yaw.gimbal_pitch.camera_link.rotation();
-    // from_rpy：输入三轴角度(自动转弧度)+三维平移，生成完整坐标变换
+    // from_rpy：输入三轴角度(自动转弧度)+三维平移，生成完整坐标变换(相机到gimbal_pitch的变换)
     fast_tf::update<fast_tf::camera_link_fuxk_frame>(
         system,
         fast_tf::EdgeTransform<fast_tf::camera_link_fuxk_frame>::from_rpy(
@@ -187,6 +187,8 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     boot(talos::Scheduler& scheduler, RuntimeConfig&& config) {
     // 从调度器获取ECS全局World容器
     // World是全局资源仓库，所有单例资源（TF、推理、弹道）统一存放
+    // 整个代码中仅有一个World实例，所有任务系统、资源、任务依赖都基于此所以用引用
+    // 避免重复创建World实例，提高效率
     auto& world = scheduler.world();
 
     // ========== 步骤1：注入Foxglove可视化全局配置资源 ==========

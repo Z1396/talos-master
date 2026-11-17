@@ -57,11 +57,12 @@ namespace fcs::calibration {
  * @param intrinsic_result 已求解完成的相机内参结果（用于手眼PnP）
  */
 inline void register_calibration_systems(
-    talos::Scheduler& app, std::shared_ptr<CalibrationConfig> config,
-    std::shared_ptr<CalibrationBoard> board,
-    std::shared_ptr<IntrinsicCalibrator> intrinsic_calibrator,
-    std::shared_ptr<HandEyeCalibrator> handeye_calibrator,
-    std::shared_ptr<IntrinsicResult> intrinsic_result) {
+    talos::Scheduler& app, std::shared_ptr<CalibrationConfig> config,        // 全局标定配置共享指针
+    std::shared_ptr<CalibrationBoard> board,                                // 标定板检测器多态接口（棋盘格/ChArUco）
+    std::shared_ptr<IntrinsicCalibrator> intrinsic_calibrator,            // 内参采集/求解器
+    std::shared_ptr<HandEyeCalibrator> handeye_calibrator,                // 手眼标定采集/求解器
+    std::shared_ptr<IntrinsicResult> intrinsic_result)                    // 已求解完成的相机内参结果（用于手眼PnP）
+{
 
     // ====================== 系统1：标定板角点检测池化计算系统 ======================
     // 类型：pool_compute 线程池异步计算，不阻塞主线程

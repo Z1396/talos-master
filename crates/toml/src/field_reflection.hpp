@@ -1,11 +1,5 @@
 #pragma once
 // 头文件保护宏，防止当前头文件被重复包含，替代老式 #ifndef 头文件守卫
-
-// field_reflection compatibility shim — backed by Boost.PFR
-//
-// Drop-in replacement for the original yosh-matsuda/field_reflection library.
-// Same namespace-level API, drastically reduced compile times by delegating to
-// Boost.PFR's heavily optimized reflection engine.
 /*
 文档注释翻译：
 本文件是 field_reflection 兼容适配层，底层基于 Boost.PFR 实现

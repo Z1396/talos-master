@@ -26,6 +26,7 @@
 namespace fast_tf {
 
 // 时间单位别名
+// std::size_t：无符号整数，用于表示缓冲区时长范围单位，避免负数表示
 using sec            = std::size_t;      // 秒数，缓冲区时长范围单位
 using sample_per_sec = std::size_t;      // 每秒采样点数，缓冲区密度
 
@@ -81,6 +82,8 @@ struct BufferOps;
 /**
  * @brief 特化1：变换矩阵 TransformMatrix<Scalar, FromFrame, ToFrame>
  * 支持齐次变换矩阵插值、合法性校验、仅修改旋转复用平移
+ * std::floating_point：概念约束，要求T必须是浮点数类型，否则编译错误
+ * T 是double
  */
 template <std::floating_point T, typename From, typename To>
 struct BufferOps<TransformMatrix<T, From, To>> {
@@ -170,12 +173,12 @@ struct BufferOps<Spherial<T>> {
 template <typename T, sec Range, sample_per_sec Density, typename Ops = BufferOps<T>>
 class Buffer {
     // 编译期静态断言，编译阶段检查参数合法性
-    static_assert(Density > 0, "Density must be greater than 0");
-    // 必须实现配套插值/校验操作
-    static_assert(buffer_value_ops<Ops, T>, "Buffer ops are not defined for this value type");
+    static_assert(Density > 0, "密度必须大于 0");
+    // 必须实现配套插值/校验操作，否则编译错误
+    static_assert(buffer_value_ops<Ops, T>, "未定义缓冲区操作符");
     // 静态缓冲约束：仅允许Range=0且Density=1
     static_assert(
-        Range > 0 || Density == 1, "Static Buffer only supports Range == 0 && Density == 1");
+        Range > 0 || Density == 1, "仅支持静态缓冲区 Range = 0 && Density = 1");
 
 public:
     /**
@@ -220,8 +223,12 @@ public:
     /**
      * 移动赋值：安全转移缓冲区资源，避免锁竞争
      */
+    // std::is_nothrow_move_assignable_v<decltype(buffer_)>：判断底层array移动是否不抛异常
+    // decltype(buffer_)：获取buffer_的类型，用于判断是否可移动赋值
+    // noexcept：确保移动赋值操作不抛出异常，避免锁竞争
     Buffer&
         operator=(Buffer&& other) noexcept(std::is_nothrow_move_assignable_v<decltype(buffer_)>) {
+        // 避免自赋值，直接返回当前对象
         if (this != &other) {
             move_assign_from(std::move(other));
         }
@@ -235,7 +242,7 @@ public:
      * 逻辑：非法数据直接丢弃；时序倒退丢弃；环形覆盖旧样本，更新首尾时间戳
      */
     void push(timestamp_ns_t timestamp_ns, const T& value) noexcept requires(!is_static) {
-        // 校验数据合法性，非法直接丢弃，不写入缓冲区
+        // 校验数据合法性，非法直接丢弃，不写入缓冲区(判断是不是NaN/Inf)
         if (!Ops::is_valid(value)) {
             return;
         }
@@ -264,7 +271,7 @@ public:
             // 缓冲区未满，有效样本数+1
             ++size_;
         } else {
-            // 缓冲区已满，覆盖最旧样本；更新oldest_ts为下一个逻辑起点
+            // 缓冲区已满，覆盖最旧样本；更新oldest_ts为下一个逻辑起点因为环形算法当head_>capacity_value时，head_会重置为0，所以oldest_ts_会更新为最新样本的时间戳，而不是最旧样本的时间戳
             oldest_ts_ = buffer_[head_].timestamp;
         }
     }

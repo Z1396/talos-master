@@ -276,8 +276,8 @@ void FoxgloveServer::message_sender_thread() {
     // 创建 Foxglove 全局上下文
     ::foxglove::Context context = ::foxglove::Context::create();
 
-    std::optional<::foxglove::WebSocketServer> websocket_server;
-    std::optional<::foxglove::McapWriter> mcap_writer;
+    std::optional<::foxglove::WebSocketServer> websocket_server;  // 可选，根据传输类型创建
+    std::optional<::foxglove::McapWriter> mcap_writer;  // 可选，根据传输类型创建
 
     // 根据传输类型，创建对应输出端
     switch (config.transport) 

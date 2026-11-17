@@ -525,10 +525,8 @@ private:
 // ============================================================================
 template <typename Policy, typename F>
 auto Scheduler:: add_system(std::string&& name, F&& func) -> void {
-    // 校验：运行中禁止新增系统
-    ensure_not_running();
-    // 标记拓扑失效，下次 build 必须重新生成
-    mark_topology_dirty();
+    ensure_not_running();   // 1. 检查是不是在运行
+    mark_topology_dirty();  // 2. 把状态强制写回 Configuring
 
     // 模板工厂：根据策略+函数生成对应系统实例
     /*前置背景：万能引用 F&& func

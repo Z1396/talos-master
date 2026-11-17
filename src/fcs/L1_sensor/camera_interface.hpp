@@ -179,13 +179,14 @@ public:
     /**
      * @brief 构造顶层相机接口，传入对应输入实现
      * @param mode IPC或海康相机实例变体
+     * explicit：显式构造函数，防止隐式转换(比如 CameraInterface = InputMode)
      */
     explicit CameraInterface(InputMode mode) noexcept;
 
-    // 禁用拷贝
+    // 禁用拷贝(例子CameraInterface = CameraInterface&) 是错误的)
     CameraInterface(const CameraInterface&)                = delete;
     CameraInterface& operator=(const CameraInterface&)     = delete;
-    // 允许移动
+    // 允许移动(例子CameraInterface = CameraInterface&&)
     CameraInterface(CameraInterface&&) noexcept            = default;
     CameraInterface& operator=(CameraInterface&&) noexcept = default;
 

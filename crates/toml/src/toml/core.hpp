@@ -85,11 +85,17 @@ requires(std::default_initializable<T>)
 /// 一键从table生成完整配置结构体（对外最常用接口 from_table<T>）
 /// 要求T支持默认构造，内部封装read_into
 template <detail::TableReadable T>
-   //- 模板参数 `T`，**第一个约束**：`T` 必须满足概念 `detail::TableReadable`（你项目内部定义的概念，代表这个类型可以从表格读取 / 反序列化）。
-   //- `detail::`：命名空间，说明是内部实现细节，不是对外 API。
+//- 模板参数 `T`，**第一个约束**：`T` 必须满足概念 `detail::TableReadable`（你项目内部定义的概念，代表这个类型可以从表格读取 / 反序列化）。
+//- `detail::`：命名空间，说明是内部实现细节，不是对外 API。
+/*这里是帮助理解的简化形式，标准定义还涉及相关的语义要求。
+我们拆开看：
+检查	含义
+std::constructible_from<T>	检查能否从零个参数构造
+T{}	检查能否进行花括号值初始化
+::new T	检查能否进行默认初始化*/
 requires(std::default_initializable<T>)
-   //- C++20 requires 子句，**第二个约束**：`T` 必须满足标准概念 `std::default_initializable<T>`
-   //- `std::default_initializable<T>`：类型 T 可以默认初始化，即 `T t;` 合法（有无参构造函数）。
+//- C++20 requires 子句，**第二个约束**：`T` 必须满足标准概念 `std::default_initializable<T>`
+//- `std::default_initializable<T>`：类型 T 可以默认初始化，即 `T t;` 合法（有无参构造函数）。
 [[nodiscard]] std::expected<T, std::string> from_table(const toml::table& table) {
 /*局部构造完整结果 → 成功才转移”这个模式在每一级都在重复 ，只是“导出”的形式有三种。拿`from_table<PresetEntry>()` 的完整路径走一遍：
 `from_table<PresetEntry>(table)                    【临时①】

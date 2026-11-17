@@ -102,6 +102,9 @@ Examples:
   # 加载已有内参，执行云台手眼标定
   rm_calibration --mode Handeye --intrinsic camera_intrinsic.toml
 
+  #仿真下外参的正确命令：
+  ./build/bin/rm_calibration --mode Handeye --daedalus --intrinsic camera_intrinsic.toml
+
   # 完整流程：先采图标内参，再采云台位姿做手眼标定
   rm_calibration --mode Full
 
@@ -128,7 +131,8 @@ int main(int argc, char* argv[]) {
     std::optional<CalibrationMode> mode_override; // 命令行覆盖标定模式（可选）
     std::optional<bool> daedalus_override;        // 命令行强制开启仿真器（可选）
 
-    // ========== 循环解析所有命令行参数 ==========
+    // ========== 循环解析所有命令行参数 ==========通过计算argc的输入参数个数，for循环读取argv数组解析，通过if判断argv[i]是否为--help、--config、--mode、--intrinsic、--daedalus等,
+    // 成功解析后，将参数通过枚举转换赋值给对应的变量，失败则打印错误信息并退出程序
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--help" || arg == "-h") {
@@ -163,7 +167,7 @@ int main(int argc, char* argv[]) {
     SPDLOG_INFO("RM标定工具启动中...");
     SPDLOG_INFO("加载配置文件: {}", config_path);
 
-    // ========== 加载标定总配置TOML ==========
+    // ========== 加载标定总配置TOML ==========config_path == "calibration.toml"
     auto config_result = CalibrationConfig::load_from_file(config_path);
     if (!config_result) {
         SPDLOG_ERROR("加载标定配置失败: {}", config_result.error());
@@ -211,7 +215,7 @@ int main(int argc, char* argv[]) {
     // ========== 加载外部传入的相机内参文件 ==========
     auto intrinsic_result = std::make_shared<IntrinsicResult>();
     if (!intrinsic_path.empty()) {
-        // 解析外部相机内参TOML
+        // 解析外部相机内参TOML文件,toml::parse_file函数解析文件内容，返回TOML::Value对象
         auto loaded = toml::parse_file(intrinsic_path);
         if (!loaded) {
             SPDLOG_ERROR("加载外部内参文件失败: {}", intrinsic_path);
@@ -262,6 +266,10 @@ int main(int argc, char* argv[]) {
     // 插入弹道弹速默认资源、机器人颜色资源（底层L1初始化依赖）
     world.insert_resource(fcs::core::trajectory::bullet_speed_data{.bullet_speed = 25.0});
     world.insert_resource(fcs::ArmorColor::Blue);
+    // IMU读取系统依赖的能力掩码与跟随状态：标定不做能力切换，默认全部关闭、无人模式
+    static_cast<void>(
+        world.emplace_resource<fcs::core::CapabilityState>(fcs::core::CapabilityMask{}));
+    static_cast<void>(world.emplace_resource<fcs::core::FollowingState>());
 
     // ========== 组装硬件后端配置（新版API：variant二选一） ==========
     // 仿真模式用DaedalusConfig（IPC共享内存输入）；真实硬件用DirectConfig相机直连
@@ -273,8 +281,11 @@ int main(int argc, char* argv[]) {
                            .hardware    = hardware_config}};
 
     // ========== L1底层硬件+L2感知层初始化（新版3参数签名） ==========
+    // 标定只取图不下发，关闭武器输出系统，避免 WeaponCommand 通道出现“无写入者的读者”
     auto setup_result =
-        fcs::runtime::setup_l1(scheduler.world(), scheduler, std::move(backend_cfg));
+        fcs::runtime::setup_l1(
+            scheduler.world(), scheduler, std::move(backend_cfg),
+            fcs::runtime::L1L2SetupOptions{.enable_weapon_output = false});
     if (!setup_result) {
         SPDLOG_ERROR("L1/L2运行时环境初始化失败: {}", setup_result.error());
         return 1;

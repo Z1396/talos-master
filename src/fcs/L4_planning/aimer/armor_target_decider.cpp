@@ -138,6 +138,7 @@ namespace {
  *
  * @tparam Compare 比较函数类型
  * @param candidates 候选目标列表
+ * @param candidates 候选目标列表（视图）
  * @param compare 比较函数
  * @return 排序后的索引数组（最优在前）
  */

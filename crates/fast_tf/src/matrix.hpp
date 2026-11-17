@@ -136,6 +136,7 @@ public:
      * @brief 纯平移变换，旋转为单位矩阵
      */
     static TransformMatrix from_translation(T x, T y, T z) {
+        // Eigen::Matrix<T, 3, 3>::Identity()：生成3x3单位矩阵
         return from_rt(Eigen::Matrix<T, 3, 3>::Identity(), Eigen::Matrix<T, 3, 1>(x, y, z));
     }
 
@@ -144,7 +145,9 @@ public:
      */
     static TransformMatrix
         from_quaternion(
+            // q_in：输入四元数，未归一化
             const Eigen::Quaternion<T>& q_in,
+            // t：输入平移向量，默认0
             const Eigen::Matrix<T, 3, 1>& t = Eigen::Matrix<T, 3, 1>::Zero()) {
         Eigen::Quaternion<T> q = q_in;
         q.normalize(); // 强制归一化，避免旋转矩阵退化
@@ -163,7 +166,11 @@ public:
      * @brief 底层通用构造接口：3x3旋转矩阵R + 3维平移t → 4x4齐次矩阵
      */
     static TransformMatrix
-        from_rt(const Eigen::Matrix<T, 3, 3>& R, const Eigen::Matrix<T, 3, 1>& t) {
+        from_rt(
+            // R：输入3x3旋转矩阵
+            const Eigen::Matrix<T, 3, 3>& R,
+            // t：输入3维平移向量
+            const Eigen::Matrix<T, 3, 1>& t) {
         Matrix tt                     = Matrix::Identity(); // 初始4x4单位矩阵
         tt.template block<3, 3>(0, 0) = R;                  // 左上角3x3填充旋转
         tt.template block<3, 1>(0, 3) = t;                   // 第四列前3行填充平移
@@ -284,8 +291,15 @@ public:
             return b;
         }
         // 平移直接线性插值
+        // a.translation()：获取a变换的平移向量
+        // b.translation()：获取b变换的平移向量
+        // (T(1) - t)：插值系数，从a到b的插值
+        // t：插值系数，从b到a的插值
         const Eigen::Matrix<T, 3, 1> pos = a.translation() * (T(1) - t) + b.translation() * t;
         // 四元数球面插值平滑旋转
+        // a.quaternion()：获取a变换的四元数
+        // b.quaternion()：获取b变换的四元数
+        // t：插值系数，从a到b的插值
         const Eigen::Quaternion<T> q     = a.quaternion().slerp(t, b.quaternion());
         return from_quaternion(q, pos);
     }

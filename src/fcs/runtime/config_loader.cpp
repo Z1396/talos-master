@@ -68,12 +68,12 @@ auto parse_preset(LaunchConfig& launch) -> std::expected<PresetEntry, std::strin
                 "entry config: [preset] table present but hostname lookup failed: {}",
                 hostname_result.error()));
     }
-    // 取出正常的主机名字符串
+    // hostname_result 成功，取出正常的主机名字符串因为是expected类型，所以需要解引用
     const std::string_view hostname = *hostname_result;
 
     // 在 preset 字典中查找当前主机名对应的配置项
     const auto it = launch.preset.find(std::string{hostname});
-    // 主机名不在预设列表中，使用兜底默认配置
+    // 主机名不在预设列表中，使用兜底默认配置.end()是迭代器，指向最后一个元素的下一个位置
     if (it == launch.preset.end()) {
         SPDLOG_INFO("hostname '{}' not in [preset], using explicit robot/vision fields", hostname);
         return launch.fallback_preset;
@@ -179,12 +179,14 @@ auto load_robot_extrinsic_config(std::string_view robot)
     // 本质是键值容器：std::map<std::string, toml::node> 类似结构
     // 文件解析失败时：抛出异常 toml::parse_error
     auto entry_tbl = toml::parse_file(path);
-    // 主配置文件解析失败
+    // 主配置文件解析失败.failed()表示解析文件失败。
     if (entry_tbl.failed()) {
         return std::unexpected(format_parse_error(entry_tbl.error()));
     }
 
-    // 将主 TOML 表映射为 LaunchConfig 启动配置结构体
+    // 将主 TOML 表映射为 LaunchConfig 启动配置结构体/.table()表示获取 TOML 顶层表（整个配置文件根节点）
+    // 本质是键值容器：std::map<std::string, toml::node> 类似结构
+    // 文件解析失败时：抛出异常 toml::parse_error
     auto launch_config = toml_helper::from_table<LaunchConfig>(entry_tbl.table());
     if (!launch_config) {
         return std::unexpected(fmt::format("entry config: {}", launch_config.error()));
@@ -207,7 +209,7 @@ auto load_robot_extrinsic_config(std::string_view robot)
     }
 
     // ========== 4. 加载 & 合并 视觉配置 ==========
-    // 拼接视觉差异化配置路径：config/vision/{视觉名}.toml
+    // 拼接视觉差异化配置路径：config/vision/{视觉名}.toml    preset.vision.get()获取视觉方案名称
     auto vision_override_path = fmt::format("config/vision/{}.toml", preset.vision.get());
     // 加载视觉基础公共配置
     auto base_tbl = toml::parse_file("config/vision_base.toml");

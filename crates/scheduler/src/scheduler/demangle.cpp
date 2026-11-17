@@ -36,6 +36,11 @@ std::string demangle(const char* name) noexcept
     // 反混淆执行状态码，0代表成功
     int status = -1;
     // 调用GCC内置ABI函数解析mangled名字，返回堆分配char*，需要手动free
+    // abi::__cxa_demangle(name, nullptr, nullptr, &status)：
+    // name：原始mangled字符串指针，需要反混淆
+    // nullptr：不使用输出缓冲区，直接返回反混淆后的字符串指针
+    // nullptr：不使用输出缓冲区，直接返回反混淆后的字符串指针
+    // &status：输出反混淆执行状态码，0代表成功
     char* p    = abi::__cxa_demangle(name, nullptr, nullptr, &status);
 
     std::string s;
@@ -50,12 +55,15 @@ std::string demangle(const char* name) noexcept
     }
 
     // ========== 步骤1：删除全部命名空间前缀 xxx:: ==========
+    // std::size_t 是无符号整型，用于表示字符串或容器的索引位置，避免负数索引
     std::size_t pos;
-    // 循环查找"::"命名空间分隔符
+    // 循环查找"::"命名空间分隔符, npos 表示未找到，循环结束
     while ((pos = s.find("::")) != std::string::npos) {
         std::size_t start = pos;
         // 向前回溯，找到命名空间起始边界（字母、数字、下划线）
         while (start > 0
+                // std::isalnum：判断字符是否为字母或数字，不区分大小写
+                // s[start - 1] == '_'：允许下划线作为命名空间分隔符，如 std::allocator<
                && (std::isalnum(static_cast<unsigned char>(s[start - 1])) || s[start - 1] == '_')) {
             --start;
         }

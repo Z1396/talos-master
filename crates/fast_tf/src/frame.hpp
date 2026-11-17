@@ -98,6 +98,7 @@ namespace fast_tf {
  * @macro DECL
  * 普通子帧宏：指定父帧parent
  * ancestor = parent##_fuxk_frame，建立编译期继承关系
+ * constexpr：确保运行时打印字符串是编译期常量
  */
 #define DECL(name, parent)                                                \
     struct name##_fuxk_frame {                                            \
@@ -156,6 +157,7 @@ template <typename T>
 concept frame = requires {
     /*requires 表达式语法：`{表达式} -> 约束;`
     代表：**表达式`T::frame_id`求值得到的类型，必须可以隐式转换成`std::string_view`**。*/
+    // std::convertible_to<std::string_view>：类型约束，要求表达式求值得到的类型，必须可以隐式转换成`std::string_view`
     { T::frame_id } -> std::convertible_to<std::string_view>;
     // 要求2：T内部必须存在嵌套类型别名 ancestor
     typename T::ancestor;
@@ -351,6 +353,8 @@ using EphemeralBuffer = Buffer<EdgeTransform<T>,    5              ,500>;
  ├─ camera_link 缓冲区:   [{t=0, 外参平移+旋转}]     ← boot L128 写入的机械外参
  └─ muzzle_link 缓冲区:   [{t=0, 枪口外参}]          ← boot L151 写入
       ↑ push(ns, transform) 就是往对应数组写入下一个槽位，满500覆盖最老的变换*/
+// 这个在emplace_back时会自动调用Buffer的移动构造函数，需确保tuple的每个元素都是可移动赋值的
+// 否则会编译报错
 using CoordinateSystem = std::tuple<
     EphemeralBuffer<odom_fuxk_frame>, EphemeralBuffer<gimbal_yaw_fuxk_frame>,
     EphemeralBuffer<gimbal_pitch_fuxk_frame>, EphemeralBuffer<camera_link_fuxk_frame>,
@@ -375,9 +379,12 @@ struct buffer_coord_of<Buffer<TransformMatrix<Scalar, A, B>, Range, Density>> {
  * @param system CoordinateSystem全局tuple容器
  * @return EphemeralBuffer<Layer>& 该帧的时序变换缓存
  * static_assert 找不到帧直接编译报错
+ * constexpr 递归调用，编译期确定结果
+ * decltype(auto)：返回类型为当前表达式类型，避免类型转换
  */
 template <non_root_frame Layer, typename System, size_t I = 0>
 [[nodiscard]] constexpr decltype(auto) buffer_of(System&& system) noexcept {
+    // std::remove_cvref_t<System>：移除System的const/volatile/引用属性，获取原始类型
     using tuple_t = std::remove_cvref_t<System>;
     // 递归遍历超出tuple长度，编译报错
     /*static_assert(条件, "报错提示字符串");
@@ -386,16 +393,20 @@ template <non_root_frame Layer, typename System, size_t I = 0>
     > 和普通运行时 `assert()` 的核心区别：
     - `assert(cond)`：运行时才检查，程序跑起来才会崩；release 版本可以直接被关掉。
     - `static_assert`：**编译阶段就拦截错误，还没生成 exe 就报错。*/
+    // std::tuple_size_v<tuple_t>：获取tuple的元素个数此时为6
     static_assert(I < std::tuple_size_v<tuple_t>, "Layer not found in CoordinateSystem");
 
     // 获取第I个缓冲区对应的坐标系标签
-    //拿`std::tuple_element_t<I>`取出第 I 个缓冲区的类型，通过`buffer_coord_of`元 trait 提取这个缓冲区绑定的坐标系标签。
+    //拿`std::tuple_element_t<I, tuple_t>`：获取tuple_t的第I个元素的类型
+    // std::remove_cvref_t<std::tuple_element_t<I, tuple_t>>：移除第I个元素的const/volatile/引用属性，获取原始类型
+    // typename buffer_coord_of<std::remove_cvref_t<std::tuple_element_t<I, tuple_t>>>::type：获取第I个元素的坐标系标签
     using buffer_coord =
         typename buffer_coord_of<std::remove_cvref_t<std::tuple_element_t<I, tuple_t>>>::type;
 
     // 匹配到目标帧，返回当前tuple元素，匹配`Layer == buffer_coord`，就执行`return std::get<I>(system)`返回缓冲区引用。
     //if Layer == root; Layer = true
     if constexpr (std::is_same_v<Layer, buffer_coord>) {
+        // std::get<I>(std::forward<System>(system))：获取第I个元素的引用
         return std::get<I>(std::forward<System>(system));
     }
     // 未匹配，递归查找下一个tuple下标
@@ -463,6 +474,8 @@ constexpr void for_each_coordinate_buffer(System&& system, Fn&& fn) {
  */
 template <non_root_frame Layer>
 constexpr void update(CoordinateSystem& system, const EdgeTransform<Layer>& transform, timestamp_ns_t ns) noexcept {
+    // buffer_of<Layer>(system)：获取第Layer个元素的引用
+    // push(ns, transform)：向该元素的时序缓冲区推入新的完整SE3变换
     buffer_of<Layer>(system).push(ns, transform);
 }
 

@@ -1,0 +1,15 @@
+{
+  "configById": {
+    "Image!calibration": {
+      "imageMode": {
+        "imageTopic": "/calibration/image"
+      }
+    }
+  },
+  "globalVariables": {},
+  "userNodes": {},
+  "playbackConfig": {
+    "speed": 1
+  },
+  "layout": "Image!calibration"
+}

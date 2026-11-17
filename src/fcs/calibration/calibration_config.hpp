@@ -153,15 +153,16 @@ struct CalibrationConfig {
      */
     [[nodiscard]] static std::expected<CalibrationConfig, std::string>
         load_from_file(const std::string& path) noexcept {
-        // 解析磁盘TOML文件
+        // 解析磁盘TOML文件,toml::parse_file函数解析文件内容，返回TOML::Value对象
         auto result = toml::parse_file(path);
         // 文件语法解析失败，返回错误描述
         if (!result) {
             return std::unexpected(
+                //.error().description()返回解析错误描述,类型为std::string
                 fmt::format("Failed to parse {}: {}", path, result.error().description()));
         }
 
-        // 获取TOML根表
+        // 获取TOML根表，返回TOML::Table对象，为什么用&引用，因为TOML::Table对象是const类型，不能直接赋值给CalibrationConfig结构体的成员变量
         const auto& tbl = result.table();
         // 查找顶层 [calibration] 子表
         if (auto calib_tbl = tbl["calibration"].as_table()) {

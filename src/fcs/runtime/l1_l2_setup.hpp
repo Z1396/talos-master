@@ -44,6 +44,14 @@ struct L1L2SetupResult {
 };
 
 /**
+ * @brief L1/L2初始化可选开关
+ */
+struct L1L2SetupOptions {
+    /// 是否注册武器发射指令下发系统；标定等只取图场景无需下发，应关闭
+    bool enable_weapon_output = true;
+};
+
+/**
  * @brief 创建并注册L1采集层和L2感知层系统
  * @param world 调度器世界对象（用于资源和通道管理）
  * @param scheduler 调度器实例（用于系统注册）
@@ -66,6 +74,8 @@ struct L1L2SetupResult {
  * @note 系统依赖关系由调度器自动分析，无需手动指定
  */
 [[nodiscard]] std::expected<L1L2SetupResult, std::string>
-    setup_l1(talos::World& world, talos::Scheduler& scheduler, hardware::HardwareBackendConfig cfg);
+    setup_l1(
+        talos::World& world, talos::Scheduler& scheduler, hardware::HardwareBackendConfig cfg,
+        L1L2SetupOptions options = {});
 
 } // namespace fcs::runtime
