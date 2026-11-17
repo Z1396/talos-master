@@ -37,9 +37,6 @@
 #include <optional>
 // 移动/拷贝语义、pair
 #include <utility>
-
-namespace talos::primitive {
-
 /**
  * @brief 无锁单生产者多消费者三缓冲容器
  *
@@ -50,8 +47,6 @@ namespace talos::primitive {
  * 内部存储 `shared_ptr<const T>`，生产者与消费者共享底层数据，实现零拷贝数据传递。
  *
  * ## 使用示例
- *
- * ```cpp
  * auto [writer, reader] = SpmcTripleBuffer<Frame>::create();
  *
  * // 生产者线程：写入新帧
@@ -62,10 +57,7 @@ namespace talos::primitive {
  * if (auto frame = reader2.read()) {
  *     // 处理帧数据
  * }
- * ```
- *
  * ## 线程约束
- *
  * - 仅允许单个写线程；任意数量读线程
  * - 写操作会阻塞，等待所有读线程释放锁
  * - 读线程之间完全无阻塞并发
@@ -76,6 +68,8 @@ namespace talos::primitive {
  * - 读：O(1) 原子操作
  * - 内存占用：3个shared_ptr + 原子变量缓存行对齐开销
  */
+namespace talos::primitive {
+
 template <typename T>
 /*std::movable<T>
 类型可移动：支持移动构造、移动赋值，可以被 std::move 转移所有权；不一定支持拷贝。
@@ -95,6 +89,7 @@ requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
      * - 读线程：原子递增读者计数，获取共享读锁
      * - 写线程：先置位写标记，自旋等待读者计数归零后获取独占写权限
      */
+    //0x80000000u == ~0x7FFFFFFFu
     class RWSpinLock {
         // 最高位：写者占用标记
         static constexpr std::uint32_t WRITER_BIT = 0x80000000u;

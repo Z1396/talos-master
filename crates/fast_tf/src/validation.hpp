@@ -99,7 +99,7 @@ template <std::floating_point T, typename From, typename To>
  */
 template <std::floating_point T>
 bool has_nan_or_inf(T value) noexcept {
-    // std::isnan：判断是否无效数字；std::isinf：判断正负无穷
+    // std::isnan：判断是否无效数字(NaN)（返回true）；std::isinf：判断正负无穷（返回true）
     return std::isnan(value) || std::isinf(value);
 }
 

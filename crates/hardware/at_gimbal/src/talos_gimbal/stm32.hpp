@@ -72,6 +72,7 @@ private:
 class Stm32Parser {
 public:
     // 静态全局指针：外部全局数据存储，生命周期由上层调度管理
+    // static inline：内部链接，每个 TU 单独一份副本，static 局部变量每个 TU 独立初始化
     static inline ReceiveImuData* latest_imu{nullptr};
     static inline ReceiveCapabilitiesData* latest_capabilities{nullptr};
 

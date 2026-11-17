@@ -125,6 +125,7 @@ public:
         - **不释放所有权！unique_ptr 仍然持有这个对象，析构时依旧会 delete**
         - 只是把内部保存的指针拿出来给你临时用，**不是转移所有权，不是释放**
         > 类比：unique_ptr 是一个 “装指针的盒子”；`.get()` 只是把盒子里面指针拿给你看，盒子还拿着管理权。*/
+        //.get() 获取托管对象的裸指针，不释放所有权
         return static_cast<Model<T>*>(ptr_.get())->value;
     }
 
@@ -382,6 +383,9 @@ public:
         // 对比 emplace：key冲突时try_emplace不会构造value，无多余开销
         // 场景：资源管理器，保证同类型只创建一次
         // 逻辑：it->second取存储；inserted=false则重复注册，panic
+        /*typeid：获取类型信息。
+        std::type_info：表示运行时类型信息。
+        std::type_index：把类型信息包装成适合放入关联容器的键。*/
         auto [it, inserted] = resources_.try_emplace(typeid(U));
 
         // 资源已存在，致命错误（调度器设计：全局资源单例）
@@ -471,6 +475,7 @@ public:
 
 private:
     // Key：运行时类型索引  Value：类型擦除容器
+    // std::type_index 是运行时类型索引，用于唯一标识不同类型的资源
     std::unordered_map<std::type_index, UniqueAny> resources_;
 };
 
@@ -635,6 +640,8 @@ public:
         using U = std::remove_cvref_t<T>;
 
         // 2. 打印调试日志，输出原始传入类型T的可读名字（demangle还原C++编译后的typeid名字）
+        // .name()：获取typeid对象的C类型名，可能包含修饰符（如 const、volatile、&、&&）
+        // demangle()：将typeid对象的C类型名还原为可读的C++类型名
         SPDLOG_DEBUG("register {}", demangle(typeid(T).name()));
 
         // 3. 确保类型U对应的存储结构/哈希槽已经分配、初始化（类型单例池前置检查）

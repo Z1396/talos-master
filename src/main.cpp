@@ -67,6 +67,7 @@ void signal_handler(int /*sig*/) {
 int main() {
     // ===================== 1. 注册系统信号处理器 =====================
     // 捕获 Ctrl+C 信号
+    // std::signal(SIGINT, signal_handler) 注册 Ctrl+C 信号处理函数一运行就会一直监听不会阻塞程序执行
     std::signal(SIGINT, signal_handler);
     // 捕获进程终止信号（kill 命令、系统关闭等）
     std::signal(SIGTERM, signal_handler);
@@ -86,7 +87,7 @@ int main() {
         build.build_host);
 
     // ===================== 4. 加载配置文件 at_vision.toml =====================
-    // 加载视觉业务对应的 TOML 配置文件
+    // 加载视觉业务对应的 TOML 配置文件得到一个 expected 对象，承载配置文件解析结果或错误信息。
     auto config = fcs::load_config("at_vision.toml");
     // 配置加载失败：打印致命日志，直接退出程序
     if (!config) {
@@ -97,10 +98,15 @@ int main() {
     // ===================== 5. 提前提取可视化配置 =====================
     // 注释说明：fcs::boot 会消费主配置，而 Foxglove 属于独立可视化库
     // 必须在 boot 之前单独取出可视化配置，防止配置被释放/覆盖
+    // config->foxglove 为什么可以用->
+    // 因为 config 是一个 expected 对象，*config 是一个结构体指针，*config->foxglove 是一个结构体。
+    // 所以可以用->
+    // 如果用*，就会报错，因为*config 是一个结构体指针，不能用* 解引用。
     auto foxglove_cfg = config->foxglove;
 
     // ===================== 6. 创建核心调度器实例 =====================
     // 使用配置文件中的调度器参数（周期、线程数、优先级、任务拓扑等）初始化调度器
+    // 在
     talos::Scheduler scheduler(config->scheduler);
 
     // ===================== 7. 初始化 Foxglove 可视化模块 =====================
@@ -192,10 +198,10 @@ int main() {
     std::atomic<bool> scheduler_finished{false};
 
     // 新建后台监听线程
+    // &scheduler, &scheduler_finished: 引用捕获相当于传递指针，确保线程内可以访问调度器状态
     std::thread shutdown_watcher([&scheduler, &scheduler_finished]() {
         bool shutdown_logged = false; // 保证“收到退出信号”日志只打印一次
-
-        // 循环监听：调度器未结束则持续轮询
+        // 循环监听：调度器未结束则持续轮询 
         while (!scheduler_finished.load(std::memory_order_acquire)) {
             // 读取全局退出标记
             if (g_shutdown_requested.load(std::memory_order_acquire)) {

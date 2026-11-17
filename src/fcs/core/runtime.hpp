@@ -125,6 +125,11 @@ using CapabilityMask = uint8_t;
  * @brief 批量能力数组合并为单字节掩码
  * @param capabilities 批量启用的功能枚举只读视图
  * @return 按位或合并后的完整掩码
+ * `std::span<T>` 是**视图（view）**，它本身不持有内存，只是指向一块连续的 `T[]`。
+- `std::span<T>`：可以修改**元素**，span 本身（指针 + 长度）可以重定向
+- `std::span<const T>`：**不能修改元素**，只读视图；span 本身（指针、长度）仍然可以改
+- `const std::span<T>`：span 本身不能重定向（指针和长度固定），但**元素可以修改**
+- `const std::span<const T>`：span 本身不能重定向 + 元素也不能修改
  */
 [[nodiscard]] inline auto capability_mask(const std::span<const Capability> capabilities) noexcept
     -> CapabilityMask {
@@ -143,6 +148,7 @@ using CapabilityMask = uint8_t;
  */
 struct CapabilityState {
     // 构造1：通过初始能力数组生成掩码
+    // explicit：显式构造函数，防止隐式转换
     explicit CapabilityState(const std::span<const Capability> initial) noexcept
         : mask_(capability_mask(initial)) {}
 

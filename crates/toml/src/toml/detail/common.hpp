@@ -97,7 +97,7 @@ const volatile T → T*/
 // 来自 common.hpp 第 75-77 行
 template <typename T>
 concept Reflectable = 
-    field_reflection::field_referenceable<std::remove_cvref_t<T>>  // 能获取字段引用
+    field_reflection::field_referenceable<std::remove_cvref_t<T>>  // 能获取字段引用field_referenceable判断要聚合体而且剔除cvref
     && field_reflection::field_namable<std::remove_cvref_t<T>>;    // 能获取字段名
 
 // ============================================================================

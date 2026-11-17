@@ -579,7 +579,8 @@ struct Imu {
 std::expected<L1L2SetupResult, std::string> setup_l1(
     talos::World& world,                // ECS世界实例，存放全局资源(IMU状态、相机内参等)
     talos::Scheduler& scheduler,        // Talos拓扑调度器，用来注册固定周期运行的系统(IMU读取、相机读取、武器输出)
-    hardware::HardwareBackendConfig cfg) // 顶层硬件配置variant：二选一 DaedalusConfig / DirectConfig
+    hardware::HardwareBackendConfig cfg, // 顶层硬件配置variant：二选一 DaedalusConfig / DirectConfig
+    L1L2SetupOptions options)            // 可选开关：是否注册武器输出系统
 {
     // ===================== 局部句柄定义 =====================
     // 相机输入接口抽象（统一封装：仿真IPC相机 / 实物海康相机）
@@ -595,7 +596,8 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     // ===================== Variant分发：根据硬件配置类型自动选择初始化分支 =====================
     // std::visit：访问variant（HardwareBackendConfig是std::variant<DaedalusConfig,DirectConfig>）
     // overloaded{}：语法糖，批量放多个lambda，自动匹配variant当前类型
-    std::expected<void, std::string> result = std::visit(overloaded{
+    std::expected<void, std::string> result = std::visit(
+        overloaded{
             // ========== 分支1：Daedalus一体化IPC（你的Bevy仿真器，共享内存IPC通信） ==========
             // 捕获&：引用外部所有局部变量camera/output/imu/imu_ready，在lambda内修改
             [&camera, &output, &imu,&imu_ready](hardware::DaedalusConfig) -> std::expected<void, std::string> {
@@ -742,7 +744,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
         return std::unexpected(result.error());
     }
 
-    // 读取相机内参，存入ECS全局资源，给L2识别、PnP解算使用
+    // 读取相机内参矩阵,畸变系数,画面尺寸,相机硬件参数 存入ECS全局资源，给L2识别、PnP解算使用
     const auto& cam_info = camera->camera_info();
     world.insert_resource(cam_info);
 
@@ -809,11 +811,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     });
 
 
-
     // 把武器输出接口存入Scheduler内的ECS资源，给weapon_output系统读取
     scheduler.world().insert_resource(std::move(output));
     // ===================== IMU就绪：注册250Hz武器发射指令下发系统 =====================
-    if (imu_ready) {
+    if (imu_ready && options.enable_weapon_output) {
         scheduler.add_system<talos::fixed_rate<250, 1>>(
             "weapon_output",
             [](

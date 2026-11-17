@@ -222,7 +222,8 @@ static void print_mermaid_rebuild_hint(const char* message) {
 /// 调度器构造函数：接收全局配置，初始化性能统计起始时间戳
 Scheduler::Scheduler(const SchedulerConfig config) noexcept
     : config_(config)
-    , stats_start_time_(Clock::now()) {}
+    , stats_start_time_(Clock::now()) // Clock::now() 初始化性能统计起始时间戳
+    {}
 
 /// 调度器析构函数：停止调度，等待所有定时线程安全退出
 Scheduler::~Scheduler() noexcept {
@@ -408,6 +409,7 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
     {
         // CAS交换失败，判断当前实际状态
         if (expected == LifecycleState::Running) {
+            // std::unexpected表示抛出异常，异常类型为SchedulerError::AlreadyRunning
             return std::unexpected(SchedulerError::AlreadyRunning);
         }
         // 未执行build，拓扑未初始化，禁止启动
@@ -427,6 +429,8 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
             .system_index = i,
         };
         // 生成后台线程，执行定时循环函数
+        // ctx是引用捕获，确保在线程执行时，ctx的生命周期与线程相同。
+        // run_fixed_rate_thread()函数中使用。
         fixed_rate_threads_.emplace_back([ctx]() mutable { run_fixed_rate_thread(ctx); });
     }
 
@@ -439,33 +443,24 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
             t.join();
         }
     }
+    // 清空所有定时线程
+    // .clear()方法会将容器中的所有元素移除，释放所有占用的内存。
     fixed_rate_threads_.clear();
 
     return {};
 }
 
 /// 停止调度器：生命周期切回Built，唤醒阻塞等待的计算循环
-/* T 为原子封装类型，如 enum、int、bool
-bool compare_exchange_strong(
-    T& expected,          // 传入预期值，失败时会被改写为当前原子真实值
-    T desired,             // CAS 成功后要写入的新值
-    std::memory_order success,  // CAS 修改成功时的内存序
-    std::memory_order failure  // CAS 修改失败时的内存序
-) noexcept;*/
-/*最简小例子
-std::atomic<int> num = 5;
-int exp = 5;
-// 预期5，想改成10
-bool ok = num.compare_exchange_strong(exp, 10);
-num 现在是 5 == exp，修改成功 → num=10，ok=true
-
-std::atomic<int> num = 8;
-int exp = 5;
-bool ok = num.compare_exchange_strong(exp, 10);
-num=8≠5，修改失败 → exp 自动变成 8，ok=false*/
 void Scheduler::stop() noexcept {
     // CAS将Running状态切回Built
     auto expected = LifecycleState::Running;
+
+    // CAS将Running状态切回Built
+    // 成功：将原子变量更新为「新值 desired」，返回 true；
+    // 失败：将原子变量当前值写入 expected，返回 false。
+    // 注意：CAS操作是原子的，不会被其他线程打断。
+    // 如果compare_exchange_strong返回true，先获取当前值，再更新为新值，确保其他线程可见性,所以CAS 成功时，它既读取了原子变量，又修改了原子变量。
+    // 如果compare_exchange_strong返回false，将当前值写入expected，不更新其他线程可见性,失败时没有写操作，因此不需要 release 语义。
     lifecycle_.compare_exchange_strong(
         expected, LifecycleState::Built, std::memory_order_acq_rel, std::memory_order_acquire);
 
@@ -475,9 +470,12 @@ void Scheduler::stop() noexcept {
     控制 lock_guard 的生命周期，出括号自动解锁。*/
     {
         std::lock_guard lock(pause_mutex_);
+        // 清除暂停标记，通知所有等待的计算循环线程重新检查状态
         pause_requested_.store(false, std::memory_order_release);
     }
-    pause_cv_.notify_all();
+    pause_cv_.notify_all();// 唤醒所有等待的计算循环线程
+    // 注意：notify_all() 会唤醒所有等待线程，包括暂停状态的线程。
+    // 这是设计上的选择，因为暂停状态的线程需要在暂停标记被清除后重新检查状态。
 }
 
 /// 注册停止钩子函数：调度器关闭退出前执行自定义清理逻辑
@@ -623,6 +621,7 @@ void Scheduler::request_compute_loop_pause() noexcept {
     // 条件变量阻塞，等待compute_loop置位paused标记
     {
         std::unique_lock lock(pause_mutex_);
+        /*相当于等待paused_标记被置位，寻常唤醒不会被唤醒因为paused_标记被置位后，compute_loop会检查paused_标记是否被置位，如果被置位，就会退出循环，继续执行*/
         pause_cv_.wait(lock, [this] { return paused_.load(std::memory_order_acquire); });
     }
 }
@@ -632,6 +631,7 @@ void Scheduler::resume_compute_loop() noexcept {
     // 清除暂停请求标记
     {
         std::lock_guard lock(pause_mutex_);
+        // .store表示将暂停请求标记设置为false，通知所有等待的计算循环线程重新检查状态
         pause_requested_.store(false, std::memory_order_release);
     }
     // 唤醒等待在条件变量上的主线程
@@ -1912,6 +1912,7 @@ void Scheduler::run_fixed_rate_thread(FixedRateContext ctx) {
     // 读取外部传入的调度器生命周期原子状态，判断调度器是否仍处于可运行状态
     // memory_order_acquire：保证读到其他线程release写入的最新生命周期状态
     const auto keep_running = [&ctx] {
+        // ->load(std::memory_order_acquire)表示读取生命周期原子状态，确保读到其他线程release写入的最新生命周期状态
         return is_running_state(ctx.lifecycle->load(std::memory_order_acquire));
     };
 
@@ -2147,6 +2148,7 @@ void Scheduler::run_compute_loop() {
             } else if (idle_count <= YIELD_LIMIT) {
                 // 阶段2：自旋次数超过阈值，主动让出当前CPU时间片
                 // 内核调度其他就绪线程运行，本线程重新进入就绪队列等待调度
+                // yield()函数将当前线程从就绪队列中移除，使其他线程有机会执行
                 std::this_thread::yield();
             } else {
                 // 阶段3：长时间无任务，执行短休眠，内核挂起线程，大幅降低CPU占用

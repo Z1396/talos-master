@@ -1,0 +1,16 @@
+# Camera Extrinsic Calibration Result (Hand-Eye)
+# RMS Error: 2.504173 m
+# Samples: 30
+
+# Date: 2026-11-13 19:28:39
+[transform]
+# camera_link → gimbal_link (相机在云台坐标系下的位姿)
+# Translation: [x, y, z] in meters
+# Rotation: [roll, pitch, yaw] in radians
+translation = [0.161511, -0.000936, 0.148544]
+rotation = [-0.005987, 0.001655, 0.000858]
+
+[calibration_info]
+rms_error = 2.504173
+num_samples = 30
+method = "Daniilidis"

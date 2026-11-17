@@ -1,12 +1,12 @@
 [camera]
-camera_matrix = [2451.41, 0, 799.83, 0, 2455.74, 566.662, 0, 0, 1]
-distort_coefficient = [-0.022426, 0.23621, 0.00142727, 0.00490628, -0.343924] # 畸变参数(k1,k2,p1,p2,k3)
+camera_matrix = [1298.81, 0, 717.648, 0, 1299.22, 551.304, 0, 0, 1]
+distort_coefficient = [-0.00520578, 0.013556, 0.00198823, -0.00063846, -0.00371566] # 畸变参数(k1,k2,p1,p2,k3)
 width = 1440 # 图像宽度
 height = 1080 # 图像高度 
 
 # [calibration_info]
-# rms_error = 0.196189    # 标定均方根误差（2026-10-01，对焦0.7m/F16）
-# num_samples = 31         # 标定使用样本数量
+# rms_error = 0.349039   # 内参标定均方根误差（2026-11-13，31组样本）
+# num_samples = 31       # 标定使用样本数量
 
 [camera.profile]
 trigger_mode = false     # 是否使用外部触发模式
@@ -17,7 +17,10 @@ gain = 12.0              # 相机增益
 [extrinsic.gimbal_yaw.gimbal_pitch]
 translation = [-0.00563, 0, 0.08139] # 云台pitch坐标到云台yaw坐标的平移偏移
 
-camera_link.translation = [0.05925, 0, 0.04313] # 相机相对于pitch安装位置偏移
+camera_link.translation = [0.161511, -0.000936, 0.148544] # 相机相对于pitch安装位置偏移（手眼标定 2026-11-13）
+camera_link.roll = -0.343   # 相机横滚角（度）
+camera_link.pitch = 0.095   # 相机俯仰角（度）
+camera_link.yaw = 0.049     # 相机偏航角（度）
 
 muzzle_link.translation = [0.04624, 0.0, 0.0] # 枪口坐标相对pitch安装位置的偏移
 muzzle_link.roll = 0.0                        # 枪口横滚角

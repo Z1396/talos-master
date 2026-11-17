@@ -204,26 +204,37 @@ std::expected<HandEyeResult, std::string> HandEyeCalibrator::calibrate() noexcep
     // 旋转矩阵转欧拉角 rpy
     auto euler = math_fuxk::rpy(R_result);
 
-    // 计算整体RMS重投影误差 AX-XB
+    // 一致性残差校验：正确解必须满足 A_i * X * B_i 恒为同一固定变换（base → target）
+    // 以首帧结果为参考，统计其余样本相对参考的平移偏差，单位：米
     double total_error  = 0.0;
     Eigen::Matrix4d X   = Eigen::Matrix4d::Identity();
     X.block<3, 3>(0, 0) = R_result;
     X.block<3, 1>(0, 3) = t_result;
 
-    for (size_t i = 0; i < samples_.size(); ++i) {
-        const auto& sample = samples_[i];
-        Eigen::Matrix4d A  = sample.gimbal_pose.matrix();
-        Eigen::Matrix4d B  = sample.board_pose.matrix();
+    Eigen::Matrix4d reference = Eigen::Matrix4d::Identity();
+    bool has_reference        = false;
+    size_t residual_count     = 0;
 
-        Eigen::Matrix4d AX = A * X;
-        Eigen::Matrix4d XB = X * B;
+    for (const auto& sample : samples_) {
+        const Eigen::Matrix4d consistency =
+            sample.gimbal_pose.matrix() * X * sample.board_pose.matrix();
 
-        // 矩阵差范数平方累加
-        double diff = (AX - XB).norm();
-        total_error += diff * diff;
+        // 首帧作为参考常量，不参与误差统计
+        if (!has_reference) {
+            reference     = consistency;
+            has_reference = true;
+            continue;
+        }
+
+        // 平移偏差平方累加
+        const Eigen::Vector3d diff = consistency.block<3, 1>(0, 3) - reference.block<3, 1>(0, 3);
+        total_error += diff.squaredNorm();
+        ++residual_count;
     }
-    // 均方根误差
-    double rms = std::sqrt(total_error / static_cast<double>(samples_.size()));
+    // 均方根平移偏差（米），无量纲的旋转偏差不参与统计
+    double rms = residual_count > 0
+                   ? std::sqrt(total_error / static_cast<double>(residual_count))
+                   : 0.0;
 
     // 填充输出结构体
     HandEyeResult result;
@@ -270,16 +281,16 @@ std::expected<void, std::string> save_handeye_result(
     // 固定小数精度6位
     file << std::fixed << std::setprecision(6);
 
-    // 文件注释头信息
+    // 文件注释头信息（数值与标注单位保持一致：平移为米，RMS为米）
     file << "# Camera Extrinsic Calibration Result (Hand-Eye)\n";
-    file << "# RMS Error: " << result.rms_error << " mm\n";
+    file << "# RMS Error: " << result.rms_error << " m\n";
     file << "# Samples: " << result.num_samples << "\n\n";
     file << "# Date: " << current_datetime_string() << "\n";
 
     // 变换数据段
     file << "[transform]\n";
-    file << "# camera_link → gimbal_link\n";
-    file << "# Translation: [x, y, z] in mm\n";
+    file << "# camera_link → gimbal_link (相机在云台坐标系下的位姿)\n";
+    file << "# Translation: [x, y, z] in meters\n";
     file << "# Rotation: [roll, pitch, yaw] in radians\n";
     file << "translation = [" << result.translation.x() << ", " << result.translation.y() << ", "
          << result.translation.z() << "]\n";
@@ -303,7 +314,7 @@ void print_handeye_result(const HandEyeResult& result) noexcept {
     constexpr double rad_to_deg = 180.0 / std::numbers::pi;
 
     SPDLOG_INFO("=== Camera Extrinsic Calibration Result ===");
-    SPDLOG_INFO("Transform: gimbal_link → camera_link");
+    SPDLOG_INFO("Transform: camera_link → gimbal_link");
     SPDLOG_INFO("");
     SPDLOG_INFO("Translation:");
     SPDLOG_INFO("  X (forward): {:7.2f} mm", result.translation.x() * 1000.0);
