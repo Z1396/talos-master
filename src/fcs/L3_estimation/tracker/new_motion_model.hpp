@@ -83,8 +83,8 @@ struct RobotEkfMotionModel
 
         // 距离观测噪声（log距离空间）
         // PnP解算带来的几何噪声在L2层额外叠加，不在此模型内
-        Scalar meas_dist_var_floor      = 2.5e-3;
-        Scalar meas_dist_delta_angle_k  = 1.0;
+        Scalar meas_dist_var_floor      = 2.5e-3;// 距离观测方差下限
+        Scalar meas_dist_delta_angle_k  = 1.0;// 观测水平角度最小方差系数
 
         Scalar meas_armor_yaw_var_floor = 9e-2; // 装甲自身偏航观测方差下限
         Scalar meas_armor_yaw_range_k   = 1.0 / 200.0; // 噪声随距离增长系数

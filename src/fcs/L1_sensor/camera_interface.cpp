@@ -134,6 +134,8 @@ auto HikInput::recv(const std::chrono::milliseconds timeout) noexcept
     -> std::expected<Frame, InputError> {
     // 调用海康SDK阻塞读取图像
     auto result = camera_->read(
+        // std::chrono::duration_cast<unsigned int, std::milli>：将chrono::milliseconds转换为unsigned int，单位为毫秒
+        // 海康SDK要求超时时间是毫秒级，所以需要转换为unsigned int
         std::chrono::duration_cast<std::chrono::duration<unsigned int, std::milli>>(timeout));
 
     if (!result) {

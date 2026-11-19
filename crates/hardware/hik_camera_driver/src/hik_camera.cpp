@@ -257,7 +257,17 @@ public:
         if (!grabbing_) {
             return std::unexpected(CameraError{"get image buffer: camera is not grabbing"});
         }
-
+        // 初始化图像信息结构体，用于接收SDK返回的图像数据
+        /*`stImageInfo` 只是一个 普通结构体 ，它的生命周期结束时，编译器只会回收它自己的那点栈内存，也就是`stImageInfo` 结构体内存的释放。
+        它内部成员`pBufAddr` 指向的那块图存放于 海康 SDK 的内部缓冲池 ，既不在栈上，也不是`new` 出来的。
+        C++ 不知道这块内存需要归还，也不知道归还函数叫`MV_CC_FreeImageBuffer` 。*/
+        /*## 、为什么 stImageInfo 自己不能释放
+        因为“销毁一个局部变量”在 C++ 里只意味着：
+        1. 回收它占用的那点 栈内存 ；
+        2. 如果有非平凡析构，执行它。
+        `stImageInfo.pBufAddr` 只是个`unsigned char*` ；它指向的内存属于 海康 SDK 内部缓冲池 ，不是 C++ 分配的（不是`new` 、不在栈上、没有`cv::Mat` 的引用计数）。
+        C++ 对这块内存一无所知，所以销毁指针变量只是丢掉一个地址值，缓冲区照样被 SDK 标记为“使用中”。
+        对外部资源（文件描述符、锁、socket、GPU buffer、SDK 池） 语言本身永远无法自动回收 ，这就是为什么需要 RAII。*/
         MV_FRAME_OUT stImageInfo{};
 
         // SDK读取接口超时单位为毫秒，转换微秒到毫秒
@@ -268,13 +278,14 @@ public:
 
         // RAII自动释放图像缓冲区，防止内存泄漏
         struct ImageBufferGuard {
-            void* handle;
-            MV_FRAME_OUT* frame;
-            bool released = false;
+            void* handle;       // 相机句柄，用于释放图像缓存
+            MV_FRAME_OUT* frame;  // 图像信息结构体指针，用于释放图像缓存
+            bool released = false;  // 标记是否已释放缓存，避免重复释放
 
             // 离开作用域自动释放SDK图像缓存
             ~ImageBufferGuard() noexcept {
                 if (!released && frame != nullptr && handle != nullptr) {
+                    // 释放图像缓存，防止内存泄漏
                     MV_CC_FreeImageBuffer(handle, frame);
                 }
             }
@@ -282,7 +293,7 @@ public:
             // 手动取消自动释放（本代码不需要，预留扩展）
             void release() noexcept { released = true; }
         };
-
+        // 创建RAII对象，自动管理图像缓存释放
         ImageBufferGuard buffer_guard{camera_handle_, &stImageInfo};
 
         // 根据相机原始Bayer格式获取OpenCV解拜耳转换码

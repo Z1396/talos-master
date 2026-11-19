@@ -248,7 +248,7 @@ struct DaedalusImu {
         bool control_updated           = false;
         // 记录本周期最新的位姿时间戳（纳秒）
         uint64_t control_timestamp_ns  = 0;
-        /**
+        /*
          * 局部捕获lambda：一旦读到任意一个连杆位姿，就调用这个lambda
          * 标记control_updated=true，同时保存最大时间戳；多个不同连杆可能时间戳不一样，取std::max最新时间
          * [&] 引用捕获：全部外部变量按引用访问
@@ -448,10 +448,11 @@ struct McuImu {
         talos::spmc_mut<core::ControlResourceSnapshot, RuntimeControlStateChannelTopic> control_out, // SPMC可写通道：输出控制状态快照，下发控制消息
         [[maybe_unused]] talos::spmc_mut<ipc::GroundTruthBatch, GroundTruthBatchChannelTopic> gt_out) noexcept // SPMC可写通道：输出真值批量数据，Foxglove可视化；[[maybe_unused]]消除未使用参数告警；noexcept 函数不抛异常
         {
-        // 处理串口接收事件，底层填充g_imu_data/g_capabilities_data处理断线重连
+        // 处理串口接收事件，底层填充g_imu_data/g_capabilities_data处理断线重连逻辑
         device->handle_events();
         // 存在能力包则更新全局设备能力
         if (capabilities_data != nullptr) {
+            // 解析能力包，更新全局设备能力
             apply_mcu_capabilities(capabilities, following, *capabilities_data);
         }
         // 校验IMU数据包合法性
@@ -465,6 +466,7 @@ struct McuImu {
         fast_tf::update_rotate_only<fast_tf::gimbal_yaw_fuxk_frame>(
             *tf_buffer, math_fuxk::rpy<double>(imu_data->data.roll, 0.0, imu_data->data.yaw),
             timestamp_ns);
+            
         fast_tf::update_rotate_only<fast_tf::gimbal_pitch_fuxk_frame>(
             *tf_buffer, math_fuxk::rpy<double>(0.0, imu_data->data.pitch, 0.0), timestamp_ns);
 

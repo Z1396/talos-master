@@ -603,11 +603,12 @@ struct ArmorCandidateCollection {
 
 // 组装完整一轮目标选择诊断轨迹数据包
 [[nodiscard]] TargetSelectionTrace build_target_selection_trace(
-    uint64_t current_ns, const std::optional<core::TargetKey>& previous_key,
-    const ArmorTargetDecider& decider, double switch_margin,
-    const ArmorTargetDeciderResult& decider_result,
-    const std::vector<CandidateEvaluation>& candidates,
-    std::vector<TargetSelectionTraceEntry> rejected) {
+    uint64_t current_ns, const std::optional<core::TargetKey>& previous_key,// 上一轮目标标识
+    const ArmorTargetDecider& decider, double switch_margin,// 切换余量
+    const ArmorTargetDeciderResult& decider_result,// 目标选择结果
+    const std::vector<CandidateEvaluation>& candidates,// 候选目标诊断评估
+    std::vector<TargetSelectionTraceEntry> rejected)// 被淘汰目标诊断日志
+{
     // 创建诊断轨迹结构体
     TargetSelectionTrace trace{
         // 当前时间戳
@@ -874,8 +875,8 @@ auto cleanup_stale_phase_states(
 
 // 更新选中目标的阶段状态，记忆跳变时锁定的装甲ID
 auto update_selected_phase_state(
-    CandidateEvaluation& selected,
-    std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash>& phase_states)
+    CandidateEvaluation& selected,// 选中的候选目标诊断评估
+    std::unordered_map<core::TargetKey, TargetPhaseState, core::TargetKeyHash>& phase_states)// 目标相位状态哈希表
     -> void {
     // 根据目标名称转换为装甲类型
     selected.prediction.armor_type = cls_to_armor_type(selected.tracker.target_name);
@@ -1105,7 +1106,7 @@ auto write_hold_outputs(
     auto& selected = collection.candidates[decider_result->selected_index];
 
     // ==========步骤5：构建目标选择追踪trace，用于Foxglove调试可视化、日志回放==========
-    // trace记录：时间戳、上一轮目标、决策器类型、切换阈值、选中结果、全部候选、被拒绝的候选列表
+    // trace记录：时间戳、上一轮目标、决策器类型、切换余量、选中结果、全部候选、被拒绝的候选列表
     auto trace = build_target_selection_trace(
         ctx.current_ns, previous_key, decider, sel_cfg.switch_margin, *decider_result,
         collection.candidates, std::move(collection.rejected));

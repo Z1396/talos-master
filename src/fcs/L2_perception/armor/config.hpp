@@ -54,7 +54,7 @@ struct ArmorTraditionalConfig {
     std::string classifier_model_path{};        // 分类模型文件路径
     double classifier_confidence_threshold = 0.5; // 分类置信度阈值
     bool classifier_enable_type_filtering  = true; // 是否开启类型过滤
-    bool classifier_use_softmax            = true;
+    bool classifier_use_softmax            = true;// 是否启用Softmax层（默认True）
     // 说明：老旧模型直接输出原始分值(logits)，需启用Softmax转为概率分布
 };
 

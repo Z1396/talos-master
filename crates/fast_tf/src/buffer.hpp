@@ -110,6 +110,7 @@ struct BufferOps<TransformMatrix<T, From, To>> {
     static Transform with_rotation(const Transform& base, const math_fuxk::Ros2EulerRotd& rot) {
         const auto translation        = base.translation();
         const auto [roll, pitch, yaw] = rot.rpy();
+        // 返回
         return Transform::from_rpy(
             static_cast<T>(roll), static_cast<T>(pitch), static_cast<T>(yaw), translation.x(),
             translation.y(), translation.z());

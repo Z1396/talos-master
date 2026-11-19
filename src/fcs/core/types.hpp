@@ -239,18 +239,18 @@ struct ArmorMeasurementT {
     template <fast_tf::frame ToFrame>
     [[nodiscard]] ArmorMeasurementT<ToFrame>
         reframe(const fast_tf::FrameTransform<ToFrame, Frame>& frame_transform) const {
-        ArmorMeasurementT<ToFrame> reframed;
+        ArmorMeasurementT<ToFrame> reframed;         // 目标坐标系下的测量结果
         // 矩阵左乘，完成坐标系转换
-        reframed.transform = frame_transform * transform;
+        reframed.transform = frame_transform * transform;// 目标坐标系下的位姿变换矩阵
         // 纯数据字段直接拷贝
-        reframed.name                     = name;
-        reframed.color                    = color;
-        reframed.type                     = type;
-        reframed.confidence               = confidence;
-        reframed.distance_to_image_center = distance_to_image_center;
-        reframed.pnp_cov_ypdr             = pnp_cov_ypdr;
-        reframed.pnp_condition_number     = pnp_condition_number;
-        reframed.timestamp_ns             = timestamp_ns;
+        reframed.name                     = name;          // 装甲编号
+        reframed.color                    = color;         // 装甲颜色
+        reframed.type                     = type;          // 装甲类型
+        reframed.confidence               = confidence;    // 检测置信度
+        reframed.distance_to_image_center = distance_to_image_center;// 装甲中心到图像中心的像素距离
+        reframed.pnp_cov_ypdr             = pnp_cov_ypdr;// 目标坐标系下的PnP位姿协方差矩阵
+        reframed.pnp_condition_number     = pnp_condition_number;// 目标坐标系下的PnP雅可比矩阵条件数
+        reframed.timestamp_ns             = timestamp_ns;// 目标坐标系下的帧纳秒时间戳
         return reframed;
     }
 };

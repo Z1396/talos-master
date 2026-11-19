@@ -422,9 +422,16 @@ public:
      * 3. 返回本帧是否产生输出
      */
     bool run([[maybe_unused]] World& world) noexcept override {
+        // 每帧清零输出标记
         written_ = false;
-        // 解包参数元组，调用函数std::apply()，将参数元组解包为参数列表
-        // 例如：func_(arg1, arg2, arg3) -> func_(arg1, arg2, arg3)
+        /*```
+        std::apply(func_, *cached_args_);
+        一句话：
+        `std::apply` 把**一个 tuple 里面的元素，拆成一个个参数，丢进函数调用**。
+        ### 拆开
+        - `cached_args_` 是一个指针，指向某个 `std::tuple<...>`；`*cached_args_` 拿到这个 tuple 对象
+        - `func_` 是一个可调用对象（lambda / 函数指针 /std::function / 仿函数）
+        - `std::apply(f, tuple)` 等价于：`f(get<0>(tuple), get<1>(tuple), get<2>(tuple), ...)`，tuple 有几个元素就展开几个实参*/
         std::apply(func_, *cached_args_);
         return written_;
     }

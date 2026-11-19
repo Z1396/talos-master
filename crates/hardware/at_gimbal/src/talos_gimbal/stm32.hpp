@@ -87,11 +87,14 @@ public:
      */
     static void parse(const std::span<const std::byte> data) noexcept {
         // 数据长度小于帧头大小，非法短包直接丢弃
+        // .size_bytes()：返回字节数，与 .size() 相比更符合USB数据包长度单位
         if (const auto size = data.size_bytes(); size < sizeof(HeaderFrame)) [[unlikely]] {
             SPDLOG_WARN("frame too small: expected {}, got {}", sizeof(HeaderFrame), size);
             return;
         }
         // 强转协议帧头部
+        // reinterpret_cast：最野、最不做检查的 C++ 强制类型转换：二进制比特原样重解释，不做任何转换、不生成代码、不调整值。只改编译器看待这块内存的类型视图，二进制 bit 完全不动。
+        // 含义：拿到 `data.data()` 返回的原始指针，不改动任何比特，只是告诉编译器：这块内存按 `const HeaderFrame*` 的类型去解释。
         const auto header_frame = reinterpret_cast<const HeaderFrame*>(data.data());
         // 校验帧起始标志SoF
         if (header_frame->sof != HeaderFrame::SoF()) [[unlikely]] {
@@ -174,7 +177,6 @@ struct Stm32Impl {
     [[nodiscard]] std::expected<void, std::string> connect(
             const uint16_t vendor_id           = VID,
             std::optional<uint16_t> product_id = std::nullopt) noexcept {
-
             // ctx_：libusb上下文句柄，整个libusb会话的环境，一个程序一般一个ctx
             if (!ctx_) {
                 // 初始化libusb上下文
@@ -249,6 +251,7 @@ struct Stm32Impl {
 
         // 非阻塞处理libusb异步事件
         timeval tv{0, 0};
+        // libusb_handle_events_timeout_completed：轮询libusb事件，等待10ms，返回处理的事件数量
         libusb_handle_events_timeout_completed(ctx_, &tv, nullptr);
 
         // 标记需要重连，执行重连逻辑
@@ -559,6 +562,7 @@ private:
             lock.unlock();
             // 轮询libusb事件，防止死等
             timeval tv{0, 10000};
+            // libusb_handle_events_timeout_completed：轮询libusb事件，等待10ms，返回处理的事件数量
             libusb_handle_events_timeout_completed(ctx_, &tv, nullptr);
             lock.lock();
         }
@@ -580,11 +584,15 @@ private:
             bool should_cancel = false;
             {
                 std::lock_guard lock(mtx_);
+                // 检查是否有正在运行的异步接收传输
                 should_cancel = transfer_active_;
             }
             // 取消正在运行的异步接收传输
             if (should_cancel) {
+                // libusb_cancel_transfer：取消异步传输，等待传输完成
                 const auto rc = libusb_cancel_transfer(rx_transfer_);
+                // 检查取消结果
+                // 含义：如果取消成功，返回 LIBUSB_SUCCESS；如果传输不存在，返回 LIBUSB_ERROR_NOT_FOUND
                 if (rc != LIBUSB_SUCCESS && rc != LIBUSB_ERROR_NOT_FOUND) {
                     SPDLOG_WARN("libusb_cancel_transfer: {}", libusb_error_text(rc));
                 }
@@ -607,6 +615,7 @@ private:
     void reconnect() noexcept {
         SPDLOG_INFO("usb mcu reconnecting (vendor_id={:#06x}, product_id={:#06x})...", vid_, pid_);
         std::lock_guard lock(device_mtx_);
+        // 关闭旧设备
         close_device_locked();
         // 重新打开设备
         if (auto open_result = open_device(vid_, pid_); !open_result) {
@@ -627,6 +636,8 @@ private:
      * @brief 完整销毁USB上下文、注销热插拔、关闭设备
      */
     void shutdown() noexcept {
+        // .exchange()：原子交换操作，返回旧值，设置新值
+        // 含义：如果当前状态是 Disconnected，直接返回，避免重复操作,如果当前状态是 Connected，设置为 Disconnected
         const auto previous_state = state_.exchange(State::Disconnected, std::memory_order_acq_rel);
         if (previous_state == State::Disconnected && !ctx_) {
             return;
@@ -634,6 +645,7 @@ private:
         SPDLOG_INFO("usb mcu shutting down");
         // 注销热插拔监听
         if (hp_handle_ && ctx_) {
+            // libusb_hotplug_deregister_callback：注销热插拔监听回调
             libusb_hotplug_deregister_callback(ctx_, hp_handle_);
             hp_handle_ = 0;
         }

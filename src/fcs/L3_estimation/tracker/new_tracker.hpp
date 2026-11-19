@@ -503,29 +503,29 @@ public:
             RobotEkfMotionModel::MatXX P0 = RobotEkfMotionModel::MatXX::Identity();
 
             P0(XC, XC) = 1;     // 位置初始不确定性
-            P0(YC, YC) = 1;
+            P0(YC, YC) = 1;     // 位置初始不确定性
 
             P0(VX, VX) = 64;    // 速度初始给很大方差，一开始不知道速度
-            P0(VY, VY) = 64;
-            P0(VZ, VZ) = 64;
+            P0(VY, VY) = 64;    // 速度初始给很大方差，一开始不知道速度
+            P0(VZ, VZ) = 64;    // 速度初始给很大方差，一开始不知道速度
 
-            P0(YAW, YAW)     = 0.4;
-            P0(V_YAW, V_YAW) = 100;
+            P0(YAW, YAW)     = 0.4; // 角度初始方差
+            P0(V_YAW, V_YAW) = 100;// 角速度给很大初始不确定性，刚开始不知道转多快
 
             // log域半径初始协方差，Var(log r) = var(r)/r²
             P0(LOG_R0, LOG_R0) = 1e-5 / (r0_prior * r0_prior);
             P0(LOG_R1, LOG_R1) = 1e-5 / (r1_prior * r1_prior);
-            P0(H, H)           = 1;
+            P0(H, H)           = 1;// 高度初始不确定性
 
             // 构造机器人滤波器实例，初始化EKF
-            robot_target_.emplace();
-            robot_target_->initialize(config_.robot.model, xp0, P0);
-            robot_last_armor_id_.reset();
+            robot_target_.emplace();    // 构造机器人滤波器实例
+            robot_target_->initialize(config_.robot.model, xp0, P0);// 初始化机器人滤波器
+            robot_last_armor_id_.reset();// 重置机器人最后识别装甲装甲ID
 
             // 切换跟踪器参数为机器人配置
-            lost_threshold_     = config_.robot.lost_threshold;
-            tracking_threshold_ = config_.robot.tracking_threshold;
-            matcher_gate_       = config_.robot.matcher_gate;
+            lost_threshold_     = config_.robot.lost_threshold;// 失败阈值
+            tracking_threshold_ = config_.robot.tracking_threshold;// 跟踪阈值
+            matcher_gate_       = config_.robot.matcher_gate;// 匹配门限
         }
 
         // 状态机切换为跟踪状态
@@ -589,20 +589,20 @@ public:
      * @brief 完全重置跟踪器，清空所有滤波器、状态、计时；回到空闲Idle状态
      */
     void reset() noexcept {
-        robot_target_.reset();
-        outpost_target_.reset();
-        robot_last_armor_id_.reset();
-        outpost_last_armor_id_.reset();
-        target_jumped_ = false;
-        target_name_   = ArmorName::Invalid;
-        target_color_  = ArmorColor::Neutral;
-        measurement_.fill(0.0);
-        last_image_center_distance_px_ = std::numeric_limits<double>::infinity();
-        last_observation_timestamp_ns_ = 0;
-        detecting_count_               = 0;
-        last_dt_                       = 0.0;
-        lost_time_                     = 0.0;
-        status_                        = TrackerStatus::Idle;
+        robot_target_.reset();  // 机器人目标滤波器重置         
+        outpost_target_.reset(); // 前哨站目标滤波器重置
+        robot_last_armor_id_.reset();// 机器人上一次跟踪的装甲ID重置
+        outpost_last_armor_id_.reset();// 前哨站上一次跟踪的装甲ID重置
+        target_jumped_ = false;// 目标跳转标志重置
+        target_name_   = ArmorName::Invalid;// 目标类型重置
+        target_color_  = ArmorColor::Neutral;// 目标颜色重置
+        measurement_.fill(0.0);// 清空缓存的观测数组
+        last_image_center_distance_px_ = std::numeric_limits<double>::infinity();// 最后一次观测的图像中心像素距离重置
+        last_observation_timestamp_ns_ = 0;// 最后一次观测的帧纳秒时间戳重置
+        detecting_count_               = 0;// 检测计数器重置
+        last_dt_                       = 0.0;// 上一帧时间间隔重置
+        lost_time_                     = 0.0;// 丢失时间重置
+        status_                        = TrackerStatus::Idle;// 状态重置
     }
 
     /// 获取跟踪器状态 Idle / Tracking / TempLost
@@ -627,11 +627,11 @@ private:
      */
     template <typename TargetInfo>
     struct MatchCandidate {
-        size_t obs_index{0};
-        int armor_id{0};
-        double cost{0.0};
-        typename TargetInfo::VecZ z_update{};
-        typename TargetInfo::MatZZ R_update{};
+        size_t obs_index{0};// 观测结果数组下标
+        int armor_id{0};// 机体上装甲逻辑编号
+        double cost{0.0};// 总代价(马氏距离 + 先验代价)
+        typename TargetInfo::VecZ z_update{};// 送入EKF更新的观测向量
+        typename TargetInfo::MatZZ R_update{};// 本次更新使用的测量噪声协方差（融合PnP协方差）
     };
 
     /**
@@ -660,12 +660,15 @@ private:
     [[nodiscard]] bool update_target_(
         TargetInfo& target, const ArmorMeasurementBatch& measurements, int armors_num,
         std::optional<int>& last_armor_id, bool enable_robot_pair_measure) noexcept {
-        using VecZ  = typename TargetInfo::VecZ;
-        using MatZZ = typename TargetInfo::MatZZ;
+        using VecZ  = typename TargetInfo::VecZ;// 观测向量类型
+        using MatZZ = typename TargetInfo::MatZZ;// 协方差类型
 
         // 筛选出类型等于当前跟踪目标的观测索引，过滤掉敌方/其他类型装甲
         std::vector<size_t> obs_indices;
+        // 预分配内存，避免动态分配
         obs_indices.reserve(measurements.measurements.size());
+        // 遍历所有观测，筛选出类型等于当前跟踪目标的观测
+        // 过滤掉敌方/其他类型装甲
         for (size_t i = 0; i < measurements.measurements.size(); ++i) {
             if (measurements.measurements[i].name == target_name_) {
                 obs_indices.push_back(i);
@@ -690,6 +693,7 @@ private:
          * @brief 根据装甲id计算先验代价 -log(p)
          * @param id 待评估装甲逻辑ID
          * @return 代价，越大代表该ID先验概率越低
+         * @return 先验代价，越大代表该ID先验概率越低
          */
         const auto prior_cost_for_id = [&](int id) noexcept -> double {
             // 没有上帧装甲ID，无先验，代价0
@@ -870,16 +874,17 @@ private:
         std::vector<MatchCandidate<TargetInfo>> selected;
         selected.reserve(static_cast<size_t>(armors_num));
 
+        // 遍历所有候选，选择代价最小的
         for (const auto& candidate : candidates) {
             // 观测已经被占用 / 装甲ID已经被占用，跳过
             if (used_obs[candidate.obs_index] || used_id[static_cast<size_t>(candidate.armor_id)]) {
                 continue;
             }
-            used_obs[candidate.obs_index]                    = true;
-            used_id[static_cast<size_t>(candidate.armor_id)] = true;
+            used_obs[candidate.obs_index]                    = true;// 标记观测已被占用
+            used_id[static_cast<size_t>(candidate.armor_id)] = true;// 标记装甲ID已被占用
             selected.push_back(candidate);
         }
-
+        // 没有任何有效候选，状态机标记无观测，返回false
         if (selected.empty()) {
             state_machine(false);
             return false;
@@ -905,18 +910,24 @@ private:
 
         // 代价最小的主候选
         const auto& primary = selected.front();
+        // 主�算主候选的观测马氏距离
+        // 该距离不加入先验代价，只代表观测与该装甲ID的匹配可信度
         const double primary_obs_d2 = obs_d2_for(primary);
 
         // 同一个观测，其他装甲ID的最小观测d2，用来计算margin区分度
         double second_obs_d2 = std::numeric_limits<double>::infinity();
+        // 遍历所有候选，筛选出其他装甲ID的观测
         for (const auto& candidate : candidates) {
+            // 过滤出主候选的观测
             if (candidate.obs_index != primary.obs_index) {
                 continue;
             }
+            // 过滤出主候选的观测
             if (candidate.armor_id == primary.armor_id) {
                 continue;
             }
-
+            // 计算其他候选ID的观测马氏距离
+            // 该距离不加入先验代价，只代表观测与该装甲ID的匹配可信度
             const double d2 = obs_d2_for(candidate);
             if (std::isfinite(d2)) {
                 second_obs_d2 = std::min(second_obs_d2, d2);
@@ -932,25 +943,25 @@ private:
         //-------------------------------------------------------------------------
         constexpr double kMaxCommitObsD2     = 6.0;
         constexpr double kMinCommitObsMargin = 2.0;
-
+        // 是否更新last_armor_id（历史锚点装甲ID）
         const bool commit_last_id = std::isfinite(primary_obs_d2)
                                  && primary_obs_d2 < kMaxCommitObsD2 && std::isfinite(obs_margin)
                                  && obs_margin > kMinCommitObsMargin;
-
+        // 更新last_armor_id（历史锚点装甲ID）
         if (commit_last_id) {
             last_armor_id = primary.armor_id;
         }
 
         // 保存主观测信息，对外输出调试
-        const auto& primary_measurement = measurements.measurements[primary.obs_index];
-        last_image_center_distance_px_  = primary_measurement.distance_to_image_center;
-        last_observation_timestamp_ns_  = primary_measurement.timestamp_ns;
+        const auto& primary_measurement = measurements.measurements[primary.obs_index];// 主候选的观测
+        last_image_center_distance_px_  = primary_measurement.distance_to_image_center;// 主候选的观测距离图像中心（像素）
+        last_observation_timestamp_ns_  = primary_measurement.timestamp_ns;// 主候选的观测时间戳（纳秒）
 
         // 是否匹配到非0号装甲；标记target_jumped_装甲跳变，上层瞄准做平滑抑制
         const bool observed_nonzero_armor = std::any_of(
             selected.begin(), selected.end(),
             [](const MatchCandidate<TargetInfo>& candidate) { return candidate.armor_id != 0; });
-
+        // 标记target_jumped_装甲跳变，上层瞄准做平滑抑制
         if (observed_nonzero_armor) {
             target_jumped_ = true;
         }
@@ -959,6 +970,8 @@ private:
         for (const auto& candidate : selected) {
             // 调用EkfTargetInfo::update，传入外部R_update
             target.update(candidate.z_update, candidate.armor_id, candidate.R_update);
+            // 填充调试measurement缓存
+            // 仅填充主候选的观测，其他候选的观测已填充在主候选中
             const bool another_pair =
                 enable_robot_pair_measure && (candidate.armor_id == 1 || candidate.armor_id == 3);
             set_measurement_(candidate.z_update, another_pair);
@@ -1247,15 +1260,15 @@ private:
     template <typename VecZ>
     void set_measurement_(const VecZ& z, bool is_another_pair) noexcept {
         if (is_another_pair) {
-            measurement_[4] = z[ARMOR_YAW];
-            measurement_[5] = z[ARMOR_PITCH];
-            measurement_[6] = z[ARMOR_DISTANCE];
-            measurement_[7] = z[ARMOR_YAW_ARMOR];
+            measurement_[4] = z[ARMOR_YAW];// // 机器人成对装甲的偏航角
+            measurement_[5] = z[ARMOR_PITCH];// // 机器人成对装甲的俯仰角
+            measurement_[6] = z[ARMOR_DISTANCE];// // 机器人成对装甲的距离
+            measurement_[7] = z[ARMOR_YAW_ARMOR];// // 机器人成对装甲的偏航角
         } else {
-            measurement_[0] = z[ARMOR_YAW];
-            measurement_[1] = z[ARMOR_PITCH];
-            measurement_[2] = z[ARMOR_DISTANCE];
-            measurement_[3] = z[ARMOR_YAW_ARMOR];
+            measurement_[0] = z[ARMOR_YAW];// // 主候选的偏航角
+            measurement_[1] = z[ARMOR_PITCH];// // 主候选的俯仰角
+            measurement_[2] = z[ARMOR_DISTANCE];// // 主候选的距离
+            measurement_[3] = z[ARMOR_YAW_ARMOR];// // 主候选的偏航角
         }
     }
 

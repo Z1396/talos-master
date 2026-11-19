@@ -48,8 +48,8 @@ struct WeaponCommand {
     uint64_t plan_timestamp_ns{0}; // 本条指令依赖的上游L4弹道预测帧时间戳，用于时序校验、丢包判断
 
     // L4原始未优化弹道数据（仅调试打印/对比，实际云台不使用该组值）
-    double plan_yaw{0.0};
-    double plan_pitch{0.0};
+    double plan_yaw{0.0};     // L4输出原始目标偏航角度，单位：弧度
+    double plan_pitch{0.0};   // L4输出原始目标俯仰角度，单位：弧度
     double plan_distance{0.0}; // L4输出原始目标距离，单位：米
 
     // ====================== 云台最终目标角度（执行机构使用） ======================

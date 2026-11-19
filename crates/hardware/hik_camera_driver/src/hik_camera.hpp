@@ -87,6 +87,7 @@ struct CameraError {
  * @brief 相机对外主类：图像捕获器
  * PIMPL 模式，Impl隐藏海康SDK底层实现，对外只暴露稳定接口
  */
+// final：防止继承，确保相机采集器是最终类
 class ImageCapturer final {
 public:
     /**
@@ -103,7 +104,7 @@ public:
 
         // 构造函数：给出工程默认相机参数
         CameraProfile() noexcept {
-            using namespace std::chrono_literals;
+            using namespace std::chrono_literals;  // 引入chrono::milliseconds等时间单位
             trigger_mode  = false;        // 默认不开启外/软触发，连续出图
             invert_image  = true;         // 默认反转图像（适配工业黑白靶场）
             exposure_time = 10ms;         // 默认曝光10毫秒
@@ -183,6 +184,7 @@ public:
     [[nodiscard]] bool valid() const noexcept;
 
     // 允许std::make_unique构造私有构造函数（仅内部工厂使用）
+    // friend：允许其他类访问私有成员，这里用于创建相机采集器实例时调用默认构造
     friend std::unique_ptr<ImageCapturer> std::make_unique<ImageCapturer>();
 
 private:

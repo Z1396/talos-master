@@ -108,6 +108,8 @@ public:
      * @return 拷贝一份快照返回
      */
     [[nodiscard]] TrackerReadbackSnapshot load() const noexcept {
+        // std::scoped_lock 读取时加锁，确保线程安全
+        /*RAII 锁包装，**支持同时锁 1 个或多个 mutex，多锁时内置死锁规避算法（等价 std::lock）**；构造上锁、析构自动解锁；禁止拷贝、禁止移动。*/
         std::scoped_lock lock(mutex_);
         return snapshot_;
     }

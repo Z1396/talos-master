@@ -624,15 +624,15 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
             auto T_odom_camera = tf_lookup.value();
             // 判断是否开启跟踪引导ROI裁剪功能
             /*作用机制
-        - 开启后，在已稳定跟踪目标时，L3 跟踪器输出的目标 3D 位姿会被投影回当前图像，
-            框出目标附近的一小块区域（ROI），L2
-        检测只在裁剪区域内跑推理，而不是整帧全图，从而省算力、提帧率。
+            - 开启后，在已稳定跟踪目标时，L3 跟踪器输出的目标 3D 位姿会被投影回当前图像，
+                框出目标附近的一小块区域（ROI），L2
+            检测只在裁剪区域内跑推理，而不是整帧全图，从而省算力、提帧率。
 
-        - ROI 的生成过程：以`box_size_m = [0.6, 0.6, 0.6]` 米的三维包围盒按目标距离投影到像素 →
-            按`margin_ratio_x = 0.20` （左右各扩 20%）、`margin_ratio_y = 0` （上下不扩）外扩 →
-        对齐模型输入宽高比 → 裁到画面边界内。
+            - ROI 的生成过程：以`box_size_m = [0.6, 0.6, 0.6]` 米的三维包围盒按目标距离投影到像素 →
+                按`margin_ratio_x = 0.20` （左右各扩 20%）、`margin_ratio_y = 0` （上下不扩）外扩 →
+            对齐模型输入宽高比 → 裁到画面边界内。
 
-        - 目标丢失超过`stale_timeout_s = 0.20` 秒，认为跟踪数据失效，自动切回全图检测重新搜索。*/
+            - 目标丢失超过`stale_timeout_s = 0.20` 秒，认为跟踪数据失效，自动切回全图检测重新搜索。*/
             if (readback_roi_config->enabled) {
                 // 加载上一帧跟踪快照
                 const auto snapshot = readback_cache->load();
@@ -691,12 +691,14 @@ void register_detection_systems(talos::Scheduler& scheduler) noexcept {
                 }
             }
             // 若使用局部ROI，将所有检测坐标偏移还原到原图坐标系
+            // .tl() 获取ROI左上角坐标（[x3,456]）
             offset_detections(detections, detector_roi.tl());
             // 过滤检测：只保留目标颜色、长宽比合法装甲
             std::vector<ArmorDetection> detections_for_pnp;
             detections_for_pnp.reserve(detections.size());
             // 拷贝符合条件的检测进入PnP输入容器
             std::copy_if(
+                // std::back_inserter() 从后向插入符合条件的检测，避免移动已处理的检测
                 detections.begin(), detections.end(), std::back_inserter(detections_for_pnp),
                 [detect_color](const ArmorDetection& det) {
                     return det.color == detect_color && detection_rect_aspect_ratio_is_valid(det);
