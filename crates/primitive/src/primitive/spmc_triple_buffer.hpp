@@ -2,31 +2,47 @@
 
 /**
  * @file
- * @brief 无锁单生产者多消费者 三缓冲实现
+ * @brief 单生产者多消费者「单槽版本化」缓冲区（SPMC latest-value buffer）
  *
- * 本模块提供低延迟线程间数据传输的无锁SPMC（单生产者、多消费者）三缓冲结构
+ * ⚠️ 命名说明：类名沿用了历史名称 SpmcTripleBuffer，但本实现**不是三槽轮换的三缓冲**，
+ * 也**不是无锁结构**。实际模型是：
+ *   一个由读写自旋锁保护的单槽 shared_ptr + 单调递增的版本号 generation。
  *
  * ## 设计核心
  *
- * - **读写自旋锁RWSpinLock**：读线程之间互不阻塞，仅写线程会阻塞等待全部读线程释放锁
- * - 读逻辑：获取共享读锁（原子读者计数自增）
- * - 写逻辑：获取独占写锁，自旋等待所有读者计数归零
+ * - **读写自旋锁 RWSpinLock**：读线程之间互不阻塞；写线程独占，需等待在途读者全部退出
+ * - 读逻辑：快速路径无锁看一眼版本号（仅作提示），版本更新才进入读锁拷贝快照
+ * - 写逻辑：获取独占写锁 → 替换 shared_ptr → 版本号自增 → 解锁
+ * - 数据语义：latest-value。读者只能拿到“最新一帧”，写入之间不排队，中间的版本会被丢弃
  *
- * ## 性能特征
+ * ## 性能特征（数量级，随平台/负载变化）
  *
- * - **写操作**：约50~100ns（等待现有读者释放锁 + 原子交换版本号）
- * - **读操作**：约20~40ns（原子增减计数 + 数据拷贝）
- * - **读线程永远不会互相阻塞**（区别于普通排他自旋锁）
+ * - 读：无新版本时仅一次原子读即返回；有新数据时走临界区 + 引用计数 + 一次数据拷贝
+ * - 写：一次堆分配（make_shared）+ 等待在途读者退出 + 若干原子操作
+ * - 读线程之间互不阻塞；但写线程会短暂阻塞读者，读者也会短暂阻塞写线程
+ *
+ * ## 与真正三缓冲的区别
+ *
+ * 真正三缓冲用 3 个独立槽位轮换，写者写自己的槽、读者读自己的槽，写不等待读者；
+ * 但经典三缓冲只对 SPSC 安全——SPMC 下多个读者可能同时停在同一个槽，写者轮换后
+ * 会覆写正在被读的槽。本实现用“单槽 + 锁 + shared_ptr 快照”换取 SPMC 正确性，
+ * 代价是写会阻塞、每次写都要分配。
  *
  * ## 线程安全
  *
- * 全部接口线程安全；多个消费者可并发读取，彼此无阻塞。
+ * - Write 句柄：仅限单个生产者线程使用
+ * - Read 句柄：**句柄本身不是线程安全的**（内部有 last_gen_ 状态），每个线程必须
+ *   持有自己的句柄（用 clone() 分发）；多个独立句柄之间可并发读取、互不阻塞
  */
 
 // 自旋提示指令 SPIN_HINT()
 #include "spin.hpp"
 // 原子变量
 #include <atomic>
+// assert：锁内快照不变量检查
+#include <cassert>
+// std::size_t
+#include <cstddef>
 // 固定宽度整数
 #include <cstdint>
 // 智能指针
@@ -37,14 +53,33 @@
 #include <optional>
 // 移动/拷贝语义、pair
 #include <utility>
+
+namespace talos::primitive {
+
+namespace detail {
+
+// 缓存行字节数：优先使用标准常量，老平台/老编译器回退到主流值 64
+#if defined(__cpp_lib_hardware_interference_size)
+inline constexpr std::size_t cache_line_bytes = std::hardware_destructive_interference_size;
+#else
+inline constexpr std::size_t cache_line_bytes = 64;
+#endif
+
+} // namespace detail
+
 /**
- * @brief 无锁单生产者多消费者三缓冲容器
+ * @brief 单写者、多读者「单槽版本化」缓冲区
  *
- * 实现单写者、多读者线程安全数据传输。每个读者独立维护版本标记，各自持有一份一致数据视图。
+ * ⚠️ 类名为历史遗留：本类不是三槽轮换的三缓冲，也不是无锁结构，而是一个
+ * 被读写自旋锁保护的单槽 shared_ptr + 版本号。语义是 latest-value：
+ * 读者拿到的永远是最新一帧，写入之间不排队。
+ *
+ * 每个读者句柄独立维护版本标记，同一个版本只会被读取一次（read_current 除外）。
  *
  * ## 内存模型
  *
- * 内部存储 `shared_ptr<const T>`，生产者与消费者共享底层数据，实现零拷贝数据传递。
+ * 内部存储 `shared_ptr<const T>`，生产者与消费者共享底层数据；read() 返回的是
+ * 值拷贝，read_shared() 才是不拷贝的共享视图。
  *
  * ## 使用示例
  * auto [writer, reader] = SpmcTripleBuffer<Frame>::create();
@@ -58,24 +93,21 @@
  *     // 处理帧数据
  * }
  * ## 线程约束
- * - 仅允许单个写线程；任意数量读线程
- * - 写操作会阻塞，等待所有读线程释放锁
+ * - 仅允许单个写线程；任意数量读线程，但每个线程必须持有独立的 Read 句柄
+ * - 写操作会阻塞，等待在途读线程退出读锁后才能真正写入
  * - 读线程之间完全无阻塞并发
  *
  * ## 性能复杂度
  *
- * - 写：O(1) 原子操作
- * - 读：O(1) 原子操作
- * - 内存占用：3个shared_ptr + 原子变量缓存行对齐开销
+ * - 写：O(1) 原子操作 + 一次 make_shared 堆分配
+ * - 读：O(1) 原子操作 + （read）一次数据拷贝
+ * - 内存占用：1 个 shared_ptr + 1 个版本号 + 锁状态，均缓存行对齐
  */
-namespace talos::primitive {
-
 template <typename T>
-/*std::movable<T>
-类型可移动：支持移动构造、移动赋值，可以被 std::move 转移所有权；不一定支持拷贝。
-std::copyable<T>
-类型可拷贝：既能拷贝构造、拷贝赋值，也支持移动（可拷贝必然可移动）*/
-requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
+/*std::copyable<T>
+类型可拷贝：既能拷贝构造、拷贝赋值，也支持移动（可拷贝必然可移动）。
+read() 需要返回 T 的拷贝，因此这里要求 copyable；只可移动的类型请改用 read_shared() 思路扩展。*/
+requires std::copyable<T> class SpmcTripleBuffer {
     /**
      * @brief 读写分离自旋锁，优化多读者场景
      *
@@ -167,16 +199,13 @@ requires(std::movable<T> && std::copyable<T>) class SpmcTripleBuffer {
      * 缓存行对齐隔离，避免伪共享
      */
     struct State {
-        // 读写锁，缓存行对齐，防止与generation产生伪共享
-        /*alignas(std::hardware_destructive_interference_size)
-        std::hardware_destructive_interference_size 标准常量 = CPU 缓存行大小（主流 CPU 64 字节）。
-        alignas(64) 强制让 lock 独占一整条 CPU 缓存行。*/
-        //alignas(常量表达式) 类型 变量名;作用：强制指定这个变量在内存中的对齐字节数。
-        alignas(std::hardware_destructive_interference_size) RWSpinLock lock{};
+        // 读写锁，缓存行对齐，防止与 generation 产生伪共享
+        // alignas(常量表达式)：强制变量按指定字节数对齐，这里让 lock 独占一条缓存行
+        alignas(detail::cache_line_bytes) RWSpinLock lock{};
         // 当前对外暴露的最新数据智能指针，多线程共享
         std::shared_ptr<const T> current{nullptr};
         // 版本号，每次写入自增，用于读者判断是否有新数据
-        alignas(std::hardware_destructive_interference_size) std::atomic<std::uint64_t> generation{0};
+        alignas(detail::cache_line_bytes) std::atomic<std::uint64_t> generation{0};
     };
 
 public:
@@ -207,7 +236,9 @@ public:
          *
          * ## 性能说明
          *
-         * 可能短暂自旋等待现有读者释放读锁；写入本体为O(1)原子操作。
+         * 每次写入都会 make_shared 做一次堆分配；随后短暂自旋等待在途读者退出读锁。
+         * 函数标记为 noexcept，因此分配失败（bad_alloc）或 T 的移动/拷贝抛异常时会
+         * 直接 std::terminate。
          *
          * ## 线程约束
          *
@@ -259,7 +290,8 @@ public:
      *
      * ## 线程安全
      *
-     * 任意线程均可使用；多个读句柄并发读取互不阻塞。
+     * **单个句柄不是线程安全的**（last_gen_ 是普通成员），每个线程必须持有自己的句柄；
+     * 用 clone() 给新消费者分发独立句柄。多个独立句柄之间并发读取互不阻塞。
      */
     template <typename U>
     class Read {
@@ -288,12 +320,17 @@ public:
         [[nodiscard]] Read clone() const { return *this; }
 
         /**
-         * @brief 读取新数据（仅返回未读过的新版本）
+         * @brief 读取新数据（仅返回未读过的新版本），返回值拷贝
          *
          * 算法流程：
-         * 1. 快速路径：无锁读取全局版本号，若未更新直接返回空
-         * 2. 慢速路径：获取共享读锁，再次校验版本、拷贝数据
-         * 3. 版本更新则更新本地last_gen_，返回数据拷贝
+         * 1. 快速路径：无锁读取全局版本号，若未更新直接返回空（仅作提示，不作为保证）
+         * 2. 慢速路径：获取共享读锁，拷贝 shared_ptr 快照与版本号
+         * 3. 解锁后更新本地 last_gen_，返回值拷贝
+         *
+         * 注意：`current` 与 `generation` 在写锁临界区内一起更新，读锁内读到的二者
+         * 一定是同一版本的一致快照；且 generation 单调递增，因此不存在“快照比本地已读
+         * 版本更旧”的情况（以 assert 表达该不变量，而不是运行时跳过，避免无谓丢帧）。
+         * 大对象（图像/点云）请改用 read_shared() 避免拷贝。
          *
          * @return std::optional<U> 有新数据返回有效值，无新数据返回std::nullopt
          */
@@ -308,24 +345,56 @@ public:
             state_->lock.read_lock();
 
             // 拷贝当前全局数据智能指针（共享计数+1，无深拷贝）
-            std::shared_ptr<const U> ptr = state_->current;
-            std::uint64_t locked_gen     = state_->generation.load(std::memory_order_acquire);
+            std::shared_ptr<const U> ptr   = state_->current;
+            const std::uint64_t locked_gen = state_->generation.load(std::memory_order_acquire);
 
             state_->lock.read_unlock();
+
+            // 不变量：快速路径已确保 gen_fast > last_gen_；generation 单调递增，且对同一
+            // 原子对象后读到的值不会早于先读到的值，因此 locked_gen >= gen_fast > last_gen_。
+            // 这两个操作数都是已确定的拷贝，与是否已释放锁无关。
+            assert(locked_gen > last_gen_);
 
             // 缓冲区无任何数据
             if (!ptr) {
                 return std::nullopt;
             }
 
-            // 锁内读取后再次校验版本，防止快速路径过时
-            if (locked_gen <= last_gen_) {
-                return std::nullopt;
-            }
-
             // 更新本地已读版本，返回数据拷贝
             last_gen_ = locked_gen;
             return *ptr;
+        }
+
+        /**
+         * @brief 读取新数据（仅返回未读过的新版本），不拷贝数据本体
+         *
+         * 与 read() 的消费语义完全一致，只是返回 shared_ptr 快照而不是值拷贝，
+         * 适合图像帧、点云等大对象。返回的指针在调用方持有期间保证数据不被回收或修改。
+         *
+         * @return 有新数据返回共享只读指针，无新数据返回 std::nullopt
+         */
+        [[nodiscard]] std::optional<std::shared_ptr<const U>> read_shared() noexcept {
+            if (const std::uint64_t gen = state_->generation.load(std::memory_order_acquire);
+                gen <= last_gen_) {
+                return std::nullopt;
+            }
+
+            state_->lock.read_lock();
+
+            std::shared_ptr<const U> ptr   = state_->current;
+            const std::uint64_t locked_gen = state_->generation.load(std::memory_order_acquire);
+
+            state_->lock.read_unlock();
+
+            // 与 read() 相同的不变量检查（见上文说明）
+            assert(locked_gen > last_gen_);
+
+            if (!ptr) {
+                return std::nullopt;
+            }
+
+            last_gen_ = locked_gen;
+            return ptr;
         }
 
         /**
@@ -350,6 +419,9 @@ public:
 
         /**
          * @brief 判断是否存在未读取的新版本数据
+         *
+         * 只是一次无锁探测（hint）：返回值可能在下一纳秒就因为生产者写入而失效，
+         * 因此不要用它做“读之前一定有数据”的保证，直接调 read() 即可。
          */
         [[nodiscard]] bool has_new() const noexcept {
             return state_->generation.load(std::memory_order_acquire) > last_gen_;

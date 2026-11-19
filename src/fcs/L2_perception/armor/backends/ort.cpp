@@ -601,10 +601,12 @@ std::expected<OrtBackend, std::string> OrtBackend::create(Config config) noexcep
  */
 OrtBackend::PreprocContext
     OrtBackend::preprocess(const cv::Mat& image, const ArmorOrtConfig& /*cfg*/) const noexcept {
+    // 初始化预处理上下文
     PreprocContext ctx;
     ctx.orig_w = image.cols;// 原始图像宽度
     ctx.orig_h = image.rows;// 原始图像高度
 
+    // 检查ONNXRuntime会话是否初始化
     if (!impl_ || !impl_->session) {
         SPDLOG_ERROR("[OrtBackend] Session is not initialized");
         return ctx;
@@ -631,7 +633,7 @@ OrtBackend::PreprocContext
         static_cast<float>(input_w) / static_cast<float>(image.cols),
         static_cast<float>(input_h) / static_cast<float>(image.rows));
 
-    // 步骤2: 计算缩放后的尺寸
+    // 步骤2: 计算缩放后的尺寸 std::round()确保尺寸为整数）
     const int unpad_w = static_cast<int>(std::round(r * static_cast<float>(image.cols)));
     const int unpad_h = static_cast<int>(std::round(r * static_cast<float>(image.rows)));
 
@@ -647,15 +649,16 @@ OrtBackend::PreprocContext
 
     // 步骤4: 保存坐标变换参数（用于后处理）
     ctx.scale_x = 1.0f / r;  // 缩放因子的倒数
-    ctx.scale_y = 1.0f / r;
-    ctx.pad_x   = static_cast<float>(left);
-    ctx.pad_y   = static_cast<float>(top);
+    ctx.scale_y = 1.0f / r;  // 缩放因子的倒数
+    ctx.pad_x   = static_cast<float>(left); // 填充偏移量的x坐标
+    ctx.pad_y   = static_cast<float>(top);  // 填充偏移量的y坐标
 
     // 步骤5: 执行缩放
     cv::Mat resized;
     cv::resize(image, resized, cv::Size(unpad_w, unpad_h));
 
     // 步骤6: 填充边界（黑色填充）
+    // cv::copy
     cv::copyMakeBorder(
         resized, resized, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(0, 0, 0));
 
@@ -688,10 +691,15 @@ OrtBackend::PreprocContext
  * @note 该函数noexcept，不会抛出异常
  */
 bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
+    // 检查预处理上下文是否包含有效图像
     if (ctx.preprocessed.empty()) {
         return false;
     }
 
+    // 检查ONNXRuntime会话是否初始化
+    // 1. 检查是否为4维张量（批次、通道、高、宽）
+    // 2. 检查批次大小是否为1（单张图像）
+    // 3. 检查通道数是否为3（BGR）
     if (!impl_ || !impl_->session) {
         SPDLOG_ERROR("[OrtBackend] Session is not initialized");
         return false;
@@ -709,7 +717,7 @@ bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
             SPDLOG_ERROR("[OrtBackend] Only [1,3,H,W] input is supported");
             return false;
         }
-
+        // 计算输入缓冲区大小（批次×通道×高×宽）
         const size_t plane      = static_cast<size_t>(h * w);
         const size_t input_size = static_cast<size_t>(n * c * h * w);
 
@@ -736,6 +744,7 @@ bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
         // 创建ONNXRuntime输入张量
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPUOutput);
 
+        // 创建ONNXRuntime输入张量
         Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
             memory_info, impl_->input_buffer.data(), impl_->input_buffer.size(),
             impl_->input_shape.data(), impl_->input_shape.size());
@@ -784,107 +793,130 @@ bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
  * - x_orig = (x_model - pad_x) * scale_x
  * - y_orig = (y_model - pad_y) * scale_y
  *
- * @param ctx 预处理上下文，用于坐标变换
- * @param cfg 配置参数，包含置信度阈值
- * @return 装甲板检测结果列表
- *
- * @note 该函数noexcept，不会抛出异常
+ * @brief ONNX Runtime 后端后处理函数，解析装甲板模型输出张量，得到装甲检测结果
+ * @param ctx 预处理上下文：包含缩放、padding等还原原图坐标所需参数
+ * @param cfg 装甲推理配置：置信度阈值等
+ * @return 装甲板检测结果数组
+ * @noexcept 不抛出异常
  */
 std::vector<ArmorDetection>
-    OrtBackend::postprocess(const PreprocContext& ctx, const ArmorOrtConfig& cfg) const noexcept {
+OrtBackend::postprocess(const PreprocContext& ctx, const ArmorOrtConfig& cfg) const noexcept {
+    // 存储最终解析出来的所有装甲检测框
     std::vector<ArmorDetection> detections;
 
+    // 推理实现对象为空 / 没有输出张量，直接返回空结果
     if (!impl_ || impl_->output_tensors.empty()) {
         return detections;
     }
-
+    // 获取第一个输出张量（装甲模型输出只有一路输出 [1,max_det,14]）
     const Ort::Value& out = impl_->output_tensors[0];
 
+    // 校验输出是不是张量类型，防止模型输出异常
     if (!out.IsTensor()) {
         SPDLOG_WARN("[OrtBackend] Output is not a tensor");
         return detections;
     }
-
+    // 获取张量float数据首地址
     const float* p = out.GetTensorData<float>();
+    // 空指针保护
     if (!p) {
         return detections;
     }
-
+    // 获取张量信息：维度、形状、数据类型
     auto tensor_info = out.GetTensorTypeAndShapeInfo();
     const auto shape = tensor_info.GetShape();
 
-    // 验证输出形状：[1, max_det, 14]
+    // 校验输出形状必须是三维：batch=1, 最大检测数, 每条检测数据长度
+    // 约定输出shape: [1, max_det, 14]
     if (shape.size() != 3 || shape[0] != 1) {
         SPDLOG_WARN("[OrtBackend] Unexpected output shape");
         return detections;
     }
 
+    // 单batch最多输出多少个检测框
     const int max_det    = static_cast<int>(shape[1]);
+    // 每一条检测结果的特征维度长度
     const int output_dim = static_cast<int>(shape[2]);
-
+    
+    // 本模型每条检测至少14个float：xywh + conf + cls + 4组关键点(x,y)
+    // 4+1+1 + 4*2 = 14
     if (output_dim < 14) {
         SPDLOG_WARN("[OrtBackend] Unexpected output dim: {}", output_dim);
         return detections;
     }
 
-    // 关键点顺序映射：模型输出顺序 -> 逆时针顺序
-    // 模型输出：[左上, 右上, 右下, 左下]
-    // 目标顺序：[左上, 左下, 右下, 右上]
+    /**
+     * 关键点重映射表
+     * 模型原始输出关键点顺序：[左上, 右上, 右下, 左下]
+     * 业务要求逆时针顺序：[左上, 左下, 右下, 右上]
+     * keypoint_map[k]：目标第k个点，取模型输出的第 keypoint_map[k] 号点
+     */
     static constexpr std::array<int, 4> keypoint_map = {0, 3, 2, 1};
 
+    // 预分配空间，避免vector频繁扩容，最多预留128个装甲
     detections.reserve(128);
 
+    // 从配置读取置信度阈值
     const float conf_thresh = static_cast<float>(cfg.confidence_threshold);
 
-    // 坐标变换参数
+    // 预处理时把原图放大到推理尺寸，scale_x/y = 推理尺寸 / 原图尺寸
+    // 还原坐标：除以scale，映射回原图
     const float scale_x = 1.0f / ctx.scale_x;
     const float scale_y = 1.0f / ctx.scale_y;
 
-    // 遍历所有检测结果
+    // 遍历每一条检测结果
     for (int i = 0; i < max_det; ++i) {
+        // 定位当前这条检测数据的起始指针
         const float* row = p + i * output_dim;
 
-        // 步骤1: 检查置信度
+        // ---------- 1. 置信度过滤 ----------
         const float conf = row[4];
+        // 检查是否是合法浮点数，并且大于置信阈值，否则跳过
         if (!std::isfinite(conf) || conf < conf_thresh) {
-            continue;  // 跳过低置信度检测
+            continue;
         }
 
-        // 步骤2: 提取边界框
+        // ---------- 2. 解析xywh ----------
+        // row[0],row[1]：框中心x,y；row[2],row[3]：宽、高（推理图/pad图坐标系）
         const float x = row[0];
         const float y = row[1];
         const float w = row[2];
         const float h = row[3];
 
-        // 验证边界框有效性
+        // 数值合法性校验：坐标不能是NaN/Inf，宽高必须大于0
         if (!std::isfinite(x) || !std::isfinite(y) || w <= 0.0f || h <= 0.0f) {
             continue;
         }
 
-        // 步骤3: 解析类别
+        // ---------- 3. 解析类别id ----------
         const int cls_id = static_cast<int>(row[5]);
+        // 类别id越界，丢弃该检测
         if (cls_id < 0 || cls_id >= static_cast<int>(g_class_mappings.size())) {
-            continue;  // 无效类别ID
+            continue;
         }
-
+        // 拿到类别信息：名字、颜色（红/蓝装甲）
         const auto class_info = g_class_mappings[cls_id];
 
-        // 步骤4: 提取关键点并重排顺序
+        // ---------- 4. 提取4个关键点并重排顺序 ----------
         std::array<cv::Point2f, 4> pts;
         for (int k = 0; k < 4; ++k) {
-            const float kx       = row[6 + 2 * k];
-            const float ky       = row[6 + 2 * k + 1];
+            // 关键点数据起始偏移：row[6]开始，每个点2个float (x,y)
+            const float kx     = row[6 + 2 * k];
+            const float ky     = row[6 + 2 * k + 1];
+            // 按照映射表，放到目标顺序位置
             pts[keypoint_map[k]] = cv::Point2f(kx, ky);
         }
 
-        // 步骤5: 坐标变换（模型空间 -> 原始图像空间）
+        // ---------- 5. 坐标还原：推理Pad图坐标系 -> 原始图像坐标系 ----------
+        // 预处理做了 letterbox padding：先减去padding偏移，再除以缩放系数
         for (auto& pt : pts) {
             pt.x = (pt.x - ctx.pad_x) / scale_x;
             pt.y = (pt.y - ctx.pad_y) / scale_y;
         }
 
-        // 步骤6: 创建装甲板检测对象
+        // ---------- 6. 构造装甲检测对象 ----------
         ArmorDetection det(pts, class_info.name, class_info.color, conf);
+        // 面积大于0才认为是有效装甲，加入结果列表
         if (det.area > 0) {
             detections.push_back(det);
         }
@@ -892,6 +924,7 @@ std::vector<ArmorDetection>
 
     return detections;
 }
+
 
 // ============================================================================
 // 坐标变换
@@ -1016,12 +1049,11 @@ std::vector<ArmorDetection> OrtBackend::nms(
  * @note 检测结果的坐标已经变换回原始图像坐标系
  * @note 执行时间主要消耗在模型推理，通常为5-20ms（取决于硬件）
  */
-OrtBackend::DetectionResult
-    OrtBackend::detect_impl(const cv::Mat& image, ArmorColor color) noexcept {
+OrtBackend::DetectionResult OrtBackend::detect_impl(const cv::Mat& image, ArmorColor color) noexcept {
     if (image.empty()) {
         return std::unexpected("Empty image passed to NN backend");
     }
-
+    // 获取配置参数
     const auto& cfg = get_config();
 
     // 步骤1: 预处理

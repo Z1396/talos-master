@@ -296,6 +296,8 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                                 SPDLOG_WARN("MPC optimization failed: {}", opt.error());
                             }
                         } else {
+                            // 步骤2：使用降级透传指令，不跑MPC优化，直接使用L4参考轨迹中心点
+                            // 降级透传指令：直接使用L4输出的目标角度，不进行MPC优化
                             wc = track_fallback(cmd, now);
                         }
 

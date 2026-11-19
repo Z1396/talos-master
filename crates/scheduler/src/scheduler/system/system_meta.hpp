@@ -340,6 +340,7 @@ namespace detail {
 template <typename T>
 constexpr void extract_one_param(SystemMeta& meta) noexcept {
     // 提取内层消息类型、话题标签类型、通道种类类型（SPSC/SPMC 读/写）
+    // 例如：Inner = 该通道传输的消息类型（value_type）, Topic = 该通道的话题标签类型（Tag）, kind = spsc_reader
     using Inner = inner_type_t<T>;
     using Topic = inner_topic_t<T>;
 

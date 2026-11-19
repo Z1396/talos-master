@@ -769,21 +769,21 @@ private:
      * @brief 存储单次PnP求解结果结构体：旋转、平移、重投影误差、先验信息
      */
     struct SolvePose {
-        cv::Mat rvec;
-        cv::Mat tvec;
-        double reprojection_rmse{std::numeric_limits<double>::infinity()};
-        std::optional<double> prior_armor_yaw{};
-        std::optional<double> prior_distance_m{};
+        cv::Mat rvec;                           // 旋转向量
+        cv::Mat tvec;                           // 平移向量
+        double reprojection_rmse{std::numeric_limits<double>::infinity()};// 重投影RMSE（默认Inf）
+        std::optional<double> prior_armor_yaw{};// 先验装甲角度（可选）
+        std::optional<double> prior_distance_m{};// 先验距离（可选）    
     };
 
     /**
      * @brief PnP预处理输入结构体：模型三维点、去偏图像点、归一化平面点、中心距离
      */
     struct PnPInput {
-        const std::vector<cv::Point3f>& obj_points;
-        std::vector<cv::Point2f> img_points;
-        std::vector<cv::Point2f> norm_points;
-        float dist_to_center;
+        const std::vector<cv::Point3f>& obj_points;// 模型三维点
+        std::vector<cv::Point2f> img_points;// 去偏图像点
+        std::vector<cv::Point2f> norm_points;// 归一化平面点
+        float dist_to_center;// 中心距离
     };
 
     /**
@@ -996,12 +996,12 @@ private:
     }
 
 private:
-    cv::Mat camera_matrix_;
-    cv::Mat dist_coeffs_;
-    cv::Point2f image_center_;
+    cv::Mat camera_matrix_;// 相机矩阵
+    cv::Mat dist_coeffs_;// 畸变系数
+    cv::Point2f image_center_;// 图像中心
 
-    std::vector<cv::Point3f> small_armor_points_;
-    std::vector<cv::Point3f> large_armor_points_;
+    std::vector<cv::Point3f> small_armor_points_;// 小装甲三维模型点
+    std::vector<cv::Point3f> large_armor_points_;// 大装甲三维模型点
 };
 
 } // namespace fcs::L2

@@ -11,6 +11,12 @@
         "CC": "clang-21",
         "CXX": "clang++-21"
     },
+    // IDE 使用独立构建目录，避免覆盖 build.sh 的 build/（含 CMakeCache 的 Build Type）
+    "cmake.buildDirectory": "${workspaceFolder}/build-ide",
+    // 固定 IDE 侧构建类型，防止 CMake Tools 默认 variant(Debug) 覆盖缓存
+    "cmake.configureSettings": {
+        "CMAKE_BUILD_TYPE": "Release"
+    },
     "cmake.configureArgs": [
         "-DCMAKE_C_COMPILER=/usr/bin/clang-21",
         "-DCMAKE_CXX_COMPILER=/usr/bin/clang++-21"

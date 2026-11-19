@@ -114,6 +114,8 @@ static constexpr auto is_writer_channel_kind(const channel_kind kind) noexcept -
 template <typename Channels>
 static auto has_writer_channels(const Channels& channels) noexcept -> bool {
     // 遍历通道，存在任意写通道返回true
+    // std::any_of 函数：判断容器中是否存在任意元素满足条件，返回值为bool类型
+    // 这里使用 lambda 表达式作为条件，判断通道类型是否为写者通道
     return std::any_of(channels.begin(), channels.end(), [](const auto& channel) {
         return is_writer_channel_kind(channel.kind);
     });
@@ -362,6 +364,7 @@ auto Scheduler::build() -> BuildResult {
     }
 
     // 统计数组扩容，与系统数量一一对应
+    // .resize(新大小)：调整容器大小，将新元素初始化为默认值只是size不是capacity
     fixed_rate_stats_.resize(fixed_rate_systems_.size());
     compute_stats_.resize(compute_systems_.size());
 
@@ -369,15 +372,21 @@ auto Scheduler::build() -> BuildResult {
     world_.open_channel_binding();
     // 内部闭包批量绑定所有未初始化的系统通道
     auto bind_all_systems = [&](auto& systems) {
+        // 遍历所有系统，绑定未初始化的通道
+        // .system()：获取系统智能指针，用于调用系统方法
+        // .bound：标记通道是否完成绑定初始化
         for (auto& entry : systems) {
             if (!entry.bound) {
+                // 绑定系统通道，分配SPSC/SPMC缓冲区
                 entry.system->bind(world_);
+                // 标记通道已绑定初始化
                 entry.bound = true;
             }
         }
     };
     bind_all_systems(fixed_rate_systems_);
     bind_all_systems(compute_systems_);
+    // 关闭通道绑定模式，允许资源修改
     world_.close_channel_binding();
 
     // 绑定外部IO触发式计算源（外部信号主动唤醒Compute系统）
@@ -404,8 +413,7 @@ auto Scheduler::run() -> std::expected<void, SchedulerError> {
     相等：把原子变量更新为「新值 desired」，返回 true；
     不相等：把原子变量当前值写入 expected，返回 false。*/
     if (!lifecycle_.compare_exchange_strong(
-            expected, LifecycleState::Running, std::memory_order_acq_rel,
-            std::memory_order_acquire)) 
+            expected, LifecycleState::Running, std::memory_order_acq_rel,std::memory_order_acquire)) 
     {
         // CAS交换失败，判断当前实际状态
         if (expected == LifecycleState::Running) {
@@ -668,6 +676,7 @@ void Scheduler::bind_external_compute_sources() noexcept {
 void Scheduler::notify(const std::size_t system_index) noexcept {
     // 原子或操作，将下游依赖bit写入就绪掩码
     if (system_index < fixed_rate_affects_.size()) {
+        // .fetch_or表示原子或操作，将下游依赖bit写入就绪掩码
         ready_systems_.fetch_or(fixed_rate_affects_[system_index], std::memory_order_release);
     }
     // 累加该系统的唤醒触发统计计数
@@ -2176,6 +2185,9 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
 
     // 合并新产生的就绪位，已执行过的系统延后执行
     auto enqueue_ready = [&](const std::uint64_t new_bits) {
+        // 合并新就绪位，已执行过的系统延后执行
+        // 例如：new_bits = 0b001010，executed_mask = 0b000101
+        // 则deferred_mask = 0b000010，pending_ready = 0b001001
         deferred_mask |= new_bits & executed_mask;
         pending_ready |= new_bits & ~executed_mask;
     };
@@ -2188,6 +2200,7 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
         bool ran_any = false;
 
         // 进入TBB任务调度域，多核并行执行
+        // execute()：提交任务到TBB任务池，返回任务执行结果
         compute_arena_->execute([&] {
             std::size_t to_run_buf[64]; // 单层待执行系统缓存（最多64个）
 
@@ -2282,7 +2295,9 @@ auto Scheduler::run_compute_selective(const std::uint64_t ready_mask) -> Compute
 
     // 返回本轮执行结果：产生输出的系统、延后执行的系统
     return ComputeRoundResult{
+        // 本轮产生输出的系统掩码
         .written_mask  = written_mask,
+        // 本轮延后执行的系统掩码
         .deferred_mask = deferred_mask,
     };
 }
@@ -2365,7 +2380,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
             // expect_spsc=true代表当前通道是SPSC，false=SPMC
             auto process_channel = [&](const ChannelMeta& ch,
                                        const bool expect_spsc) -> BuildResult {
-                // 构造通道唯一主键：通道类型 + topic名，同一个topic才能匹配
+                // 构造通道唯一主键：通道类型 + topic名，同一个topic才能匹配(必须要相同数据类型与相同topic才能匹配这两个数据当成key)
                 ChannelKey key{ch.type, ch.topic};
                 // 找到/自动创建该通道的使用记录（map[]不存在则默认构造）
                 auto& usage              = channels[key];
@@ -2450,9 +2465,10 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     };
 
     // 遍历所有登记过的通道，执行静态契约检查
+    // 例如：key = {type = spsc_reader, topic = 该通道的话题标签类型}, 
+    // usage = {kind = spsc_reader, readers = 该通道的所有读者端点, writers = 该通道的所有写读者者端点, first_system = 第一个登记的系统名称}
     for (const auto& [key, usage] : channels) {
         // 【结构化绑定 C++17语法】auto& [key,usage] 直接解pair的first/second
-
         // 规则1：任何通道不允许多写者
         if (usage.writers.size() > 1) {
             return std::unexpected(
@@ -2493,6 +2509,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     // adj_mask[i] = uint64_t位掩码：bitN=1 → 系统i跑完可以唤醒系统N
     // in_degree[i] = 系统i剩余未完成的前置依赖数量，Kahn拓扑排序使用
     // ========================================================================
+    // adj_mask(n,0) 表示创建n个0的uint64_t数组，每个元素占8字节
     std::vector<std::uint64_t> adj_mask(n, 0);
     std::vector<std::size_t> in_degree(n, 0);
 
@@ -2517,6 +2534,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                 // 把reader.index对应的bit置1
                 const std::uint64_t bit = 1UL << reader.index;
                 // 防重复建边：避免in_degree多次累加同一个依赖
+                // 如果writer.index对应的bit为0，说明是第一次建边，需要累加依赖
                 if ((adj_mask[writer.index] & bit) == 0) {
                     adj_mask[writer.index] |= bit;
                     ++in_degree[reader.index];
@@ -2538,7 +2556,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
         if (usage.writers.empty() || usage.readers.empty()) {
             continue;
         }
-
+        // 取唯一写者（前面已经校验最多1个写者）
         const auto writer = usage.writers[0];
         // 必须是定时系统，并且policy.notifies=true（才具备唤醒能力）
         if (!writer.is_fixed_rate || !fixed_rate_systems_[writer.index].policy.notifies) {
@@ -2547,6 +2565,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 
         // 这条定时通道的所有计算读者，加入外部源掩码
         for (const auto reader : usage.readers) {
+            // 只关心【计算系统读者】，排除定时系统
             if (!reader.is_fixed_rate) {
                 external_source_mask |= (1ULL << reader.index);
             }
@@ -2572,18 +2591,36 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     while (!current_level.empty()) {
         // 当前层级存入快照
         snapshot.levels.push_back(current_level);
+        // 记录当前层节点总数，用于环检测
+        // 例如：当前层有3个系统，processed += 3
         processed += current_level.size();
 
+        // 下一层节点，用于下一次循环
         std::vector<std::size_t> next_level;
+        // 预分配内存，避免动态分配
+        // 例如：当前层有3个系统，下一层最多有3个系统
         next_level.reserve(compute_systems_.size());
         // 遍历当前层所有节点，释放下游依赖
         for (std::size_t node : current_level) {
+            // 取当前层节点的下游依赖掩码
             std::uint64_t neighbors = adj_mask[node];
             // 【位运算循环】遍历掩码里所有为1的bit
             while (neighbors) {
                 // std::countr_zero【C++20】：unsigned整数，统计末尾连续0的个数 → 拿到最低置1bit下标
+                /*例如：
+                std::uint64_t mask = 0b00101000;
+                auto index = std::countr_zero(mask);
+                最低位的 1 在 bit 3，因此：*/
                 const std::size_t neighbor = std::countr_zero(neighbors);
                 // 清除最低位1：经典bit trick
+                /*这是一个经典位运算技巧：
+                neighbors &= neighbors - 1;
+                作用是清除最低位的 1。
+                例如：
+                原来：  00101000
+                减一：  00100111
+                相与：  00100000
+                这样就可以逐个遍历掩码中所有为 1 的 bit*/
                 neighbors &= neighbors - 1;
                 // 下游入度减一；入度归零 → 全部前置依赖就绪，加入下一层
                 if (--in_degree[neighbor] == 0) {
@@ -2600,7 +2637,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     // Kahn特性：处理过节点总数 < 总节点数 → 图存在环（循环依赖，永远跑不完）
     // 用DFS回溯找到环路，收集系统名用于报错
     // ========================================================================
-        // Kahn拓扑排序后校验：processed是成功处理的节点总数
+    // Kahn拓扑排序后校验：processed是成功处理的节点总数
     // 如果处理完的节点数 < 总compute系统数量n → 说明图里存在环（循环依赖）
     if (processed < n) {
         // 保存检测到的环路系统名称，用于报错打印
@@ -2655,6 +2692,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
             }
 
             // 回溯逻辑：离开当前节点递归分支，弹出路径、取消栈标记
+            // .pop_back()：删除vector最后一个元素，不返回值，O(1)度
             path.pop_back();
             in_stack[node] = false;
             // 本分支无环，返回false
@@ -2663,6 +2701,7 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 
         // 遍历所有系统，只要还没找到环，并且节点入度>0、未访问 → 启动DFS搜环
         for (std::size_t i = 0; i < n && cycle.empty(); ++i) {
+            // 只处理入度>0的系统，避免重复搜索
             if (in_degree[i] > 0 && !visited[i]) {
                 find_cycle(i);
             }
@@ -2732,6 +2771,8 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
     // 核心目的：运行时不用再遍历map、不用再解析通道，直接位运算判断唤醒，性能极高
     // ========================================================================
     // 初始化fixed_rate_affects数组：长度和定时系统数量一致，初始值全部0
+    // .assign()：清空vector，重新分配内存，O(n)度
+    // 例如：定时系统有3个，初始化为{0, 0, 0}
     snapshot.fixed_rate_affects.assign(fixed_rate_systems_.size(), 0);
 
     // 【语法】auto& meta_channels 泛型lambda（C++14通用lambda）
@@ -2746,10 +2787,12 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
                 // 【语法】C++17 if内初始化：find查找通道，找到才进入分支
                 if (auto it = channels.find(key); it != channels.end()) {
                     // 遍历这条通道所有读者端点
+                    // it->second表示当前通道的使用信息，包含写者、读者列表
                     for (const auto reader : it->second.readers) {
                         // 只收集compute系统读者，定时系统之间的唤醒不在这套掩码管理
                         if (!reader.is_fixed_rate) {
                             // 把读者下标对应的bit置1，合并进掩码
+                            // 0 |= 1 << 2 = 0b00000010
                             affects |= (1UL << reader.index);
                         }
                     }
@@ -2774,6 +2817,8 @@ auto Scheduler::build_topology_snapshot() const -> std::expected<TopologySnapsho
 
     // ========== 填充 compute_affects：compute系统 → compute系统 的唤醒掩码 ==========
     // 初始化数组：长度等于compute系统总数n，初始全部0
+    // .assign()：清空vector，重新分配内存，O(n)度
+    // 例如：compute系统有3个，初始化为{0, 0, 0}
     snapshot.compute_affects.assign(n, 0);
     // 【语法】C++17结构化绑定，遍历channels这个map，直接取出key和usage
     for (const auto& [key, usage] : channels) {

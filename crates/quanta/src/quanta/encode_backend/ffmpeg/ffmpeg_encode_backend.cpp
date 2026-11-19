@@ -632,18 +632,18 @@ private:
      * @return 初始化成功空expected，失败返回错误字符串
      */
     std::expected<void, std::string> setup(int src_width, int src_height, int framerate) {
-        src_width_  = src_width;
-        src_height_ = src_height;
-        framerate_  = framerate;
+        src_width_  = src_width;        // 原始输入宽
+        src_height_ = src_height;       // 原始输入高
+        framerate_  = framerate;        // 输入帧率
 
         // 计算输出适配分辨率
         int out_w{}, out_h{};
-        fit_dimensions(src_width, src_height, params_.max_width, params_.max_height, out_w, out_h);
-        out_width_  = out_w;
-        out_height_ = out_h;
+        fit_dimensions(src_width, src_height, params_.max_width, params_.max_height, out_w, out_h); // 计算适配分辨率
+        out_width_  = out_w; // 输出编码宽
+        out_height_ = out_h; // 输出编码高
 
-        const AVRational time_base  = {1, framerate};
-        const AVRational frame_rate = {framerate, 1};
+        const AVRational time_base  = {1, framerate}; // 时间基，1/输入率
+        const AVRational frame_rate = {framerate, 1}; // 帧率，输入率/1
 
         // 构建完整预处理滤镜流水线
         auto filter_result = build_filter_chain(

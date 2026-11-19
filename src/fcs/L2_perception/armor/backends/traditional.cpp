@@ -61,6 +61,8 @@ std::expected<TraditionalBackend, std::string> TraditionalBackend::create(Config
     }
 
     // 工厂创建 ONNX 数字分类器实例
+    // cfg.classifier_model_path：数字分类器模型文件路径
+    // cfg.classifier_use_softmax：是否使用Softmax层（默认True）
     auto classifier_result =
         TraditionalClassifier::create(cfg.classifier_model_path, cfg.classifier_use_softmax);
     // 创建分类器失败，向上返回错误信息

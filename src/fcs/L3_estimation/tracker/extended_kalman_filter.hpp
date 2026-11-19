@@ -462,17 +462,20 @@ private:
      * - 已收敛但协方差增大 -> Converged -> Converging
      */
     void update_prediction_health_() noexcept {
+        // 更新预测协方差统计信息
         update_covariance_stat_(P_pri);
 
         // 检查数值异常（NaN/Inf/负值）
         if (!x_pri.allFinite() || !P_pri.allFinite()
             || min_covariance_diag(P_pri) < convergence_criteria_.min_covariance_diag) {
+            // 数值异常：跳过更新，标记发散
             mark_immediate_divergence_();
             return;
         }
 
         // 检查协方差是否过大（发散）
         if (max_covariance_diag_ > convergence_criteria_.diverged_max_covariance_diag) {
+            // 协方差异常：记录发散样本
             register_divergence_sample_();
             return;
         }
@@ -552,8 +555,11 @@ private:
 
     /// @brief 记录发散样本（用于连续性检测）
     void register_divergence_sample_() noexcept {
+        // 记录发散样本
         consecutive_converged_updates_ = 0;
+        // 发散计数增加
         ++consecutive_diverged_updates_;
+        // 更新收敛状态
         convergence_status_ =
             (consecutive_diverged_updates_ >= std::max(1, convergence_criteria_.diverged_updates))
                 ? ConvergenceStatus::Diverging
@@ -562,8 +568,11 @@ private:
 
     /// @brief 立即标记为发散（用于严重数值异常）
     void mark_immediate_divergence_() noexcept {
+        // 清除收敛计数
         consecutive_converged_updates_ = 0;
+        // 发散计数增加
         consecutive_diverged_updates_  = std::max(1, convergence_criteria_.diverged_updates);
+        // 更新收敛状态
         convergence_status_            = ConvergenceStatus::Diverging;
     }
 
