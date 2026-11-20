@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <numbers>
 
 namespace fcs::L5 {
 
@@ -43,6 +44,9 @@ overloaded(Ts...) -> overloaded<Ts...>;
 
 using ReferenceTrajectory = core::trajectory::ReferenceTrajectory;
 using fcs::core::math::normalize_angle;
+
+/// 弧度 → 度：仅用于日志显示，不参与任何控制计算
+constexpr double kRadToDeg = 180.0 / std::numbers::pi;
 
 /**
  * @brief 将时间延迟量化为离散步数
@@ -165,6 +169,22 @@ using fcs::core::math::normalize_angle;
     cmd.yaw               = aim.yaw;
     cmd.pitch             = aim.pitch;
     cmd.distance          = aim.distance;
+
+    // 一阶前馈：取与 center_aim_point 同一时域步的角速度（rad/s）
+    // state(1,k)=dyaw/dt，state(3,k)=dpitch/dt，单位与正方向同 cmd.yaw / cmd.pitch
+    const int horizon = track.control_trajectory.horizon();
+    if (horizon > 0) {
+        int center = 0;
+        for (int k = 1; k < horizon; ++k) {
+            if (std::abs(track.control_trajectory.state(0, k))
+                < std::abs(track.control_trajectory.state(0, center))) {
+                center = k;
+            }
+        }
+        cmd.yaw_vel   = track.control_trajectory.state(1, center);
+        cmd.pitch_vel = track.control_trajectory.state(3, center);
+        cmd.vel_valid = true; // 前馈角速度由参考轨迹导数给出
+    }
     return cmd;
 }
 } // namespace
@@ -309,6 +329,58 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                             // 步骤4：应用【开火门fire‑gate】逻辑
                             // 判断：云台实际角度与瞄准解角度偏差是否小于阈值；角度误差大就禁止开火
                             wc = apply_track_fire_gate(wc, cmd, trajectory_cfg, fire_cfg, y, p);
+
+                            // 开火门诊断日志：约5Hz，输出实际角误差与门限，
+                            // 用于判断“移动目标打不出子弹”到底是跟踪误差还是门限太紧。
+                            static uint64_t gate_diag_counter = 0;
+                            if (++gate_diag_counter % 50 == 0) {
+                                SPDLOG_INFO(
+                                    "fire_gate fire={} yaw_err_deg={:.3f} range_yaw_deg={:.3f} "
+                                    "pitch_err_deg={:.3f} range_pitch_deg={:.3f} speed={:.2f} "
+                                    "horizon={:.3f} gimbal_yaw_deg={:.3f} gimbal_pitch_deg={:.3f} "
+                                    "plan_yaw_deg={:.3f} plan_pitch_deg={:.3f} "
+                                    "ref_yaw_deg={:.3f} ref_pitch_deg={:.3f} "
+                                    "target_yaw_deg={:.3f} has_target={}",
+                                    wc.fire, wc.yaw_error * kRadToDeg,
+                                    wc.shooting_range_yaw * kRadToDeg,
+                                    wc.pitch_error * kRadToDeg,
+                                    wc.shooting_range_pitch * kRadToDeg,
+                                    cmd.target_velocity.head<2>().norm(),
+                                    cmd.prediction_horizon_s, y * kRadToDeg, -p * kRadToDeg,
+                                    wc.plan_yaw * kRadToDeg, wc.plan_pitch * kRadToDeg,
+                                    wc.ref_yaw * kRadToDeg, wc.ref_pitch * kRadToDeg,
+                                    cmd.target_bearing_yaw * kRadToDeg,
+                                    cmd.has_target_bearing);
+                            }
+                        }
+
+                        // 换目标/重新捕获保护：参考角跳变或指令断流时，
+                        // 前 50ms 把角速度前馈强制置 0，避免云台被瞬变踢一记。
+                        static uint64_t last_cmd_ns         = 0;
+                        static double last_plan_yaw         = 0.0;
+                        static double last_plan_distance    = 0.0;
+                        static uint64_t rate_zero_until_ns  = 0;
+                        if (cmd.timestamp_ns != last_cmd_ns) {
+                            // 用控制轨迹中心点作为“当前参考角/距离”
+                            const auto ref_aim = cmd.control_trajectory.center_aim_point();
+                            const bool command_gap =
+                                last_cmd_ns != 0
+                                && cmd.timestamp_ns > last_cmd_ns + 100'000'000ULL;
+                            const bool target_jump =
+                                last_cmd_ns != 0
+                                && (std::abs(normalize_angle(ref_aim.yaw - last_plan_yaw))
+                                        > 0.087
+                                    || std::abs(ref_aim.distance - last_plan_distance) > 1.0);
+                            if (command_gap || target_jump) {
+                                rate_zero_until_ns = now + 50'000'000ULL;
+                            }
+                            last_cmd_ns        = cmd.timestamp_ns;
+                            last_plan_yaw      = ref_aim.yaw;
+                            last_plan_distance = ref_aim.distance;
+                        }
+                        if (now < rate_zero_until_ns) {
+                            wc.yaw_vel   = 0.0;
+                            wc.pitch_vel = 0.0;
                         }
 
                         // 步骤5：把最终武器指令写入SPMC通道，输出到L1硬件层

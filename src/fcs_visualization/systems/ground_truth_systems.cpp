@@ -6,6 +6,8 @@
 #include "foxglove_types.hpp"
 // 3D场景实体构造器：快速构建球体、文字标签等SceneEntity
 #include "scene_builder.hpp"
+// 调试显示用的弧度→度换算
+#include <system_helpers.hpp>
 
 // 全局SPMC通信通道Topic常量，区分GroundTruth真值数据流
 #include "core/channel_topics.hpp"
@@ -219,8 +221,8 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                         {"armor_label",    armor_label_name(tgt.armor_label)}, // tgt.armor_label：装甲编号
                         { "is_outpost",                    tgt.is_outpost},    // tgt.is_outpost：是否为前哨装甲
                         {   "position", {tgt.position[0], tgt.position[1], tgt.position[2]}}, // tgt.position[XYZ]装甲三维坐标
-                        {     "vyaw",                        tgt.vyaw},       // tgt.vyaw：装甲偏航角速度 rad/s
-                        {      "yaw",                        tgt.yaw},        // tgt.yaw：装甲当前偏航角 rad
+                        {     "vyaw", detail::rad_to_deg(tgt.vyaw)},       // tgt.vyaw：装甲偏航角速度（度/秒）
+                        {      "yaw",  detail::rad_to_deg(tgt.yaw)},        // tgt.yaw：装甲当前偏航角（度）
                     });
                 }
 
@@ -234,12 +236,12 @@ void register_ground_truth_systems(talos::scheduler::Scheduler& app) {
                         {"mechanism_state",   mechanism_state_name(r.mechanism_state)}, // r.mechanism_state：机构状态
                         {  "r_center_odom", {r.r_center_odom[0], r.r_center_odom[1], r.r_center_odom[2]}}, // r_center_odom[XYZ]大符中心odom坐标
                         {         "radius",                    r.radius},          // r.radius：大符转动半径
-                        {  "current_angle",             r.current_angle},         // r.current_angle：当前叶片角度
-                        {         "v_roll",                    r.v_roll},          // r.v_roll：叶片滚动角速度
+                        {  "current_angle",  detail::rad_to_deg(r.current_angle)},  // r.current_angle：当前叶片角度（度）
+                        {         "v_roll",   detail::rad_to_deg(r.v_roll)},         // r.v_roll：叶片滚动角速度（度/秒）
                         {      "direction",                 r.direction},         // r.direction：转动方向 +1/-1
                         {  "sin_amplitude",             r.sin_amplitude},         // r.sin_amplitude：正弦运动振幅
-                        {      "sin_omega",               r.sin_omega},           // r.sin_omega：正弦角频率
-                        {      "sin_phase",               r.sin_phase},           // r.sin_phase：正弦初相位
+                        {      "sin_omega",   detail::rad_to_deg(r.sin_omega)},     // r.sin_omega：正弦角频率（度/秒）
+                        {      "sin_phase",   detail::rad_to_deg(r.sin_phase)},     // r.sin_phase：正弦初相位（度）
                         {     "sin_offset",              r.sin_offset},          // r.sin_offset：正弦位置偏移量
                         {  "relative_time",             r.relative_time},         // r.relative_time：相对运动时间
                         {      "blade_id",                  r.blade_id},           // r.blade_id：叶片编号

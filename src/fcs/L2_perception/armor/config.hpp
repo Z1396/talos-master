@@ -68,6 +68,7 @@ struct ArmorOrtConfig {
     double confidence_threshold{};  // 检测置信度阈值，低于该值过滤目标
     double nms_threshold{};         // 非极大值抑制(NMS)重叠阈值
     int top_k{};                    // 单帧最多保留目标数量
+    std::string openvino_device{};  // OpenVINO设备：GPU/CPU/AUTO；空则默认GPU
 };
 
 // ============================================================================

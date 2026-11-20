@@ -201,7 +201,7 @@ void register_debug_systems(talos::scheduler::Scheduler& app, talos::Scheduler* 
                 em_json["r_center_odom"]  = {
                     state->r_center_odom.x(), state->r_center_odom.y(), state->r_center_odom.z()}; // 机关圆心odom坐标
                 em_json["radius"]   = state->radius;    // 能量机关圆盘半径
-                em_json["roll"]     = state->roll;
+                em_json["roll"]     = detail::rad_to_deg(state->roll); // 相位角（度）
                 em_json["t"]        = state->t;
                 em_json["blade_id"] = state->blade_id;  // 当前识别到的叶片编号0‑4
                 em_json["position"] = {state->position.x(), state->position.y(), state->position.z()};
@@ -209,11 +209,11 @@ void register_debug_systems(talos::scheduler::Scheduler& app, talos::Scheduler* 
                 em_json["model_valid"] = state->model_valid; // 运动模型是否收敛有效
                 em_json["direction"]   = state->direction;   // 旋转方向 +1 / -1
                 em_json["a"]           = state->a;           // 角加速度
-                em_json["omega"]       = state->omega;       // 旋转角速度 rad/s
+                em_json["omega"]       = detail::rad_to_deg(state->omega); // 旋转角速度（度/秒）
                 em_json["b"]           = state->b;
                 em_json["r"]           = state->radius;
                 em_json["obs_valid"]   = state->obs_valid;    // 观测是否有效
-                em_json["yaw"]         = state->yaw;         // 圆盘当前偏航角度
+                em_json["yaw"]         = detail::rad_to_deg(state->yaw); // 圆盘当前偏航角度（度）
 
                 // EnergyMeterMessage话题输出
                 detail::publish_json_message<EnergyMeterMessage>(*server, em_json);

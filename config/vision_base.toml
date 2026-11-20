@@ -125,7 +125,8 @@ model_path = "models/best_fp16.onnx"   # 装甲检测ONNX模型文件
 cache_dir = "/tmp/ort_cache"           # 算子优化缓存目录，加速首次加载
 confidence_threshold = 0.25            # 检测框置信度过滤阈值
 nms_threshold = 0.30                   # NMS非极大抑制IOU阈值，去重叠框
-top_k = 128                            # 最多保留前128个候选检测框
+top_k = 32                             # 最多保留前32个候选检测框（原128，降低后处理）
+openvino_device = "GPU"                # OpenVINO设备：GPU/CPU/AUTO，空则默认GPU
 
 # ====================== [tensor_rt] NVIDIA GPU TensorRT加速推理 ======================
 # backend_type = "TensorRT" 生效，Jetson Orin/Xavier/台式RTX专用
@@ -160,7 +161,7 @@ top_k = 128
 # ====================== [readback_roi] 局部裁剪ROI参数 ======================
 # 跟踪阶段只裁剪目标附近画面推理，大幅降低算力
 [readback_roi]  # ◈ 表09·ROI局部推理（跟踪稳定后裁小图省算力）
-enabled = false                      # ROI局部推理总开关
+enabled = true                       # ROI局部推理总开关（跟踪稳定后只裁目标附近）
 stale_timeout_s = 0.20               # 目标丢失超时，超时切回全图检测
 margin_ratio_x = 0.20                # ROI框左右扩张比例
 margin_ratio_y = 0.00                # ROI框上下扩张比例

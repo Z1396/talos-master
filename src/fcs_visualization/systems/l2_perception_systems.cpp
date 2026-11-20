@@ -901,10 +901,11 @@ void register_l2_perception_systems(talos::scheduler::Scheduler& app) {
                 mj["orientation"] = {
                     q.x(), q.y(), q.z(),
                     q.w()}; ///< [array<double,4>]在odom坐标系下的的姿态四元数[x,y,z,w]，单位弧度
-                mj["euler"]["roll"] = r; ///< [double]欧拉角roll滚转，单位弧度。取值范围:[-π,π]
+                mj["euler"]["roll"] = detail::rad_to_deg(r); ///< [double]欧拉角roll滚转，单位度。取值范围:[-180,180]
                 mj["euler"]["pitch"] =
-                    p;                   ///< [double]欧拉角pitch俯仰，单位弧度。取值范围:[-π/2,π/2]
-                mj["euler"]["yaw"] = y;  ///< [double]欧拉角yaw偏航角，单位弧度。取值范围:[-π,π]
+                    detail::rad_to_deg(p); ///< [double]欧拉角pitch俯仰，单位度。取值范围:[-90,90]
+                mj["euler"]["yaw"] =
+                    detail::rad_to_deg(y); ///< [double]欧拉角yaw偏航角，单位度。取值范围:[-180,180]
                 mj["distance"] =
                     t.norm(); ///< [double]装甲板到odom原点(里程计原点)的直线距离，注意不是到相机的距离，单位米。取值范围:[0,+∞)
 

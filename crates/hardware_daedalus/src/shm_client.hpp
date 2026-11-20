@@ -3,6 +3,10 @@
 
 // 时间工具：steady_clock计时、system_clock纳秒时间戳
 #include <chrono>
+// 角度速度前馈钳位
+#include <algorithm>
+// memset/memcpy 填充保留字节
+#include <cstring>
 // C++23 标准错误返回类型，用于connect/create返回成功/错误
 #include <expected>
 // OpenCV核心矩阵，用于图像帧存储、零拷贝映射共享内存图像
@@ -341,10 +345,14 @@ public:
      * @param pitch_deg 目标俯仰角 单位度
      * @param distance_m 目标预测距离，-1代表无效
      * @param fire_advice 是否允许开火建议
+     * @param yaw_rate 偏航角速度前馈 rad/s（yaw_deg 对时间的导数）
+     * @param pitch_rate 俯仰角速度前馈 rad/s（pitch_deg 逻辑角对时间的导数，不预取负）
+     * @param rates_valid 角速度是否有效；true 时模拟器采用前馈，false 时退回旧行为
      */
     void send_gimbal_cmd(
         const float yaw_deg, const float pitch_deg, const float distance_m,
-        const bool fire_advice) const {
+        const bool fire_advice, const float yaw_rate = 0.0f, const float pitch_rate = 0.0f,
+        const bool rates_valid = false) const {
         // 获取云台指令三缓冲写入操作器
         GimbalOps ops(&meta_->gimbal_cmd);
         // borrow_mut 获取可修改的写入槽位
@@ -357,6 +365,19 @@ public:
         cmd.pitch_deg   = pitch_deg;
         cmd.distance_m  = distance_m;
         cmd.fire_advice = fire_advice ? 1 : 0;
+
+        // 前馈写进原保留字节：先整段清零，防止旧槽位残留数据被当成有效前馈
+        std::memset(cmd._pad, 0, sizeof(cmd._pad));
+        if (rates_valid) {
+            // 钳到物理包络，双保险（模拟器侧也会再钳一次）
+            constexpr float kMaxRate = 2.5f; // rad/s
+            const float yaw_rate_clamped   = std::clamp(yaw_rate, -kMaxRate, kMaxRate);
+            const float pitch_rate_clamped = std::clamp(pitch_rate, -kMaxRate, kMaxRate);
+            std::memcpy(&cmd._pad[0], &yaw_rate_clamped, sizeof(float));
+            std::memcpy(&cmd._pad[4], &pitch_rate_clamped, sizeof(float));
+            // 有效标志最后写，确保两个 f32 已落地
+            cmd._pad[8] = 0x01;
+        }
 
         // publish 发布新指令，切换缓冲槽，消费者可见
         ops.publish();

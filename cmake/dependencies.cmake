@@ -1,6 +1,18 @@
 # 全局关闭CMake废弃API警告，消除编译时一堆deprecated提示
 set(CMAKE_WARN_DEPRECATED OFF)
 
+# ====================== OpenVINO（可选，Intel iGPU 推理） ======================
+# 只在本机装了 OpenVINO 时启用；找不到就继续用 ONNX Runtime CPU
+if(NOT DEFINED OpenVINO_DIR AND EXISTS "/opt/intel/openvino_2024.6.0/runtime/cmake/OpenVINOConfig.cmake")
+    set(OpenVINO_DIR "/opt/intel/openvino_2024.6.0/runtime/cmake")
+endif()
+find_package(OpenVINO QUIET)
+if(OpenVINO_FOUND)
+    message(STATUS "OpenVINO found: ${OpenVINO_DIR}")
+else()
+    message(STATUS "OpenVINO not found: OrtBackend will use ONNX Runtime only")
+endif()
+
 # CMP0135策略：FetchContent下载文件时，时间戳更新规则
 # OLD行为：不自动刷新文件时间，避免重复重编译
 # 判断当前CMake版本是否支持策略CMP0135

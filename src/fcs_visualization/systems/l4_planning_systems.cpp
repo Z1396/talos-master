@@ -13,6 +13,7 @@
 #include "vis_helpers.hpp" // 装甲板立方体绘制工具（make_armor_cube），同L3跟踪场景用法
 // L4控制意图、通道话题定义、帧结构
 #include "L4_planning/control_intent.hpp"
+#include "L4_planning/common/transform_utils.hpp"
 #include "core/channel_topics.hpp"
 #include "frame.hpp"
 
@@ -269,8 +270,8 @@ inline void append_selection_trace_metadata(
         {   "position",                  json_vec3(state.position)}, // 底盘中心坐标
         {   "distance",                      state.position.norm()}, // 相对我方距离
         {   "velocity",                  json_vec3(state.velocity)}, // 底盘三维速度
-        {        "yaw",                                  state.yaw}, // 底盘偏航角
-        {      "v_yaw",                                state.v_yaw}, // 底盘旋转角速度
+        {        "yaw",            detail::rad_to_deg(state.yaw)}, // 底盘偏航角（度）
+        {      "v_yaw",          detail::rad_to_deg(state.v_yaw)}, // 底盘旋转角速度（度/秒）
         {     "radius",             {state.radius0, state.radius1}}, // 机器人长宽半径
         {         "z1",                                   state.z1}, // 底盘高度偏移
         { "armors_num",                           state.armors_num}, // 装甲总数量
@@ -284,7 +285,7 @@ inline void append_selection_trace_metadata(
         state_json["armor_poses"].push_back({
             {      "id",                        static_cast<int>(i)},
             {"position", {armors[i][0], armors[i][1], armors[i][2]}},
-            {     "yaw",                               armors[i][3]},
+            {     "yaw", detail::rad_to_deg(armors[i][3])},
         });
     }
 
@@ -302,8 +303,8 @@ inline void append_selection_trace_metadata(
         {   "position",   {state.position.x(), state.position.y()}},
         {   "distance",                      state.position.norm()},
         {   "velocity",                  json_vec3(state.velocity)},
-        {        "yaw",                                  state.yaw},
-        {      "v_yaw",                                state.v_yaw},
+        {        "yaw",            detail::rad_to_deg(state.yaw)},
+        {      "v_yaw",          detail::rad_to_deg(state.v_yaw)},
         {          "z",       {state.z[0], state.z[1], state.z[2]}},
         {     "radius",      ::fcs::L3::OutpostTargetState::radius},
         { "armors_num",  ::fcs::L3::OutpostTargetState::armors_num},
@@ -316,7 +317,7 @@ inline void append_selection_trace_metadata(
         state_json["armor_poses"].push_back({
             {      "id",                        static_cast<int>(i)},
             {"position", {armors[i][0], armors[i][1], armors[i][2]}},
-            {     "yaw",                               armors[i][3]},
+            {     "yaw", detail::rad_to_deg(armors[i][3])},
         });
     }
 
@@ -508,8 +509,8 @@ inline void append_selection_trace_metadata(
             } else if constexpr (std::is_same_v<T, ::fcs::L4::ShotCommand>) {
                 // 射击模式：输出瞄准角度、距离、退化原因
                 result["mode"]     = "Shot";
-                result["yaw"]      = cmd.yaw;
-                result["pitch"]    = cmd.pitch;
+                result["yaw"]      = detail::rad_to_deg(cmd.yaw);
+                result["pitch"]    = detail::rad_to_deg(cmd.pitch);
                 result["distance"] = cmd.distance;
                 if (cmd.degradation_reason) {
                     result["degradation_reason"] = *cmd.degradation_reason;
@@ -712,6 +713,8 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             talos::spmc<::fcs::L5::WeaponCommand, WeaponCommandChannelTopic> cmd_in,
             // 输入2：L4输出控制意图（目标选择、期望瞄准角度）
             talos::spmc<::fcs::L4::ControlIntent, ControlIntentChannelTopic> plan_in,
+            // TF树：用于读取下位机反馈的实际云台姿态
+            talos::res<fast_tf::CoordinateSystem> tf_buffer,
             talos::res<std::shared_ptr<FoxgloveServer>> server) {
             if (!detail::foxglove_ready(*server, cmd_in)) {
                 return;
@@ -746,35 +749,48 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
             cmd_json["timestamp"]["sec"]  = cmd->timestamp_ns / 1000000000L; // 秒部分
             cmd_json["timestamp"]["nsec"] = cmd->timestamp_ns % 1000000000L; // 纳秒余数
 
-            // pre_plan：MPC优化之前，L4给出原始期望瞄准角度
+            // 下位机反馈的实际云台角（度），与 post_plan 并排对比。
+            // TF 里的 gimbal_pitch 帧是由下位机回传的位姿构造的；
+            // pitch 取负号，和 output_interface 下发给下位机的口径一致。
+            cmd_json["gimbal_yaw"]   = nullptr;
+            cmd_json["gimbal_pitch"] = nullptr;
+            if (auto gimbal_tf =
+                    ::fcs::L4::lookup_gimbal_transform(*tf_buffer, cmd->timestamp_ns)) {
+                const auto [roll, pitch, yaw] = gimbal_tf->euler_rot().rpy();
+                (void)roll; // 云台 roll 不参与调试对比
+                cmd_json["gimbal_yaw"]   = detail::rad_to_deg(yaw);
+                cmd_json["gimbal_pitch"] = detail::rad_to_deg(-pitch);
+            }
+
+            // pre_plan：MPC优化之前，L4给出原始期望瞄准角度（度）
             cmd_json["pre_plan"] = {
-                {     "yaw",      cmd->plan_yaw}, // 原始期望偏航
-                {   "pitch",    cmd->plan_pitch}, // 原始期望俯仰
+                {     "yaw", detail::rad_to_deg(cmd->plan_yaw)}, // 原始期望偏航
+                {   "pitch", detail::rad_to_deg(cmd->plan_pitch)}, // 原始期望俯仰
                 {"distance", cmd->plan_distance}, // 原始目标距离
             };
             // post_plan：MPC优化平滑之后输出云台目标角度，附带开火建议
             cmd_json["post_plan"] = {
-                {        "yaw",   cmd->yaw},
-                {      "pitch", cmd->pitch},
+                {        "yaw", detail::rad_to_deg(cmd->yaw)},
+                {      "pitch", detail::rad_to_deg(cmd->pitch)},
                 {"fire_advice",  cmd->fire}, // true=建议开火
             };
 
-            // MPC输出完整云台状态
-            cmd_json["yaw"]                  = cmd->yaw;         // 输出目标偏航角(rad)
-            cmd_json["pitch"]                = cmd->pitch;       // 输出目标俯仰角(rad)
-            cmd_json["v_yaw"]                = cmd->yaw_vel;     // 目标偏航角速度 rad/s
-            cmd_json["v_pitch"]              = cmd->pitch_vel;   // 目标俯仰角速度 rad/s
-            cmd_json["a_yaw"]                = cmd->yaw_accel;   // 目标偏航角加速度 rad/s²
-            cmd_json["a_pitch"]              = cmd->pitch_accel; // 目标俯仰角加速度 rad/s²
+            // MPC输出完整云台状态（角度：度；角速度：度/秒；角加速度：度/秒²）
+            cmd_json["yaw"]                  = detail::rad_to_deg(cmd->yaw);
+            cmd_json["pitch"]                = detail::rad_to_deg(cmd->pitch);
+            cmd_json["v_yaw"]                = detail::rad_to_deg(cmd->yaw_vel);
+            cmd_json["v_pitch"]              = detail::rad_to_deg(cmd->pitch_vel);
+            cmd_json["a_yaw"]                = detail::rad_to_deg(cmd->yaw_accel);
+            cmd_json["a_pitch"]              = detail::rad_to_deg(cmd->pitch_accel);
             cmd_json["distance"]             = cmd->distance;    // 预测目标距离
             cmd_json["tof"]                  = cmd->tof;         // 子弹飞行时间time‑of‑flight
             cmd_json["fire_advice"]          = cmd->fire;        // 是否建议开火
-            cmd_json["yaw_error"]            = cmd->yaw_error;   // 偏航跟踪误差
-            cmd_json["pitch_error"]          = cmd->pitch_error; // 俯仰跟踪误差
-            cmd_json["shooting_range_yaw"]   = cmd->shooting_range_yaw;   // 允许开火偏航误差阈值
-            cmd_json["shooting_range_pitch"] = cmd->shooting_range_pitch; // 允许开火俯仰误差阈值
-            cmd_json["ref_yaw"]              = cmd->ref_yaw;              // MPC参考轨迹yaw
-            cmd_json["ref_pitch"]            = cmd->ref_pitch;            // MPC参考轨迹pitch
+            cmd_json["yaw_error"]            = detail::rad_to_deg(cmd->yaw_error);
+            cmd_json["pitch_error"]          = detail::rad_to_deg(cmd->pitch_error);
+            cmd_json["shooting_range_yaw"]   = detail::rad_to_deg(cmd->shooting_range_yaw);
+            cmd_json["shooting_range_pitch"] = detail::rad_to_deg(cmd->shooting_range_pitch);
+            cmd_json["ref_yaw"]              = detail::rad_to_deg(cmd->ref_yaw);
+            cmd_json["ref_pitch"]            = detail::rad_to_deg(cmd->ref_pitch);
 
             // degradation_reason
             // std::optional<std::string>；瞄准退化原因（遮挡、滤波发散、目标丢失）
@@ -841,8 +857,8 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
                      i
                      - cmd->viz_debug
                      ->center_index                       }, // 相对当前时刻时域偏移，0=当前，正数未来，负数过去
-                    {            "yaw",      reference.yaw},
-                    {          "pitch",    reference.pitch},
+                    {            "yaw", detail::rad_to_deg(reference.yaw)},
+                    {          "pitch", detail::rad_to_deg(reference.pitch)},
                     {       "distance", reference.distance},
                     {            "tof",      reference.tof},
                 });
@@ -853,8 +869,8 @@ void register_l4_planning_systems(talos::scheduler::Scheduler& app) {
                 traj_json["optimized"].push_back({
                     {          "index",                                i},
                     {"temporal_offset", i - cmd->viz_debug->center_index},
-                    {            "yaw",                    optimized.yaw},
-                    {          "pitch",                  optimized.pitch},
+                    {            "yaw", detail::rad_to_deg(optimized.yaw)},
+                    {          "pitch", detail::rad_to_deg(optimized.pitch)},
                     {       "distance",               optimized.distance},
                     {            "tof",                    optimized.tof},
                 });

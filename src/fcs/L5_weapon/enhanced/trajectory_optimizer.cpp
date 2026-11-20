@@ -362,6 +362,7 @@ std::expected<WeaponCommand, std::string> TinyMpcTrajectoryOptimizer::optimize(
     // 步骤12:提取速度和加速度(前馈控制)
     cmd.yaw_vel     = static_cast<double>(yaw_solver.state(1, center_index));
     cmd.pitch_vel   = static_cast<double>(pitch_solver.state(1, center_index));
+    cmd.vel_valid   = true; // 前馈角速度已由优化器解出
     cmd.yaw_accel   = static_cast<double>(yaw_solver.input(control_index));
     cmd.pitch_accel = static_cast<double>(pitch_solver.input(control_index));
 

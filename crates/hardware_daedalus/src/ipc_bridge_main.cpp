@@ -410,12 +410,21 @@ void tcp_image_loop(ShmClient& client, uint16_t image_port, FrameSynchronizer& f
  * @return true 成功发出；false 无指令/仿真地址未知
  */
 bool forward_gimbal_cmd(ShmClient& client, int udp_fd) {
+    // 诊断计数：sent=真正发出的云台指令，no_new=本轮没有新指令，no_addr=还没学到仿真地址
+    static uint64_t sent    = 0;
+    static uint64_t no_new  = 0;
+    static uint64_t no_addr = 0;
+
     // 未收到过任何仿真包，不知道往哪回
     // 仿真回传地址有效性标志：UDP 收包线程更新，云台回传线程读取
     sockaddr_in dst{};
     {
         std::lock_guard lock(g_sim_addr_mutex);
         if (!g_sim_addr_valid) {
+            if (++no_addr % 400 == 0) {
+                printf("[bridge] gimbal_cmd: no sim addr yet (polls=%llu)\n",
+                       static_cast<unsigned long long>(no_addr));
+            }
             return false;
         }
         dst = g_sim_addr;
@@ -424,6 +433,11 @@ bool forward_gimbal_cmd(ShmClient& client, int udp_fd) {
     // borrow 语义取出新指令（桥是唯一消费者，取出即消费）
     const auto cmd_opt = client.recv_gimbal_cmd();
     if (!cmd_opt) {
+        if (++no_new % 400 == 0) {
+            printf("[bridge] gimbal_cmd: sent=%llu no_new=%llu\n",
+                   static_cast<unsigned long long>(sent),
+                   static_cast<unsigned long long>(no_new));
+        }
         return false;
     }
 
@@ -444,6 +458,12 @@ bool forward_gimbal_cmd(ShmClient& client, int udp_fd) {
     ::sendto(
         udp_fd, packet.data(), packet.size(), 0, reinterpret_cast<const sockaddr*>(&dst),
         sizeof(dst));
+    ++sent;
+    if ((sent + no_new) % 400 == 0) {
+        printf("[bridge] gimbal_cmd: sent=%llu no_new=%llu\n",
+               static_cast<unsigned long long>(sent),
+               static_cast<unsigned long long>(no_new));
+    }
     return true;
 }
 

@@ -6,6 +6,8 @@
 
 // 数学库，提供 cos/sin 三角函数，用于球坐标转笛卡尔坐标
 #include <cmath>
+// 圆周率常量
+#include <numbers>
 // 项目自定义消息结构体定义头文件
 #include <messages.hpp>
 // 项目通用工具函数、辅助模板头文件
@@ -13,6 +15,11 @@
 
 // 命名空间层级：fcs框架 -> visualization可视化模块 -> detail内部实现细节（对外隐藏）
 namespace fcs::visualization::detail {
+
+/// 弧度 → 度：仅用于 Foxglove / JSON 调试显示，不参与任何几何或控制计算
+[[nodiscard]] constexpr double rad_to_deg(double rad) noexcept {
+    return rad * (180.0 / std::numbers::pi);
+}
 
 // ============================================================================
 // System Helper Functions - 共享的系统辅助函数

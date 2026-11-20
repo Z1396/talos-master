@@ -28,6 +28,7 @@
 #include <fstream>
 #include <memory>
 #include <mutex>
+#include <numbers>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -274,6 +275,11 @@ auto serialize_control_chunk(
     return json::array({v.x(), v.y()});
 }
 
+/// 弧度 → 度：只用于 JSON / Foxglove 显示与录制，不参与任何控制逻辑
+[[nodiscard]] constexpr double rad_to_deg(double rad) noexcept {
+    return rad * (180.0 / std::numbers::pi);
+}
+
 [[nodiscard]] auto to_json_filter_convergence(const L3::FilterConvergenceState& state) -> json {
     return json{
         {                       "status",                          magic_enum::enum_name(state.status)},
@@ -299,7 +305,8 @@ auto serialize_control_chunk(
 
 [[nodiscard]] auto to_json_rpy(const math_fuxk::Ros2EulerRotd& rpy) -> json {
     const auto [roll, pitch, yaw] = rpy.rpy();
-    return json::array({roll, pitch, yaw});
+    // 可视化/录制统一输出角度制（度）；quaternion 仍保留原始姿态供 3D 渲染使用
+    return json::array({rad_to_deg(roll), rad_to_deg(pitch), rad_to_deg(yaw)});
 }
 
 [[nodiscard]] auto to_json_rect(const cv::Rect2f& rect) -> json {
@@ -381,8 +388,8 @@ auto serialize_control_chunk(
     return json{
         {   "position",                  to_json_vec3(state.position)},
         {   "velocity",                  to_json_vec3(state.velocity)},
-        {        "yaw",                                     state.yaw},
-        {      "v_yaw",                                   state.v_yaw},
+        {        "yaw",                      rad_to_deg(state.yaw)},
+        {      "v_yaw",                      rad_to_deg(state.v_yaw)},
         {    "radius0",                                 state.radius0},
         {    "radius1",                                 state.radius1},
         {         "z1",                                      state.z1},
@@ -400,8 +407,8 @@ auto serialize_control_chunk(
     return json{
         {   "position",                  to_json_vec2(state.position)},
         {   "velocity",                  to_json_vec3(state.velocity)},
-        {        "yaw",                                     state.yaw},
-        {      "v_yaw",                                   state.v_yaw},
+        {        "yaw",                      rad_to_deg(state.yaw)},
+        {      "v_yaw",                      rad_to_deg(state.v_yaw)},
         {          "z",                                  std::move(z)},
         {     "radius",                                  state.radius},
         { "armors_num",                              state.armors_num},
@@ -506,8 +513,8 @@ auto serialize_control_chunk(
                 result["fire_horizon"]    = cmd.fire_trajectory.horizon();
             } else if constexpr (std::is_same_v<T, L4::ShotCommand>) {
                 result["mode"]     = "Shot";
-                result["yaw"]      = cmd.yaw;
-                result["pitch"]    = cmd.pitch;
+                result["yaw"]      = rad_to_deg(cmd.yaw);
+                result["pitch"]    = rad_to_deg(cmd.pitch);
                 result["distance"] = cmd.distance;
             } else if constexpr (std::is_same_v<T, L4::HoldCommand>) {
                 result["mode"] = "Hold";
@@ -535,10 +542,10 @@ auto serialize_control_chunk(
 
 [[nodiscard]] auto to_json_trajectory_plan_sample(const L5::TrajectoryPlanSample& sample) -> json {
     return json{
-        {     "yaw",      sample.yaw},
-        {   "pitch",    sample.pitch},
-        {"distance", sample.distance},
-        {     "tof",      sample.tof},
+        {     "yaw",      rad_to_deg(sample.yaw)},
+        {   "pitch",    rad_to_deg(sample.pitch)},
+        {"distance",           sample.distance},
+        {     "tof",                sample.tof},
     };
 }
 
@@ -546,15 +553,16 @@ auto serialize_control_chunk(
     json result{
         {     "timestamp_ns",      cmd.timestamp_ns},
         {"plan_timestamp_ns", cmd.plan_timestamp_ns},
-        {         "plan_yaw",          cmd.plan_yaw},
-        {       "plan_pitch",        cmd.plan_pitch},
+        // 角度统一为度，角速度为度/秒，角加速度为度/秒²（仅显示/录制用）
+        {         "plan_yaw",          rad_to_deg(cmd.plan_yaw)},
+        {       "plan_pitch",        rad_to_deg(cmd.plan_pitch)},
         {    "plan_distance",     cmd.plan_distance},
-        {              "yaw",               cmd.yaw},
-        {            "pitch",             cmd.pitch},
-        {          "yaw_vel",           cmd.yaw_vel},
-        {        "pitch_vel",         cmd.pitch_vel},
-        {        "yaw_accel",         cmd.yaw_accel},
-        {      "pitch_accel",       cmd.pitch_accel},
+        {              "yaw",               rad_to_deg(cmd.yaw)},
+        {            "pitch",             rad_to_deg(cmd.pitch)},
+        {          "yaw_vel",           rad_to_deg(cmd.yaw_vel)},
+        {        "pitch_vel",         rad_to_deg(cmd.pitch_vel)},
+        {        "yaw_accel",         rad_to_deg(cmd.yaw_accel)},
+        {      "pitch_accel",       rad_to_deg(cmd.pitch_accel)},
         {             "fire",              cmd.fire},
         {              "tof",               cmd.tof},
         {         "distance",          cmd.distance},
@@ -668,7 +676,7 @@ template <fast_tf::frame Frame>
         {"tracking_valid",              state.tracking_valid},
         { "r_center_odom", to_json_vec3(state.r_center_odom)},
         {        "radius",                      state.radius},
-        {          "roll",                        state.roll},
+        {          "roll",              rad_to_deg(state.roll)},
         {             "t",                           state.t},
         {      "blade_id",                    state.blade_id},
         {     "direction",                   state.direction},
@@ -676,7 +684,7 @@ template <fast_tf::frame Frame>
         {   "is_big_rune",                 state.is_big_rune},
         {   "model_valid",                 state.model_valid},
         {             "a",                           state.a},
-        {         "omega",                       state.omega},
+        {         "omega",            rad_to_deg(state.omega)},
         {             "b",                           state.b},
         {     "obs_vaild",                   state.obs_valid},
     };
@@ -963,12 +971,13 @@ public:
                 resources["imu_state"]           = json{
                               {     "present",             true},
                               {"timestamp_ns", imu.timestamp_ns},
-                              {         "yaw",          imu.yaw},
-                              {       "pitch",        imu.pitch},
-                              {        "roll",         imu.roll},
-                              {     "yaw_vel",      imu.yaw_vel},
-                              {   "pitch_vel",    imu.pitch_vel},
-                              {    "roll_vel",     imu.roll_vel},
+                              // 角度：度；角速度：度/秒（仅显示/录制用）
+                              {         "yaw",  rad_to_deg(imu.yaw)},
+                              {       "pitch", rad_to_deg(imu.pitch)},
+                              {        "roll", rad_to_deg(imu.roll)},
+                              {     "yaw_vel", rad_to_deg(imu.yaw_vel)},
+                              {   "pitch_vel", rad_to_deg(imu.pitch_vel)},
+                              {    "roll_vel", rad_to_deg(imu.roll_vel)},
                 };
                 resources["detecting_color"] =
                     magic_enum::enum_name(control_state.value->detecting_color);

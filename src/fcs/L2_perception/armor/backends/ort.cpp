@@ -35,10 +35,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <onnxruntime_c_api.h>
 #include <spdlog/common.h>
 #include <spdlog/spdlog-inl.h>
@@ -47,6 +49,10 @@
 #include <string_view>
 #include <unordered_map>
 #include <vector>
+
+#if TALOS_HAS_OPENVINO
+# include <openvino/openvino.hpp>
+#endif
 
 // macOS平台特定头文件：CoreML执行提供器
 #ifdef __APPLE__
@@ -117,18 +123,16 @@ struct ClassMapping {
 /**
  * @brief 选择OpenVINO设备类型
  *
- * 选择最优的OpenVINO设备类型。当前策略：
- * - 优先选择GPU_FP16（Intel Xe架构iGPU的半精度推理）
- * - 如果会话创建失败，会降级到GPU_FP32
+ * 从配置读取 OpenVINO 设备：
+ * - "GPU"：集显/独显（默认）
+ * - "CPU"：OpenVINO CPU 插件
+ * - "AUTO"：交给 OpenVINO 自动选择
  *
- * @return 设备类型字符串，如"GPU_FP16"
- *
- * @note FP16推理速度更快，但某些旧设备可能不支持
- * @note 仅在Linux x86_64平台编译此函数
+ * @param cfg 推理后端配置
+ * @return 设备类型字符串
  */
-[[nodiscard]] std::string pick_openvino_device_type() noexcept {
-    // 在Intel Xe级iGPU上优先使用FP16。如果会话创建拒绝，则降级到FP32。
-    return "GPU_FP16";
+[[nodiscard]] std::string pick_openvino_device_type(const ArmorOrtConfig& cfg) noexcept {
+    return cfg.openvino_device.empty() ? std::string{"GPU"} : cfg.openvino_device;
 }
 #endif
 
@@ -311,8 +315,15 @@ void spdlog_ort_logger(
  */
 struct OrtBackend::Impl {
     Ort::Env env;                       ///< ONNXRuntime环境对象，每个进程只需一个
-    Ort::SessionOptions session_options; ///< 会话选项，配置线程数、优化级别等
     std::unique_ptr<Ort::Session> session; ///< 推理会话，封装模型和执行引擎
+
+#if TALOS_HAS_OPENVINO
+    // 可选的原生 OpenVINO 推理路径（Intel iGPU/CPU），ORT 的 OpenVINO EP 不可用时使用
+    std::optional<ov::CompiledModel> ov_compiled;
+    std::optional<ov::InferRequest> ov_request;
+    std::vector<float> ov_output;          ///< OpenVINO 输出拷贝（[1,300,14]）
+    std::vector<int64_t> ov_output_shape;  ///< OpenVINO 输出形状
+#endif
 
     Ort::AllocatorWithDefaultOptions allocator; ///< 默认内存分配器
 
@@ -436,17 +447,20 @@ std::expected<OrtBackend, std::string> OrtBackend::create(Config config) noexcep
         std::string selected_provider{"CPUExecutionProvider"};
         const auto available_providers = Ort::GetAvailableProviders();
 
-        // 步骤2: 配置会话选项
-        // IntraOp 线程数交给 ORT 自适应（0 = 默认，等于物理核数）。
-        // 原值写死 2 在 i5-8259U（4 物理核）上实测 41.7ms/帧（~24fps），
-        // 改为自适应后 23.4ms/帧（~43fps），是当前链路最大的一处无损提速。
-        impl.session_options.SetIntraOpNumThreads(0);
-        // 启用所有图优化（算子融合、常量折叠等）
-        impl.session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        // 设置顺序执行模式，保证推理结果可复现
-        impl.session_options.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
-        // 启用确定性计算，避免浮点运算顺序差异
-        impl.session_options.SetDeterministicCompute(true);
+        // 公共会话选项：SessionOptions 不可拷贝，每次尝试都重新构造
+        auto make_session_options = []() {
+            Ort::SessionOptions opts;
+            // 线程数交给 ORT 自适应（0 = 默认，等于物理核数）
+            opts.SetIntraOpNumThreads(0);
+            opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
+            // 实测 ORT_PARALLEL 在多系统抢占时抖动明显，改回顺序执行
+            opts.SetExecutionMode(ExecutionMode::ORT_SEQUENTIAL);
+            opts.SetDeterministicCompute(true);
+            return opts;
+        };
+
+        // 先尝试硬件加速，失败自动回退 CPU，保证后端一定能起来
+        std::unique_ptr<Ort::Session> session;
 
 #if defined(__linux__) && defined(__x86_64__)
         // ====================================================================
@@ -454,37 +468,20 @@ std::expected<OrtBackend, std::string> OrtBackend::create(Config config) noexcep
         // ====================================================================
         if (provider_available(available_providers, "OpenVINOExecutionProvider")
             || provider_available(available_providers, "OpenVINO")) {
-            const auto openvino_device_type = pick_openvino_device_type();
-
+            const std::string device = pick_openvino_device_type(cfg);
             try {
-                // 尝试使用GPU_FP16（半精度推理）
+                auto opts = make_session_options();
                 OrtOpenVINOProviderOptions openvino_options{};
-                openvino_options.device_type = openvino_device_type.c_str();
-                openvino_options.cache_dir   = cfg.cache_dir.empty() ? "" : cfg.cache_dir.c_str();
-
-                impl.session_options.AppendExecutionProvider_OpenVINO(openvino_options);
-                selected_provider = "OpenVINOExecutionProvider(" + openvino_device_type + ")";
-            } catch (const std::exception& gpu_fp16_error) {
-                // GPU_FP16失败，降级到GPU_FP32
+                openvino_options.device_type = device.c_str();
+                openvino_options.cache_dir = cfg.cache_dir.empty() ? "" : cfg.cache_dir.c_str();
+                opts.AppendExecutionProvider_OpenVINO(openvino_options);
+                session = std::make_unique<Ort::Session>(
+                    impl.env, cfg.model_path.c_str(), opts);
+                selected_provider = "OpenVINOExecutionProvider(" + device + ")";
+            } catch (const std::exception& e) {
                 SPDLOG_WARN(
-                    "[OrtBackend] Failed to enable OpenVINO {}: {}. Retrying with GPU_FP32.",
-                    openvino_device_type, gpu_fp16_error.what());
-
-                try {
-                    OrtOpenVINOProviderOptions openvino_options{};
-                    static constexpr char kFallbackDeviceType[] = "GPU_FP32";
-                    openvino_options.device_type                = kFallbackDeviceType;
-                    openvino_options.cache_dir = cfg.cache_dir.empty() ? "" : cfg.cache_dir.c_str();
-
-                    impl.session_options.AppendExecutionProvider_OpenVINO(openvino_options);
-                    selected_provider = "OpenVINOExecutionProvider(GPU_FP32)";
-                } catch (const std::exception& gpu_fp32_error) {
-                    // GPU完全不可用，降级到CPU
-                    SPDLOG_WARN(
-                        "[OrtBackend] Failed to enable OpenVINO GPU execution: {}. Falling back "
-                        "to CPUExecutionProvider.",
-                        gpu_fp32_error.what());
-                }
+                    "[OrtBackend] OpenVINO {} failed: {}. Falling back to CPUExecutionProvider.",
+                    device, e.what());
             }
         } else {
             SPDLOG_INFO(
@@ -497,28 +494,36 @@ std::expected<OrtBackend, std::string> OrtBackend::create(Config config) noexcep
         // ====================================================================
         // macOS平台：CoreML执行提供器配置
         // ====================================================================
-        std::unordered_map<std::string, std::string> coreml_options;
+        {
+            auto opts = make_session_options();
+            std::unordered_map<std::string, std::string> coreml_options;
 
-        // 使用MLProgram格式（比MLModel更现代）
-        coreml_options["ModelFormat"]                        = "MLProgram";
-        // 使用CPU和神经引擎（最佳性能）
-        coreml_options["MLComputeUnits"]                     = "CPUAndNeuralEngine";
-        // 要求静态输入形状（优化性能）
-        coreml_options["RequireStaticInputShapes"]           = "1";
-        // 快速预测策略（减少延迟）
-        coreml_options["SpecializationStrategy"]             = "FastPrediction";
-        // 允许GPU低精度累加（提升速度）
-        coreml_options["AllowLowPrecisionAccumulationOnGPU"] = "1";
-        // 设置模型缓存目录
-        coreml_options["ModelCacheDirectory"]                = cfg.cache_dir;
+            // 使用MLProgram格式（比MLModel更现代）
+            coreml_options["ModelFormat"] = "MLProgram";
+            // 使用CPU和神经引擎（最佳性能）
+            coreml_options["MLComputeUnits"] = "CPUAndNeuralEngine";
+            // 要求静态输入形状（优化性能）
+            coreml_options["RequireStaticInputShapes"] = "1";
+            // 快速预测策略（减少延迟）
+            coreml_options["SpecializationStrategy"] = "FastPrediction";
+            // 允许GPU低精度累加（提升速度）
+            coreml_options["AllowLowPrecisionAccumulationOnGPU"] = "1";
+            // 设置模型缓存目录
+            coreml_options["ModelCacheDirectory"] = cfg.cache_dir;
 
-        impl.session_options.AppendExecutionProvider("CoreML", coreml_options);
-        selected_provider = "CoreMLExecutionProvider";
+            opts.AppendExecutionProvider("CoreML", coreml_options);
+            session = std::make_unique<Ort::Session>(impl.env, cfg.model_path.c_str(), opts);
+            selected_provider = "CoreMLExecutionProvider";
+        }
 #endif
 
-        // 步骤3: 创建ONNXRuntime会话（加载模型）
-        impl.session =
-            std::make_unique<Ort::Session>(impl.env, cfg.model_path.c_str(), impl.session_options);
+        // 硬件加速不可用或创建失败：纯 CPU 兜底
+        if (!session) {
+            auto opts = make_session_options();
+            session = std::make_unique<Ort::Session>(impl.env, cfg.model_path.c_str(), opts);
+            selected_provider = "CPUExecutionProvider";
+        }
+        impl.session = std::move(session);
 
         // 步骤4: 获取输入输出节点名称
         auto input_name  = impl.session->GetInputNameAllocated(0, impl.allocator);
@@ -554,6 +559,36 @@ std::expected<OrtBackend, std::string> OrtBackend::create(Config config) noexcep
         }
 
         impl.input_shape = std::move(input_shape);
+
+#if TALOS_HAS_OPENVINO
+        // 原生 OpenVINO 推理：ORT 的 OpenVINO EP 不可用时，直接走 OpenVINO Runtime
+        if (!cfg.openvino_device.empty()) {
+            try {
+                ov::Core core;
+                auto model           = core.read_model(cfg.model_path);
+                const auto ov_shape  = model->input(0).get_shape();
+                const bool shape_ok  = ov_shape.size() == 4
+                                    && static_cast<int64_t>(ov_shape[0]) == impl.input_shape[0]
+                                    && static_cast<int64_t>(ov_shape[1]) == impl.input_shape[1]
+                                    && static_cast<int64_t>(ov_shape[2]) == impl.input_shape[2]
+                                    && static_cast<int64_t>(ov_shape[3]) == impl.input_shape[3];
+                if (shape_ok) {
+                    impl.ov_compiled = core.compile_model(model, cfg.openvino_device);
+                    impl.ov_request.emplace(impl.ov_compiled->create_infer_request());
+                    selected_provider = "OpenVINO(" + cfg.openvino_device + ")";
+                    SPDLOG_INFO(
+                        "[OrtBackend] Native OpenVINO enabled: device={}", cfg.openvino_device);
+                } else {
+                    SPDLOG_WARN(
+                        "[OrtBackend] OpenVINO input shape mismatch, skip native OpenVINO");
+                }
+            } catch (const std::exception& e) {
+                SPDLOG_WARN(
+                    "[OrtBackend] Native OpenVINO {} failed: {}; using ONNX Runtime CPU.",
+                    cfg.openvino_device, e.what());
+            }
+        }
+#endif
 
         // 步骤6: 记录初始化成功信息
         SPDLOG_INFO(
@@ -696,11 +731,17 @@ bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
         return false;
     }
 
-    // 检查ONNXRuntime会话是否初始化
-    // 1. 检查是否为4维张量（批次、通道、高、宽）
-    // 2. 检查批次大小是否为1（单张图像）
-    // 3. 检查通道数是否为3（BGR）
-    if (!impl_ || !impl_->session) {
+    // 检查后端是否初始化（ORT 或原生 OpenVINO 任一可用）
+    if (!impl_) {
+        SPDLOG_ERROR("[OrtBackend] Backend is not initialized");
+        return false;
+    }
+#if TALOS_HAS_OPENVINO
+    const bool has_openvino = impl_->ov_request.has_value();
+#else
+    const bool has_openvino = false;
+#endif
+    if (!impl_->session && !has_openvino) {
         SPDLOG_ERROR("[OrtBackend] Session is not initialized");
         return false;
     }
@@ -740,6 +781,25 @@ bool OrtBackend::infer(const PreprocContext& ctx) noexcept {
         std::memcpy(impl_->input_buffer.data() + plane * 0, ch[0].data, plane * sizeof(float));
         std::memcpy(impl_->input_buffer.data() + plane * 1, ch[1].data, plane * sizeof(float));
         std::memcpy(impl_->input_buffer.data() + plane * 2, ch[2].data, plane * sizeof(float));
+
+#if TALOS_HAS_OPENVINO
+        // 原生 OpenVINO 推理路径
+        if (impl_->ov_request) {
+            auto input_port = impl_->ov_request->get_compiled_model().input(0);
+            ov::Tensor input_tensor(
+                input_port.get_element_type(), input_port.get_shape(),
+                impl_->input_buffer.data());
+            impl_->ov_request->set_input_tensor(input_tensor);
+            impl_->ov_request->infer();
+
+            auto output = impl_->ov_request->get_output_tensor(0);
+            const float* out_ptr = output.data<const float>();
+            impl_->ov_output.assign(out_ptr, out_ptr + output.get_size());
+            const auto out_shape = output.get_shape();
+            impl_->ov_output_shape.assign(out_shape.begin(), out_shape.end());
+            return true;
+        }
+#endif
 
         // 创建ONNXRuntime输入张量
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtDeviceAllocator, OrtMemTypeCPUOutput);
@@ -804,27 +864,35 @@ OrtBackend::postprocess(const PreprocContext& ctx, const ArmorOrtConfig& cfg) co
     // 存储最终解析出来的所有装甲检测框
     std::vector<ArmorDetection> detections;
 
-    // 推理实现对象为空 / 没有输出张量，直接返回空结果
-    if (!impl_ || impl_->output_tensors.empty()) {
-        return detections;
-    }
-    // 获取第一个输出张量（装甲模型输出只有一路输出 [1,max_det,14]）
-    const Ort::Value& out = impl_->output_tensors[0];
+    // 统一读取推理输出：原生 OpenVINO 或 ONNX Runtime
+    const float* p = nullptr;
+    std::vector<int64_t> shape;
 
-    // 校验输出是不是张量类型，防止模型输出异常
-    if (!out.IsTensor()) {
-        SPDLOG_WARN("[OrtBackend] Output is not a tensor");
-        return detections;
+#if TALOS_HAS_OPENVINO
+    if (impl_ && impl_->ov_request) {
+        p     = impl_->ov_output.data();
+        shape = impl_->ov_output_shape;
+    } else
+#endif
+    {
+        // 推理实现对象为空 / 没有输出张量，直接返回空结果
+        if (!impl_ || impl_->output_tensors.empty()) {
+            return detections;
+        }
+        // 获取第一个输出张量（装甲模型输出只有一路输出 [1,max_det,14]）
+        const Ort::Value& out = impl_->output_tensors[0];
+        // 校验输出是不是张量类型，防止模型输出异常
+        if (!out.IsTensor()) {
+            SPDLOG_WARN("[OrtBackend] Output is not a tensor");
+            return detections;
+        }
+        p = out.GetTensorData<float>();
+        if (!p) {
+            return detections;
+        }
+        auto tensor_info = out.GetTensorTypeAndShapeInfo();
+        shape            = tensor_info.GetShape();
     }
-    // 获取张量float数据首地址
-    const float* p = out.GetTensorData<float>();
-    // 空指针保护
-    if (!p) {
-        return detections;
-    }
-    // 获取张量信息：维度、形状、数据类型
-    auto tensor_info = out.GetTensorTypeAndShapeInfo();
-    const auto shape = tensor_info.GetShape();
 
     // 校验输出形状必须是三维：batch=1, 最大检测数, 每条检测数据长度
     // 约定输出shape: [1, max_det, 14]
@@ -1057,7 +1125,9 @@ OrtBackend::DetectionResult OrtBackend::detect_impl(const cv::Mat& image, ArmorC
     const auto& cfg = get_config();
 
     // 步骤1: 预处理
+    const auto t0  = std::chrono::steady_clock::now();
     auto ctx = preprocess(image, cfg);
+    const auto t1 = std::chrono::steady_clock::now();
     if (ctx.preprocessed.empty()) {
         return std::unexpected("NN backend preprocessing failed");
     }
@@ -1066,12 +1136,27 @@ OrtBackend::DetectionResult OrtBackend::detect_impl(const cv::Mat& image, ArmorC
     if (!infer(ctx)) {
         return std::unexpected("NN backend inference failed");
     }
+    const auto t2 = std::chrono::steady_clock::now();
 
     // 步骤3: 后处理
     auto detections = postprocess(ctx, cfg);
+    const auto t3    = std::chrono::steady_clock::now();
 
     // 步骤4: NMS
     auto result = nms(detections, cfg);
+    const auto t4 = std::chrono::steady_clock::now();
+
+    // 耗时诊断：约每 30 帧打印一次，定位 pre/infer/post/nms 各占多少
+    static uint64_t timing_count = 0;
+    if (++timing_count % 30 == 0) {
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        SPDLOG_INFO(
+            "[OrtBackend] timing pre={:.2f}ms infer={:.2f}ms post={:.2f}ms nms={:.2f}ms "
+            "total={:.2f}ms input={}x{}",
+            ms(t0, t1), ms(t1, t2), ms(t2, t3), ms(t3, t4), ms(t0, t4), image.cols, image.rows);
+    }
 
     // 调试输出（已注释）
     // SPDLOG_INFO("[OrtBackend] ===== Detection Results =====");

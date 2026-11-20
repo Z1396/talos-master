@@ -15,6 +15,8 @@
 #include <cstring>
 // std::min/max等算法
 #include <algorithm>
+// std::isfinite 数值合法性检查
+#include <cmath>
 // 标准库基础
 #include <chrono>
 #include <expected>
@@ -60,8 +62,17 @@ void IpcOutput::send(const L5::WeaponCommand& cmd) const noexcept {
     const auto pitch_deg  = -static_cast<float>(cmd.pitch * kRadToDeg);
     const auto distance_m = static_cast<float>(cmd.distance);
 
-    // 调用共享内存接口发送云台指令
-    client_->send_gimbal_cmd(yaw_deg, pitch_deg, distance_m, cmd.fire);
+    // 角速度前馈：仅在有有效目标、解算已给出角速度且数值有限时置有效标志；
+    // 无解（distance<0）或 ShotCommand/能量机关等无角速度解时 rates_valid=false，
+    // 模拟器退回旧行为（保留字节全 0、flag=0）。
+    // 单位 rad/s，正方向与 cmd.yaw / cmd.pitch 一致；pitch 不预先取负。
+    const bool rates_valid = cmd.vel_valid && cmd.distance >= 0.0 && std::isfinite(cmd.yaw_vel)
+                          && std::isfinite(cmd.pitch_vel);
+
+    // 调用共享内存接口发送云台指令（角速度写入协议保留字节）
+    client_->send_gimbal_cmd(yaw_deg, pitch_deg, distance_m, cmd.fire,
+                             static_cast<float>(cmd.yaw_vel),
+                             static_cast<float>(cmd.pitch_vel), rates_valid);
 }
 
 /**

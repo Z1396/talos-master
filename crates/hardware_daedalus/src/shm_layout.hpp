@@ -85,9 +85,17 @@ struct alignas(32) GimbalCmd {
     float pitch_deg;     // 目标云台俯仰角 度
     float distance_m;    // 目标直线距离，-1代表无有效目标
     uint8_t fire_advice; // 1=允许开火，0=禁止开火
+    // 原保留字节，现用于云台角速度前馈（向后兼容扩展，总大小不变）：
+    // _pad[0..4)  f32 yaw_rate   偏航角速度 rad/s
+    // _pad[4..8)  f32 pitch_rate 俯仰角速度 rad/s
+    // _pad[8]     u8  flags      bit0=1 表示上面两个角速度有效
+    // _pad[9..11) 保留，必须为0
     uint8_t _pad[11];    // 填充补齐32字节
 };
-static_assert(sizeof(GimbalCmd) == 32, "GimbalCmd must be 32 bytes");
+static_assert(sizeof(GimbalCmd) == 32, "GimbalCmd must stay 32 bytes");
+static_assert(offsetof(GimbalCmd, yaw_deg) == 8, "GimbalCmd layout drift: yaw_deg");
+static_assert(offsetof(GimbalCmd, fire_advice) == 20, "GimbalCmd layout drift: fire_advice");
+static_assert(offsetof(GimbalCmd, _pad) == 21, "GimbalCmd layout drift: _pad");
 
 /**
  * @brief 相机内参与畸变系数

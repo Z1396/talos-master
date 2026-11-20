@@ -441,6 +441,8 @@ TEST_F(ShmIpcTest, GimbalCommandDownlinkRoundTrip) {
     EXPECT_FLOAT_EQ((*slot)->distance_m, 3.5f);
     EXPECT_EQ((*slot)->fire_advice, 1u);
     EXPECT_GT((*slot)->timestamp_ns, 0u); // 时间戳已填充
+    // 未传前馈时保留字节必须清零、flags=0（旧行为）
+    EXPECT_EQ((*slot)->_pad[8], 0u);
 
     // 消费一次后指令不残留
     EXPECT_FALSE(ops.borrow().has_value());
@@ -451,6 +453,20 @@ TEST_F(ShmIpcTest, GimbalCommandDownlinkRoundTrip) {
     ASSERT_TRUE(slot2.has_value());
     EXPECT_FLOAT_EQ((*slot2)->distance_m, -1.0f);
     EXPECT_EQ((*slot2)->fire_advice, 0u);
+
+    // 角速度前馈扩展：_pad[0..4)=yaw_rate、_pad[4..8)=pitch_rate、_pad[8]=flags
+    consumer->send_gimbal_cmd(10.0f, -5.0f, 2.7f, true, 0.31f, -0.02f, true);
+    const auto slot3 = ops.borrow();
+    ASSERT_TRUE(slot3.has_value());
+    float yaw_rate   = 0.0f;
+    float pitch_rate = 0.0f;
+    std::memcpy(&yaw_rate, &(*slot3)->_pad[0], sizeof(float));
+    std::memcpy(&pitch_rate, &(*slot3)->_pad[4], sizeof(float));
+    EXPECT_FLOAT_EQ(yaw_rate, 0.31f);
+    EXPECT_FLOAT_EQ(pitch_rate, -0.02f);
+    EXPECT_EQ((*slot3)->_pad[8], 0x01u);
+    EXPECT_EQ((*slot3)->_pad[9], 0u);
+    EXPECT_EQ((*slot3)->_pad[10], 0u);
 }
 
 /// 正常流程：相机内参发布/读取（单变量直通通道）

@@ -263,6 +263,24 @@ struct DaedalusImu {
         // if (auto val = opt) C++17结构化if初始化，只有有值才进入分支
         // ==============================================
         if (const auto pose = ipc_device->recv_pose(ipc::POSE_GIMBAL)) {
+            // 诊断：gimbal 位姿年龄与相邻两帧发布间隔。
+            // age_ms 明显为正 → 位姿内容/发布节拍滞后；为负或极大 → 时钟域不一致。
+            static uint64_t pose_diag_count = 0;
+            static uint64_t pose_last_stamp = 0;
+            const uint64_t pose_now_ns      = fcs::clock::now_ns();
+            const double pose_age_ms =
+                static_cast<double>(static_cast<int64_t>(pose_now_ns)
+                                    - static_cast<int64_t>(pose->timestamp_ns)) * 1e-6;
+            const double pose_dt_ms =
+                pose_last_stamp == 0
+                    ? -1.0
+                    : static_cast<double>(static_cast<int64_t>(pose->timestamp_ns)
+                                          - static_cast<int64_t>(pose_last_stamp)) * 1e-6;
+            pose_last_stamp = pose->timestamp_ns;
+            if (++pose_diag_count % 50 == 0) {
+                SPDLOG_INFO("gimbal_pose_diag age_ms={:.1f} dt_ms={:.1f} seq={}", pose_age_ms,
+                            pose_dt_ms, pose->frame_seq);
+            }
             // pose->qw/qx/qy/qz：仿真输出四元数，构造Eigen四元数对象
             const Eigen::Quaterniond q(pose->qw, pose->qx, pose->qy, pose->qz);
             // 四元数转RPY欧拉角

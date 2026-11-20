@@ -28,6 +28,7 @@
 
 #include <cstdint>
 #include <expected>
+#include <limits>
 #include <fmt/format.h>
 
 namespace fcs::L4 {
@@ -118,10 +119,14 @@ struct TransformLookupResult {
 [[nodiscard]] inline std::expected<
     fast_tf::TransformMatrixd<fast_tf::odom, fast_tf::gimbal_pitch>, std::string>
     lookup_gimbal_transform(
-        const fast_tf::CoordinateSystem& tf_buffer, uint64_t current_ns) noexcept {
+        const fast_tf::CoordinateSystem& tf_buffer, [[maybe_unused]] uint64_t current_ns) noexcept {
     using namespace fast_tf;
 
-    auto gimbal_tf = lookup_clamped<odom, gimbal_pitch>(tf_buffer, current_ns);
+    // 开火门需要“云台当前实际指向”，这里直接取最新样本：
+    // 实测量到的位姿时间戳与本地时钟存在固定偏差，按 current_ns 查询会被
+    // lookup_clamped 夹到旧样本，表现为 0.2s 的假滞后。
+    auto gimbal_tf = lookup_clamped<odom, gimbal_pitch>(
+        tf_buffer, std::numeric_limits<uint64_t>::max());
     if (!gimbal_tf) {
         return std::unexpected(gimbal_tf.error());
     }

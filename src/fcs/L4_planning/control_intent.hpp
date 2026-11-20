@@ -28,6 +28,8 @@
 
 #include "core/trajectory/reference_trajectory.hpp"
 
+#include <Eigen/Core>
+
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -71,6 +73,15 @@ struct TrackCommand {
     uint64_t timestamp_ns{0};                       ///< 时间戳（纳秒）
     core::trajectory::ReferenceTrajectory control_trajectory; ///< 控制轨迹（用于MPC）
     core::trajectory::ReferenceTrajectory fire_trajectory;     ///< 射击轨迹（用于火力门控）
+
+    /// 目标在 odom 系下的速度估计（L3 EKF 输出，米/秒），仅用于 L5 诊断日志
+    Eigen::Vector3d target_velocity{0.0, 0.0, 0.0};
+    /// 本次解算使用的总预测时长（秒）= 目标年龄 + 传输延迟 + 子弹飞行时间
+    double prediction_horizon_s{0.0};
+    /// 最新观测到的目标装甲相对枪口的方位角（odom系），仅用于开火门诊断
+    double target_bearing_yaw{0.0};
+    /// target_bearing_yaw 是否有效
+    bool has_target_bearing{false};
 };
 
 /**

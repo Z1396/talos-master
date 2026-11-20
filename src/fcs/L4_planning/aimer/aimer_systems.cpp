@@ -965,6 +965,29 @@ auto write_hold_outputs(
     // 降级原因字符串（可选）
     std::optional<std::string> degradation;
 
+    // 本次解算的总预测时长（秒）：预测到达时刻 - 输出时间戳，异常时为 0
+    const double prediction_horizon_s =
+        pred.predicted_future_ns > pred.timestamp_ns
+            ? static_cast<double>(pred.predicted_future_ns - pred.timestamp_ns) * 1e-9
+            : 0.0;
+
+    // 诊断用：最新观测装甲相对枪口的方位角（odom系）。
+    // 与 L5 的 gimbal_yaw / ref_yaw 对比，可区分“参考提前量过大”还是“云台跟随滞后”。
+    double target_bearing_yaw = 0.0;
+    bool has_target_bearing   = false;
+    if (seed.has_value()) {
+        if (const auto* robot = seed->robot_state()) {
+            const auto poses       = robot->armor_poses();
+            const int armors_num   = std::max(1, robot->armors_num);
+            const int armor_id     = std::clamp(seed->selected_armor_id, 0, armors_num - 1);
+            const auto& armor_pose = poses[static_cast<size_t>(armor_id)];
+            const Eigen::Vector3d muzzle_pos = ctx.muzzle.translation();
+            target_bearing_yaw =
+                std::atan2(armor_pose.y() - muzzle_pos.y(), armor_pose.x() - muzzle_pos.x());
+            has_target_bearing = true;
+        }
+    }
+
     // 装甲目标：构建车辆运动参考轨迹实现平滑跟随
     if (seed.has_value()) {
         // 构建控制参考轨迹
@@ -988,6 +1011,13 @@ auto write_hold_outputs(
                 // 开火轨迹：成功则使用，失败则使用空轨迹
                 .fire_trajectory =
                     fire_traj ? std::move(*fire_traj) : core::trajectory::ReferenceTrajectory{},
+                // 目标速度估计（仅用于 L5 诊断日志）
+                .target_velocity      = pred.target_velocity,
+                // 本次解算总预测时长
+                .prediction_horizon_s = prediction_horizon_s,
+                // 诊断：当前装甲方位角
+                .target_bearing_yaw   = target_bearing_yaw,
+                .has_target_bearing   = has_target_bearing,
             };
         }
         // 控制轨迹构建失败，记录降级原因
@@ -1010,6 +1040,13 @@ auto write_hold_outputs(
                 .control_trajectory = std::move(*control_traj),
                 // 开火轨迹
                 .fire_trajectory    = std::move(fire_traj),
+                // 目标速度估计（仅用于 L5 诊断日志）
+                .target_velocity      = pred.target_velocity,
+                // 本次解算总预测时长
+                .prediction_horizon_s = prediction_horizon_s,
+                // 诊断：当前装甲方位角
+                .target_bearing_yaw   = target_bearing_yaw,
+                .has_target_bearing   = has_target_bearing,
             };
         }
         // LDM轨迹构建失败，记录降级原因

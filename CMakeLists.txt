@@ -523,6 +523,13 @@ PRIVATE
         lieplusplus
 )
 
+if(OpenVINO_FOUND)
+    target_compile_definitions(fcs PUBLIC TALOS_HAS_OPENVINO=1)
+    target_link_libraries(fcs PUBLIC openvino::runtime)
+    set_property(TARGET fcs APPEND PROPERTY BUILD_RPATH
+            "/opt/intel/openvino_2024.6.0/runtime/lib/intel64")
+endif()
+
 # 预编译头文件，大幅缩短编译耗时
 target_precompile_headers(fcs PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/fcs/pch.hpp)
 
@@ -617,6 +624,11 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         fmt::fmt
         "$<$<PLATFORM_ID:Darwin>:-mmacosx-version-min=15.5>"
 )
+
+if(OpenVINO_FOUND)
+    set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY BUILD_RPATH
+            "/opt/intel/openvino_2024.6.0/runtime/lib/intel64")
+endif()
 
 # 调试沙盒 playground
 add_executable(talos-playground src/playground.cpp)
