@@ -278,8 +278,9 @@ struct DaedalusImu {
                                           - static_cast<int64_t>(pose_last_stamp)) * 1e-6;
             pose_last_stamp = pose->timestamp_ns;
             if (++pose_diag_count % 50 == 0) {
-                SPDLOG_INFO("gimbal_pose_diag age_ms={:.1f} dt_ms={:.1f} seq={}", pose_age_ms,
-                            pose_dt_ms, pose->frame_seq);
+                SPDLOG_INFO(
+                    "gimbal_pose_diag rx_age_ms={:.1f} dt_ms={:.1f} seq={} rx_count={}",
+                    pose_age_ms, pose_dt_ms, pose->frame_seq, pose_diag_count);
             }
             // pose->qw/qx/qy/qz：仿真输出四元数，构造Eigen四元数对象
             const Eigen::Quaterniond q(pose->qw, pose->qx, pose->qy, pose->qz);
@@ -842,14 +843,26 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                 talos::res<std::unique_ptr<fcs::L1::OutputInterface>> output,
                 // spmc只读消费端：读取L5下发的WeaponCommand发射指令
                 talos::spmc<fcs::L5::WeaponCommand, fcs::WeaponCommandChannelTopic> cmd_in) {
+                // 诊断计数：runs=定时器 tick，sent=真正写进 IPC 的指令数
+                static uint64_t runs = 0;
+                static uint64_t sent = 0;
+                ++runs;
+
                 // 从SPMC通道读取最新发射指令（三缓冲快照读）
                 auto cmd = cmd_in.read();
                 // 无新指令直接返回
                 if (!cmd) [[unlikely]] {
+                    if (runs % 250 == 0) {
+                        SPDLOG_INFO("weapon_output runs={} sent={}", runs, sent);
+                    }
                     return;
                 }
                 // 调用底层接口，下发发射指令到MCU/仿真IPC
                 (*output)->send(*cmd);
+                ++sent;
+                if (runs % 250 == 0) {
+                    SPDLOG_INFO("weapon_output runs={} sent={}", runs, sent);
+                }
             });
     }
 

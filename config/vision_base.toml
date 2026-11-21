@@ -4,7 +4,7 @@
 # OnnxRuntime：通用CPU/GPU ONNX推理，跨平台通用
 # TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
 # Axera：爱芯AX650嵌入式NPU专用模型推理
-backend_type = "OnnxRuntime"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
+backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
 detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
 capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、Rune大符、Ldm小符、Quanta  (Foxglove高速视频流可视化推流)
 

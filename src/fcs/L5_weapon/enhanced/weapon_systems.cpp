@@ -338,6 +338,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                                     "fire_gate fire={} yaw_err_deg={:.3f} range_yaw_deg={:.3f} "
                                     "pitch_err_deg={:.3f} range_pitch_deg={:.3f} speed={:.2f} "
                                     "horizon={:.3f} gimbal_yaw_deg={:.3f} gimbal_pitch_deg={:.3f} "
+                                    "sent_yaw_deg={:.3f} sent_pitch_deg={:.3f} "
                                     "plan_yaw_deg={:.3f} plan_pitch_deg={:.3f} "
                                     "ref_yaw_deg={:.3f} ref_pitch_deg={:.3f} "
                                     "target_yaw_deg={:.3f} has_target={}",
@@ -347,6 +348,7 @@ void register_enhanced_weapon_system(talos::Scheduler& scheduler, L5Config&& con
                                     wc.shooting_range_pitch * kRadToDeg,
                                     cmd.target_velocity.head<2>().norm(),
                                     cmd.prediction_horizon_s, y * kRadToDeg, -p * kRadToDeg,
+                                    wc.yaw * kRadToDeg, -wc.pitch * kRadToDeg,
                                     wc.plan_yaw * kRadToDeg, wc.plan_pitch * kRadToDeg,
                                     wc.ref_yaw * kRadToDeg, wc.ref_pitch * kRadToDeg,
                                     cmd.target_bearing_yaw * kRadToDeg,

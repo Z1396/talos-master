@@ -358,9 +358,12 @@ public:
         // borrow_mut 获取可修改的写入槽位
         auto& cmd = ops.borrow_mut();
 
-        // 填充当前纳秒时间戳
-        cmd.timestamp_ns =
-            static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count());
+        // 填充当前 Unix 纳秒时间戳（仿真端按量级自动识别 s/ms/us/ns）
+        // 不要用 steady_clock：它的起点是本机开机时间，仿真端会当成几十年前的 Unix 时间
+        cmd.timestamp_ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count());
         cmd.yaw_deg     = yaw_deg;
         cmd.pitch_deg   = pitch_deg;
         cmd.distance_m  = distance_m;

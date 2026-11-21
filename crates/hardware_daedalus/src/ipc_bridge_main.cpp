@@ -39,6 +39,8 @@
 #include <cstdlib>
 // printf 打印状态
 #include <cstdio>
+// atan2/π：位姿 yaw 诊断
+#include <cmath>
 // memcpy/memset
 #include <cstring>
 // 互斥锁：保护仿真回传地址（UDP收包线程写、云台回传线程读）
@@ -175,6 +177,38 @@ void udp_recv_loop(ShmClient& client, int udp_fd, FrameSynchronizer& frame_sync)
             - `n`：要复制的字节数
             */
             std::memcpy(&pm, payload, sizeof(pm));
+
+            // 诊断：每路位姿每 200 包打印一次“仿真时间戳 → 本机接收”的年龄和 yaw，
+            // 用来区分“仿真时钟差/传输延迟”和“读到了旧帧”。
+            static uint64_t pose_rx_count[5] = {};
+            const uint64_t rx_ns            = bridge_now_ns();
+            const double src_age_ms =
+                static_cast<double>(static_cast<int64_t>(rx_ns)
+                                    - static_cast<int64_t>(pm.timestamp_ns))
+                * 1e-6;
+            if (pm.quaternion[0] != 0.0F || pm.quaternion[1] != 0.0F
+                || pm.quaternion[2] != 0.0F || pm.quaternion[3] != 0.0F) {
+                const double w = pm.quaternion[0];
+                const double x = pm.quaternion[1];
+                const double y = pm.quaternion[2];
+                const double z = pm.quaternion[3];
+                const double yaw_deg =
+                    std::atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+                    * (180.0 / 3.14159265358979323846);
+                if (++pose_rx_count[header.index] % 200 == 1) {
+                    std::printf(
+                        "[bridge] pose idx=%u seq=%llu src_age=%.2fms yaw=%.3fdeg\n",
+                        static_cast<unsigned>(header.index),
+                        static_cast<unsigned long long>(pm.frame_seq), src_age_ms, yaw_deg);
+                }
+            }
+
+            // 云台位姿必须立即发布：图像 TCP 有积压时，image-synced 的 gimbal 会是旧数据，
+            // 控制/开火门会拿 1 秒前的云台角去比当前指令。
+            if (header.index == static_cast<uint8_t>(PoseIndex::POSE_GIMBAL)) {
+                client.publish_pose(PoseIndex::POSE_GIMBAL, to_shm_pose(pm, rx_ns));
+            }
+
             // 0-3 是 TF 四路，4 是底盘观测兼容通道
             // 其他通道（如相机/枪口）直接发布，不参与四路配对
             if (header.index < FrameSynchronizer::kPoseCount) {
@@ -384,9 +418,24 @@ void tcp_image_loop(ShmClient& client, uint16_t image_port, FrameSynchronizer& f
             // 图像元数据是消费者可见的提交标记，因此 Talos 读到图像时配套 TF 已就绪。
             const uint64_t timestamp_ns = bridge_now_ns();
             for (size_t i = 0; i < FrameSynchronizer::kPoseCount; ++i) {
+                // 云台位姿已在 UDP 收包时立即发布，禁止用图片配对时的旧 gimbal 覆盖
+                if (i == static_cast<size_t>(PoseIndex::POSE_GIMBAL)) {
+                    continue;
+                }
                 client.publish_pose(static_cast<PoseIndex>(i), to_shm_pose((*poses)[i], timestamp_ns));
             }
             client.publish_image(mat, fh.seq, timestamp_ns);
+
+            // 图像端到端年龄：仿真发送时间 → 桥接收。6.2MB×160Hz 的 TCP 很容易积压到这里。
+            if (frame_count % 30 == 0) {
+                const double image_age_ms =
+                    static_cast<double>(static_cast<int64_t>(timestamp_ns)
+                                        - static_cast<int64_t>(fh.timestamp_ns))
+                    * 1e-6;
+                std::printf(
+                    "[bridge] image seq=%llu age=%.1fms\n",
+                    static_cast<unsigned long long>(fh.seq), image_age_ms);
+            }
             // 帧计数器增加
             ++frame_count;
             // 7. 打印统计信息
