@@ -4,8 +4,8 @@
 # OnnxRuntime：通用CPU/GPU ONNX推理，跨平台通用
 # TensorRT：NVIDIA GPU加速推理（Jetson Orin/Xavier/台式RTX）
 # Axera：爱芯AX650嵌入式NPU专用模型推理
-backend_type = "Traditional"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
-detect_color = "Blue"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
+backend_type = "OnnxRuntime"  # Options: "Traditional", "OnnxRuntime", "TensorRT", "Axera"
+detect_color = "Red"          # 敌方装甲颜色：Red / Blue，二值化阈值自动匹配红蓝通道
 capabilities = ["Armor"]       # 当前启用识别任务：Armor装甲板、Rune大符、Ldm小符、Quanta  (Foxglove高速视频流可视化推流)
 
 # ====================== [quanta_filter] 图像预处理流水线 ======================
@@ -161,7 +161,7 @@ top_k = 128
 # ====================== [readback_roi] 局部裁剪ROI参数 ======================
 # 跟踪阶段只裁剪目标附近画面推理，大幅降低算力
 [readback_roi]  # ◈ 表09·ROI局部推理（跟踪稳定后裁小图省算力）
-enabled = true                       # ROI局部推理总开关（跟踪稳定后只裁目标附近）
+enabled = false                       # ROI局部推理总开关（跟踪稳定后只裁目标附近）
 stale_timeout_s = 0.20               # 目标丢失超时，超时切回全图检测
 margin_ratio_x = 0.20                # ROI框左右扩张比例
 margin_ratio_y = 0.00                # ROI框上下扩张比例

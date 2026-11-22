@@ -85,6 +85,20 @@ struct RobotTargetState {
 
     FilterConvergenceState convergence{}; // 滤波收敛状态
 
+    // 机动自适应 Q 诊断（仅调试用，业务逻辑不使用）
+    double maneuver_q_boost{1.0};     // 当前 Q 放大倍数，1 表示未触发
+    double maneuver_nis{0.0};         // 最近一次更新的归一化新息平方
+    uint64_t maneuver_boost_count{0}; // 累计触发次数
+    uint32_t maneuver_trigger_reason{0}; // 最近触发原因：0无,1新息异常(NIS/方位角),2平移跳变,3角速度跳变,4平移过零,5角速度过零
+    std::array<uint64_t, 6> maneuver_trigger_counts{}; // 各触发原因累计计数
+
+    // EKF 新息诊断（预测观测 - 实测观测，仅调试用）
+    // 正值表示预测值大于实测值；角量单位为弧度
+    double maneuver_innov_bearing{0.0};   // 装甲方位角新息（弧度）
+    double maneuver_innov_pitch{0.0};     // 俯仰角新息（弧度）
+    double maneuver_innov_logdist{0.0};   // log距离新息（无量纲，约等于相对距离误差）
+    double maneuver_innov_armor_yaw{0.0}; // 装甲朝向新息（弧度）
+
     /**
      * @brief 计算4块装甲板各自位姿
      * @return 数组：每个元素 [x, y, z, yaw] 坐标+偏航角

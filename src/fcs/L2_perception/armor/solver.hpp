@@ -969,8 +969,8 @@ private:
      * @brief 预构建大小装甲三维模型坐标（单位米，装甲局部坐标系）
      */
     void build_model_points() {
-        constexpr double SMALL_ARMOR_WIDTH  = 135.0 / 1000.0;
-        constexpr double SMALL_ARMOR_HEIGHT = 55.0 / 1000.0;
+        constexpr double SMALL_ARMOR_WIDTH  = 132.0 / 1000.0;
+        constexpr double SMALL_ARMOR_HEIGHT = 52.0 / 1000.0;
         constexpr double LARGE_ARMOR_WIDTH  = 230.0 / 1000.0;
         constexpr double LARGE_ARMOR_HEIGHT = 55.0 / 1000.0;
 

@@ -77,6 +77,27 @@ struct RobotEkfMotionModel
         Scalar sigma_r1    = 1.0;  // log(R1) 漂移噪声（1、3号高地装甲半径）
         Scalar sigma_h     = 0.5;  // 装甲高度偏移H漂移噪声
 
+        // ========== 机动自适应过程噪声（默认关闭）==========
+        // 正常跟踪用基础 sigma_a_xy，检测到新息异常时才临时放大 Q，
+        // 避免全局放大 Q 导致匀速段抖动。
+        Scalar maneuver_adaptive_q_enabled = 0.0; // 0=关闭，1=开启
+        Scalar maneuver_nis_threshold      = 9.0; // NIS 触发阈值（卡方 4 自由度 99% 约 13.3）
+        Scalar maneuver_q_boost            = 2.0; // 每次触发放大倍数
+        Scalar maneuver_q_boost_max        = 8.0; // Q 最大放大倍数
+        Scalar maneuver_q_decay            = 0.9; // 未触发时每帧衰减系数
+        Scalar maneuver_dv_xy_threshold    = 0.30; // 单帧速度跳变阈值（m/s），超过视为机动
+        Scalar maneuver_dv_yaw_threshold   = 1.00; // 单帧角速度跳变阈值（rad/s），0.4 会被 v_yaw 噪声顶破
+        // 过零判据：过零帧只判符号翻转，幅值门限用回看窗口内的峰值速度，
+        // 这样平滑减速过零（真实反向）能触发，零附近抖动（噪声）被挡住。
+        Scalar maneuver_zero_cross_min_speed = 0.15; // 窗口内平移速度峰值门限（m/s）
+        Scalar maneuver_zero_cross_min_yaw   = 0.80; // 窗口内角速度峰值门限（rad/s）
+        Scalar maneuver_zero_cross_window    = 16;   // 回看帧数（31Hz 下约 0.5 秒）
+        Scalar maneuver_innov_bearing_threshold = 0.020; // 方位角新息阈值（rad，约1.15°），超限说明预测已被甩开
+        // 触发瞬间直接放大速度协方差，比等 Q 把协方差撑大更快：下一帧增益就接近1
+        Scalar maneuver_velocity_cov_boost    = 6.0;  // 速度方差放大倍数
+        Scalar maneuver_inflate_cooldown      = 8;    // 两次协方差放大之间的最小间隔（帧）
+
+
         // ========== 观测噪声基底（方差）==========
         Scalar meas_yaw_var_floor   = 4e-3;    // 观测水平角度最小方差下限
         Scalar meas_pitch_var_floor = 4e-3;    // 观测俯仰角最小方差下限

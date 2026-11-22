@@ -239,6 +239,20 @@ auto load_robot_extrinsic_config(std::string_view robot)
     if (!vision_config) {
         return std::unexpected(fmt::format("vision config: {}", vision_config.error()));
     }
+    // 启动自检：确认自适应 Q 的新配置项真的被解析进来了
+    fmt::print(
+        "[config] tracker.robot.model sigma_xy={} adaptive_q={} nis_thr={} boost={} max={} decay={}\n"
+        "[config] maneuver triggers dv_yaw_thr={} zero_min_speed={} zero_min_yaw={} zero_win={}\n",
+        vision_config->l3->tracker.robot.model.sigma_a_xy,
+        vision_config->l3->tracker.robot.model.maneuver_adaptive_q_enabled,
+        vision_config->l3->tracker.robot.model.maneuver_nis_threshold,
+        vision_config->l3->tracker.robot.model.maneuver_q_boost,
+        vision_config->l3->tracker.robot.model.maneuver_q_boost_max,
+        vision_config->l3->tracker.robot.model.maneuver_q_decay,
+        vision_config->l3->tracker.robot.model.maneuver_dv_yaw_threshold,
+        vision_config->l3->tracker.robot.model.maneuver_zero_cross_min_speed,
+        vision_config->l3->tracker.robot.model.maneuver_zero_cross_min_yaw,
+        vision_config->l3->tracker.robot.model.maneuver_zero_cross_window);
 
     // ========== 5. 根据后端类型 backend 分支加载硬件/外参 ==========
     // 硬件后端总配置（多态容器，统一包装不同后端）

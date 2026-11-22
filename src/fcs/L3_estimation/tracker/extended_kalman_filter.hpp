@@ -81,6 +81,7 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <initializer_list>
 #include <limits>
 // Eigen
 #include <Eigen/Dense>
@@ -232,6 +233,26 @@ public:
     void setConvergenceCriteria(ConvergenceCriteria criteria) noexcept {
         convergence_criteria_ = criteria;
         resetConvergenceStatus();
+    }
+
+    /**
+     * @brief 直接放大后验协方差对角元素
+     *
+     * @details
+     * 用于机动检测后主动"放松"对应状态的置信度：P 变大后下一帧的卡尔曼增益
+     * 随之变大，滤波器会更信任新观测，从而快速跟上目标的运动突变。
+     * 只放大对角元素，保持矩阵对称正定。
+     *
+     * @param indices 需要放大的状态下标列表
+     * @param factor 放大倍数（<=1 时不处理）
+     */
+    void inflate_covariance_diag(std::initializer_list<int> indices, double factor) noexcept {
+        if (!(factor > 1.0)) {
+            return;
+        }
+        for (int i : indices) {
+            P_post(i, i) *= factor;
+        }
     }
 
     /// @brief 重置收敛状态（用于重新初始化）

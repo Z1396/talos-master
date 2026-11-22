@@ -159,6 +159,18 @@ public:
         // 过程噪声协方差Q的生成回调函数
         auto q = [this]() -> MatXX {
             auto Q = model_.Q(dt_); // 调用运动模型获取基础过程噪声矩阵
+            // 机动自适应：只在检测到新息异常后临时放大 Q，正常段保持基础噪声
+            if constexpr (requires { model_.params.maneuver_adaptive_q_enabled; }) {
+                if (model_.params.maneuver_adaptive_q_enabled > 0.5 && q_boost_ > 1.0) {
+                    // 只放大平面运动与偏航相关的状态块，尺寸/高度估计不跟着抖
+                    constexpr int kMotionIdx[] = {XC, VX, YC, VY, YAW, V_YAW};
+                    for (int i : kMotionIdx) {
+                        for (int j : kMotionIdx) {
+                            Q(i, j) *= q_boost_;
+                        }
+                    }
+                }
+            }
             // if constexpr：编译期分支，只有模型开启对数半径才编译下面代码，运行时无开销
             if constexpr (Model::kHasLogRadii) {
                 // log(r) 变量的协方差变换：Var(log r) = Var(r) / r²
@@ -183,6 +195,22 @@ public:
         ekf_.setState(x0); // 设置滤波器初始状态
         x_      = x0;      // 缓存一份当前状态副本
         active_ = true;    // 标记该目标滤波器激活，可以执行预测更新
+        q_boost_     = 1.0;
+        last_nis_    = 0.0;
+        boost_count_ = 0;
+        last_trigger_reason_ = 0;
+        trigger_counts_.fill(0);
+        last_innovation_.setZero();
+        prev_vx_     = x0[VX];
+        prev_vy_     = x0[VY];
+        prev_vyaw_   = x0[V_YAW];
+        inflate_cooldown_ = 0;
+        vx_hist_.fill(0.0);
+        vy_hist_.fill(0.0);
+        vyaw_hist_.fill(0.0);
+        hist_idx_      = 0;
+        xy_flip_armed_ = true;
+        yaw_flip_armed_ = true;
     }
 
     /**
@@ -216,6 +244,7 @@ public:
         armor_id_ = Model::clamp_armor_id(armor_id); // 限制装甲id合法范围，防止越界
         x_        = ekf_.update(z);                  // EKF观测更新，返回更新后状态
         update_R_override_.reset();                 // 清除外部R覆盖标记
+        update_maneuver_boost();                    // 依据新息更新下一帧的 Q 放大系数
 
         // 编译期判断：如果模型使用对数半径，执行解相关操作，把P矩阵LOG_R0与LOG_R1之间互相关项强制置0
         if constexpr (Model::kHasLogRadii) {
@@ -240,6 +269,7 @@ public:
         armor_id_          = Model::clamp_armor_id(armor_id);
         x_                 = ekf_.update(z);
         update_R_override_.reset();   // 使用完立刻清空，下一次update恢复模型自带R
+        update_maneuver_boost();      // 依据新息更新下一帧的 Q 放大系数
 
         if constexpr (Model::kHasLogRadii) {
             ekf_.decorrelate(LOG_R0, LOG_R1);
@@ -291,6 +321,31 @@ public:
         return state;
     }
 
+    /// 机动自适应 Q 当前放大倍数（1 表示未触发）
+    [[nodiscard]] double q_boost() const noexcept { return q_boost_; }
+
+    /// 最近一次更新的归一化新息平方
+    [[nodiscard]] double last_nis() const noexcept { return last_nis_; }
+
+    /// 累计触发次数（调试用）
+    [[nodiscard]] uint64_t boost_count() const noexcept { return boost_count_; }
+
+    /// 最近一次触发原因：0=无,1=新息异常(NIS/方位角),2=平移速度跳变,3=角速度跳变,4=平移过零,5=角速度过零
+    [[nodiscard]] uint32_t last_trigger_reason() const noexcept {
+        return last_trigger_reason_;
+    }
+
+    /// 各触发原因累计计数（下标同 last_trigger_reason）
+    [[nodiscard]] const std::array<uint64_t, 6>& trigger_counts() const noexcept {
+        return trigger_counts_;
+    }
+
+    /// 最近一次EKF更新的新息（预测观测 - 实测观测），诊断预测滞后用
+    [[nodiscard]] const VecZ& last_innovation() const noexcept { return last_innovation_; }
+
+    /// 由外层数据关联阶段写入本次EKF新息
+    void set_last_innovation(const VecZ& nu) noexcept { last_innovation_ = nu; }
+
     /**
      * @brief 不安全直接覆盖滤波器状态；外部强行重置状态，不修改协方差P
      * @note unsafe：业务要自己保证x合法，不会做边界校验
@@ -304,9 +359,138 @@ public:
     [[nodiscard]] Model& model() noexcept { return model_; }
 
 private:
+    /// 依据最近一次更新的 NIS 更新下一帧的 Q 放大系数
+    void update_maneuver_boost() noexcept {
+        if constexpr (requires { model_.params.maneuver_adaptive_q_enabled; }) {
+            if (!(model_.params.maneuver_adaptive_q_enabled > 0.5)) {
+                q_boost_ = 1.0;
+                return;
+            }
+            last_nis_ = ekf_.normalized_innovation_squared();
+            const double dv_xy  = std::hypot(x_[VX] - prev_vx_, x_[VY] - prev_vy_);
+            const double dv_yaw = std::abs(x_[V_YAW] - prev_vyaw_);
+            // 维护最近若干帧的速度分量历史：方向翻转用"当前速度 vs 窗口起点速度"比较。
+            // 相邻两帧点积只能发现瞬间翻转；平滑减速反向时速度向量是连续旋转的，
+            // 相邻帧夹角一直小于 90°、点积始终为正，跨窗口比较才能在越过反向点后变号。
+            const std::size_t cur = hist_idx_;
+            vx_hist_[cur]         = x_[VX];
+            vy_hist_[cur]         = x_[VY];
+            vyaw_hist_[cur]       = x_[V_YAW];
+            const std::size_t window = static_cast<std::size_t>(std::clamp(
+                static_cast<int>(model_.params.maneuver_zero_cross_window), 1,
+                static_cast<int>(kManeuverHistory)));
+            double max_speed_win = 0.0;
+            double max_yaw_win   = 0.0;
+            std::size_t oldest   = cur;
+            for (std::size_t k = 0; k < window; ++k) {
+                const std::size_t i = (cur + kManeuverHistory - k) % kManeuverHistory;
+                max_speed_win = std::max(max_speed_win, std::hypot(vx_hist_[i], vy_hist_[i]));
+                max_yaw_win   = std::max(max_yaw_win, std::abs(vyaw_hist_[i]));
+                oldest        = i;
+            }
+            hist_idx_ = (cur + 1) % kManeuverHistory;
+
+            const double xy_dot  = x_[VX] * vx_hist_[oldest] + x_[VY] * vy_hist_[oldest];
+            const double yaw_dot = x_[V_YAW] * vyaw_hist_[oldest];
+
+            // 角度超过 90°（点积为负）判为反向；armed 迟滞保证一次反向只计一次，
+            // 等窗口完全越过反向点、点积恢复为正后重新武装。
+            bool xy_zero_cross = false;
+            if (xy_dot < 0.0 && xy_flip_armed_
+                && max_speed_win > std::max(0.0, model_.params.maneuver_zero_cross_min_speed)) {
+                xy_zero_cross  = true;
+                xy_flip_armed_ = false;
+            } else if (xy_dot > 0.0) {
+                xy_flip_armed_ = true;
+            }
+            bool yaw_zero_cross = false;
+            if (yaw_dot < 0.0 && yaw_flip_armed_
+                && max_yaw_win > std::max(0.0, model_.params.maneuver_zero_cross_min_yaw)) {
+                yaw_zero_cross  = true;
+                yaw_flip_armed_ = false;
+            } else if (yaw_dot > 0.0) {
+                yaw_flip_armed_ = true;
+            }
+            // 新息异常：NIS 或方位角新息超限，说明预测已经被目标甩开
+            // （换向/减速阶段先出现新息偏大，之后才出现速度符号翻转）
+            const bool nis_trigger =
+                last_nis_ > std::max(1.0, model_.params.maneuver_nis_threshold);
+            const bool innov_trigger =
+                std::abs(last_innovation_[ARMOR_YAW])
+                > std::max(0.0, model_.params.maneuver_innov_bearing_threshold);
+            const bool yaw_maneuver =
+                dv_yaw > std::max(0.0, model_.params.maneuver_dv_yaw_threshold) || yaw_zero_cross;
+            const bool maneuver =
+                nis_trigger || innov_trigger
+                || dv_xy > std::max(0.0, model_.params.maneuver_dv_xy_threshold)
+                || yaw_maneuver || xy_zero_cross;
+            uint32_t reason = 0;
+            if (nis_trigger || innov_trigger) {
+                reason = 1; // 新息异常（NIS / 方位角新息）
+            } else if (dv_xy > std::max(0.0, model_.params.maneuver_dv_xy_threshold)) {
+                reason = 2; // 平移速度跳变
+            } else if (dv_yaw > std::max(0.0, model_.params.maneuver_dv_yaw_threshold)) {
+                reason = 3; // 角速度跳变
+            } else if (xy_zero_cross) {
+                reason = 4; // 平移速度过零
+            } else if (yaw_zero_cross) {
+                reason = 5; // 角速度过零
+            }
+            last_trigger_reason_ = reason;
+            if (maneuver) {
+                const double gain = std::max(1.0, model_.params.maneuver_q_boost);
+                const double cap  = std::max(1.0, model_.params.maneuver_q_boost_max);
+                q_boost_          = std::min(cap, q_boost_ * gain);
+                ++boost_count_;
+                if (reason < trigger_counts_.size()) {
+                    ++trigger_counts_[reason];
+                }
+                // 触发瞬间直接放大速度协方差：下一帧卡尔曼增益接近1，
+                // 速度估计一帧就能跟上真实反向，不用等 Q 逐帧把协方差撑大
+                if (inflate_cooldown_ == 0) {
+                    const double cov_boost =
+                        std::max(1.0, static_cast<double>(model_.params.maneuver_velocity_cov_boost));
+                    ekf_.inflate_covariance_diag({VX, VY}, cov_boost);
+                    if (yaw_maneuver) {
+                        ekf_.inflate_covariance_diag({V_YAW}, cov_boost);
+                    }
+                    inflate_cooldown_ = std::max(
+                        0, static_cast<int>(model_.params.maneuver_inflate_cooldown));
+                }
+            } else {
+                const double decay = std::clamp(model_.params.maneuver_q_decay, 0.1, 1.0);
+                q_boost_            = std::max(1.0, q_boost_ * decay);
+            }
+            prev_vx_   = x_[VX];
+            prev_vy_   = x_[VY];
+            prev_vyaw_ = x_[V_YAW];
+            if (inflate_cooldown_ > 0) {
+                --inflate_cooldown_;
+            }
+        }
+    }
+
+    static constexpr std::size_t kManeuverHistory = 32; ///< 机动判据速度历史长度（帧）
+
     bool active_{false};                    ///< 滤波器是否激活，false不可predict/update
     double dt_{0.0};                        ///< 当前预测使用的时间间隔dt
     int armor_id_{0};                       ///< 当前观测使用的装甲板编号
+    double q_boost_{1.0};                   ///< 机动自适应 Q 放大系数
+    double last_nis_{0.0};                  ///< 最近一次更新的归一化新息平方
+    uint64_t boost_count_{0};               ///< 累计触发次数
+    uint32_t last_trigger_reason_{0};       ///< 最近一次触发原因
+    std::array<uint64_t, 6> trigger_counts_{}; ///< 各触发原因累计计数
+    VecZ last_innovation_{VecZ::Zero()};    ///< 最近一次EKF更新的新息
+    double prev_vx_{0.0};                   ///< 上一帧滤波后的 X 速度
+    double prev_vy_{0.0};                   ///< 上一帧滤波后的 Y 速度
+    double prev_vyaw_{0.0};                 ///< 上一帧滤波后的偏航角速度
+    int inflate_cooldown_{0};               ///< 协方差放大冷却帧计数，避免连续放大把P撑爆
+    std::array<double, kManeuverHistory> vx_hist_{};   ///< 最近若干帧 X 速度
+    std::array<double, kManeuverHistory> vy_hist_{};   ///< 最近若干帧 Y 速度
+    std::array<double, kManeuverHistory> vyaw_hist_{}; ///< 最近若干帧偏航角速度
+    std::size_t hist_idx_{0};               ///< 速度历史环形缓冲写指针
+    bool xy_flip_armed_{true};              ///< 平移反向迟滞：越过反向点后置 false，恢复同向后重新武装
+    bool yaw_flip_armed_{true};             ///< 角速度反向迟滞
     Model model_{};                         ///< 运动模型实例，存噪声、模型参数
     EKF ekf_{};                             ///< 扩展卡尔曼滤波器实例，惰性初始化，initialize后有效
     VecX x_{VecX::Zero()};                  ///< 缓存当前滤波器状态副本，方便上层读取
@@ -563,6 +747,16 @@ public:
             state.Q              = robot_target_->Q_mat();
             state.R              = robot_target_->R_mat();
             state.convergence    = robot_target_->convergence();
+            state.maneuver_q_boost     = robot_target_->q_boost();
+            state.maneuver_nis         = robot_target_->last_nis();
+            state.maneuver_boost_count = robot_target_->boost_count();
+            state.maneuver_trigger_reason = robot_target_->last_trigger_reason();
+            state.maneuver_trigger_counts = robot_target_->trigger_counts();
+            const auto& nu                = robot_target_->last_innovation();
+            state.maneuver_innov_bearing   = nu[ARMOR_YAW];
+            state.maneuver_innov_pitch     = nu[ARMOR_PITCH];
+            state.maneuver_innov_logdist   = nu[ARMOR_DISTANCE];
+            state.maneuver_innov_armor_yaw = nu[ARMOR_YAW_ARMOR];
             output.state         = state;
             output.last_armor_id = robot_last_armor_id_;
         } else if (outpost_target_.has_value()) {
@@ -964,6 +1158,13 @@ private:
         // 标记target_jumped_装甲跳变，上层瞄准做平滑抑制
         if (observed_nonzero_armor) {
             target_jumped_ = true;
+        }
+
+        // 记录主候选的新息（预测观测 - 实测观测）：在 EKF update 之前计算，
+        // 反映的是"上一帧预测"和"本帧实测"的差，用于诊断预测是否滞后
+        {
+            const VecZ z_pred_primary = target.model().h(target.x(), primary.armor_id);
+            target.set_last_innovation(innovation_(z_pred_primary, primary.z_update));
         }
 
         // 遍历所有选中候选，逐个送入EKF update；同时填充调试measurement缓存

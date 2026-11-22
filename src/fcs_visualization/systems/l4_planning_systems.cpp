@@ -270,12 +270,30 @@ inline void append_selection_trace_metadata(
         {   "position",                  json_vec3(state.position)}, // 底盘中心坐标
         {   "distance",                      state.position.norm()}, // 相对我方距离
         {   "velocity",                  json_vec3(state.velocity)}, // 底盘三维速度
+        {         "vx",                    state.velocity.x()}, // X 方向速度（m/s），看反向用
+        {         "vy",                    state.velocity.y()}, // Y 方向速度（m/s），看反向用
+        {   "speed_xy",    std::hypot(state.velocity.x(), state.velocity.y())}, // 平面合速度（m/s）
         {        "yaw",            detail::rad_to_deg(state.yaw)}, // 底盘偏航角（度）
         {      "v_yaw",          detail::rad_to_deg(state.v_yaw)}, // 底盘旋转角速度（度/秒）
         {     "radius",             {state.radius0, state.radius1}}, // 机器人长宽半径
         {         "z1",                                   state.z1}, // 底盘高度偏移
         { "armors_num",                           state.armors_num}, // 装甲总数量
         {"convergence", json_filter_convergence(state.convergence)}, // 滤波收敛状态
+        {"maneuver_q_boost", state.maneuver_q_boost}, // 机动自适应 Q 当前放大倍数
+        {"maneuver_nis", state.maneuver_nis},         // 最近一次更新的归一化新息平方
+        {"maneuver_boost_count", state.maneuver_boost_count}, // 累计触发次数
+        {"maneuver_trigger_reason", state.maneuver_trigger_reason}, // 本次触发原因 0无 1新息异常 2平移跳变 3角速度跳变 4平移过零 5角速度过零
+        {"maneuver_trigger_counts", state.maneuver_trigger_counts}, // 各原因累计触发次数
+        {"maneuver_cnt_nis", state.maneuver_trigger_counts[1]}, // NIS 触发累计
+        {"maneuver_cnt_dv_xy", state.maneuver_trigger_counts[2]}, // 平移速度跳变触发累计
+        {"maneuver_cnt_dv_yaw", state.maneuver_trigger_counts[3]}, // 角速度跳变触发累计
+        {"maneuver_cnt_xy_zero", state.maneuver_trigger_counts[4]}, // 平移速度过零触发累计
+        {"maneuver_cnt_yaw_zero", state.maneuver_trigger_counts[5]}, // 角速度过零触发累计
+        // EKF 新息（预测 - 实测）：换向瞬间这些量会持续偏一个方向，偏多久就是滤波器收敛所需时间
+        {"innov_bearing_deg", detail::rad_to_deg(state.maneuver_innov_bearing)}, // 方位角新息（度）
+        {"innov_pitch_deg", detail::rad_to_deg(state.maneuver_innov_pitch)},     // 俯仰角新息（度）
+        {"innov_armor_yaw_deg", detail::rad_to_deg(state.maneuver_innov_armor_yaw)}, // 装甲朝向新息（度）
+        {"innov_range_m", state.position.norm() * state.maneuver_innov_logdist}, // 距离新息（米，近似）
         {"armor_poses",                    nlohmann::json::array()}, // 装甲点位数组
     };
 
