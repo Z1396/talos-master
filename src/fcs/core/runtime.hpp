@@ -198,10 +198,23 @@ struct FollowingState {
     // 修改跟随模式
     void store(const bool active) noexcept { active_.store(active, std::memory_order_release); }
 
+    // 同时写入开关与最近一次下位机上报时间，用于判断能力帧是否仍然新鲜
+    void store_with_stamp(const bool active, const uint64_t stamp_ns) noexcept {
+        active_.store(active, std::memory_order_release);
+        stamp_ns_.store(stamp_ns, std::memory_order_release);
+    }
+
+    // 最近一次下位机能力帧时间戳；0 表示从未收到
+    [[nodiscard]] auto last_update_ns() const noexcept -> uint64_t {
+        return stamp_ns_.load(std::memory_order_acquire);
+    }
+
 private:
     // 原子bool存储，多线程安全读写
     // false=无人自动模式（unmanned 决策器），true=有人手控/跟随模式（manned 决策器）
     std::atomic<bool> active_{true};
+    // 最近一次能力帧到达时间（Unix ns），0 表示尚未收到
+    std::atomic<uint64_t> stamp_ns_{0};
 };
 
 // ========== 跟随模式全局ECS资源别名 ==========

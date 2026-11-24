@@ -123,16 +123,16 @@ public:
             // 解析简易IMU数据，填充完整IMU结构体缺失字段（速度置0）
             if (latest_imu && data.size_bytes() >= sizeof(ReceiveSimpleImuData)) {
                 const auto* received   = reinterpret_cast<const ReceiveSimpleImuData*>(data.data());
-                latest_imu->header     = received->header;
-                latest_imu->time_stamp = received->time_stamp;
-                latest_imu->data.self_color   = received->data.self_color;
+                latest_imu->header     = received->header;          // 填充帧头
+                latest_imu->time_stamp = received->time_stamp; // 填充时间戳
+                latest_imu->data.self_color   = received->data.self_color;   // 填充自颜色
                 latest_imu->data.bullet_speed = 0.0f; // 简易包无弹速
                 latest_imu->data.yaw          = received->data.yaw;
                 latest_imu->data.pitch        = received->data.pitch;
                 latest_imu->data.roll         = received->data.roll;
                 latest_imu->data.yaw_vel      = 0.0f; // 简易包无角速度
-                latest_imu->data.pitch_vel    = 0.0f;
-                latest_imu->data.roll_vel     = 0.0f;
+                latest_imu->data.pitch_vel    = 0.0f;// 简易包无角速度
+                latest_imu->data.roll_vel     = 0.0f;// 简易包无角速度
                 latest_imu->eof               = received->eof;
             }
         }

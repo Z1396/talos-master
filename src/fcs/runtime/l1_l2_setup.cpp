@@ -405,7 +405,7 @@ static talos_gimbal::ReceiveCapabilitiesData g_capabilities_data{};
  */
 void apply_mcu_capabilities(
     core::capabilities_mut capabilities, core::following_mut following,
-    const talos_gimbal::ReceiveCapabilitiesData& reported) noexcept {
+    const talos_gimbal::ReceiveCapabilitiesData& reported, const uint64_t now_ns) noexcept {
     // 校验数据包帧头帧尾，非法包直接丢弃
     if (reported.header.sof != talos_gimbal::HeaderFrame::SoF()
         || reported.eof != talos_gimbal::HeaderFrame::EoF()) [[unlikely]] {
@@ -416,10 +416,11 @@ void apply_mcu_capabilities(
     constexpr auto mcu_controlled = static_cast<core::CapabilityMask>(
         core::capability_bit(core::Capability::Rune)
         | core::capability_bit(core::Capability::Quanta));
-    // 更新跟随开关状态
+    // 更新跟随开关状态：每帧都刷新时间戳，供 ImuOnly 调试模式判断能力帧是否新鲜
     const auto next_following = reported.data.following != 0U;
-    if (next_following != following->load()) {
-        following->store(next_following);
+    const bool following_changed = next_following != following->load();
+    following->store_with_stamp(next_following, now_ns);
+    if (following_changed) {
         SPDLOG_INFO("MCU following changed: {}", next_following);
     }
 
@@ -469,17 +470,17 @@ struct McuImu {
         {
         // 处理串口接收事件，底层填充g_imu_data/g_capabilities_data处理断线重连逻辑
         device->handle_events();
+        const uint64_t timestamp_ns = fcs::clock::now_ns();
         // 存在能力包则更新全局设备能力
         if (capabilities_data != nullptr) {
-            // 解析能力包，更新全局设备能力
-            apply_mcu_capabilities(capabilities, following, *capabilities_data);
+            // 解析能力包，更新全局设备能力；时间戳用于判断能力帧是否新鲜
+            apply_mcu_capabilities(capabilities, following, *capabilities_data, timestamp_ns);
         }
         // 校验IMU数据包合法性
         if (imu_data->header.sof != talos_gimbal::HeaderFrame::SoF()
             || imu_data->eof != talos_gimbal::HeaderFrame::EoF()) [[unlikely]] {
             return;
         }
-        const uint64_t timestamp_ns = fcs::clock::now_ns();
 
         // 更新Yaw、Pitch旋转TF
         fast_tf::update_rotate_only<fast_tf::gimbal_yaw_fuxk_frame>(
@@ -818,6 +819,7 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     // ===================== 注册 250Hz 相机读取系统（ImuOnly 无相机则跳过） =====================
     // 原子变量记录帧序号，用来检测丢帧，shared_ptr是因为lambda捕获move后多轮循环持续持有
     auto last_seq = std::make_shared<std::atomic<uint64_t>>(0);
+    // 相机就绪：注册 250Hz 相机读取系统
     if (camera) {
     scheduler.add_system<talos::fixed_rate<250, 1>>(
         "camera_reader",

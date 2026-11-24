@@ -66,8 +66,8 @@ struct ImuOnlyLateralSpinConfig {
  * 三种模式各有一套独立参数，切换 mode 不需要改数值
  */
 struct ImuOnlyDemoConfig {
-    // 波形模式：spin=原地小陀螺；lateral=左右平移；lateral_spin=边走边转
-    std::string mode{"lateral"};
+    // 波形模式：sine=yaw/pitch 正弦；spin=原地小陀螺；lateral=左右平移；lateral_spin=边走边转
+    std::string mode{"sine"};
 
     // 模式1：原地小陀螺（锯齿波）
     ImuOnlyWaveConfig spin{1.25, 0.7};
@@ -76,10 +76,21 @@ struct ImuOnlyDemoConfig {
     // 模式3：边走边转（三角波 + 锯齿波叠加）
     ImuOnlyLateralSpinConfig lateral_spin{};
 
-    // 俯仰：三种模式共用，可选正弦
-    double pitch_amplitude_deg{0.0}; // 俯仰摆动幅度（度），0=不动
-    double pitch_frequency_hz{0.25}; // 俯仰摆动频率（Hz）
-    double distance{0.0};            // 下发给MCU的距离字段（米），仅调试显示用
+    // sine 模式：yaw/pitch 各自独立正弦
+    double yaw_amplitude_deg{20.0};   // yaw 摆动幅度（度）
+    double yaw_frequency_hz{0.5};     // yaw 摆动频率（Hz）
+    double pitch_amplitude_deg{8.0};  // pitch 摆动幅度（度），0=不动
+    double pitch_frequency_hz{0.25};  // pitch 摆动频率（Hz）
+    double phase_deg{90.0};           // pitch 相对 yaw 的相位差（度）
+
+    // 安全边界：输出指令会被钳制在 ±limit 内
+    double yaw_limit_deg{30.0};   // yaw 允许范围（度）
+    double pitch_limit_deg{10.0}; // pitch 允许范围（度）
+
+    // true：等待下位机能力帧 following=1 才启动；false：启动后立即摆动
+    bool arm_by_mcu{true};
+
+    double distance{0.0}; // 下发给MCU的距离字段（米），仅调试显示用
 };
 
 /**

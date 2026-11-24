@@ -2,7 +2,7 @@
 # 硬件/数据传输后端类型
 # 可选值对应程序枚举：Daedalus / Direct / CameraOnly / Chiral / ImuOnly
 # ImuOnly：只用MCU的IMU和云台输出，不开相机，直接下发正弦云台指令调试伺服响应
-backend = "Daedalus"
+backend = "ImuOnly"
 
 # 机器人型号，对应 config/robot/[名称].toml 配置文件
 # 可选：infantry(步兵)、hero(英雄)、sentry(哨兵)、drone(无人机) 等
@@ -58,12 +58,24 @@ vision = "daedalus_vision"
 # 不经过相机/识别/跟踪/预瞄，直接把这些角度下发到 MCU，fire 恒为 false
 # ==============================================================================
 [imu_only_demo]
-# 波形模式：spin=原地小陀螺 | lateral=左右平移 | lateral_spin=边走边转
-mode = "lateral"
+# 波形模式：sine=yaw/pitch 正弦 | spin=原地小陀螺 | lateral=左右平移 | lateral_spin=边走边转
+mode = "sine"
 
-# 三种模式共用的俯仰正弦和距离字段
-pitch_amplitude_deg = 0.0     # 俯仰摆动幅度（度），0=俯仰不动
-pitch_frequency_hz = 0.25     # 俯仰摆动频率（Hz）
+# sine 模式：yaw/pitch 各自独立正弦
+yaw_amplitude_deg = 20.0      # yaw 摆动幅度（度）
+yaw_frequency_hz = 0.5        # yaw 摆动频率（Hz）
+pitch_amplitude_deg = 8.0     # pitch 摆动幅度（度），0=俯仰不动
+pitch_frequency_hz = 0.25     # pitch 摆动频率（Hz）
+phase_deg = 90.0              # pitch 相对 yaw 的相位差（度）
+
+# 安全限位：所有输出都会被钳制在该范围内
+yaw_limit_deg = 30.0          # yaw 单边限位（度）
+pitch_limit_deg = 10.0        # pitch 单边限位（度）
+
+# true：等待下位机能力帧 following=1 才开始摆动；false：启动后立即摆动
+# 复用现有 0x03 能力帧，不新增协议
+arm_by_mcu = true
+
 distance = 0.0                # 下发给 MCU 的距离字段（米），仅调试显示
 
 # 模式1：原地小陀螺（锯齿波，缓变+回跳）
