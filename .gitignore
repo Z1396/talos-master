@@ -61,6 +61,7 @@ PROJECT_GUIDE.md
 DEPLOY.md
 diff.md
 .trae
+TRIPLE_BUFFER_GUIDE.md
 
 # 临时/备份/数据文件，不参与代码功能
 *.bak
