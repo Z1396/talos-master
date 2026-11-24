@@ -41,8 +41,45 @@ struct DaedalusConfig {
  */
 struct DirectConfig {
     bool camera_only;                // true：仅启用相机，关闭其余硬件
+    bool imu_only{false};            // true：仅启用MCU(IMU+云台输出)，不打开相机
     Transport transport;             // 数据传输模式：直连 / 转发
     HardwareConfig hardware;         // 通用硬件底层配置
+};
+
+/// 单一波形的幅度/周期
+struct ImuOnlyWaveConfig {
+    double amplitude_deg{1.25}; // 摆动幅度（度）
+    double period_s{0.7};       // 完整周期（秒）
+};
+
+/// 边走边转：平移分量 + 陀螺分量各自独立配置
+struct ImuOnlyLateralSpinConfig {
+    double lateral_amplitude_deg{17.0};
+    double lateral_period_s{8.0};
+    double spin_amplitude_deg{1.25};
+    double spin_period_s{0.7};
+};
+
+/**
+ * @brief ImuOnly 调试模式配置
+ * 不用相机/视觉，直接按波形规律生成云台指令下发给MCU，用于调试伺服响应
+ * 三种模式各有一套独立参数，切换 mode 不需要改数值
+ */
+struct ImuOnlyDemoConfig {
+    // 波形模式：spin=原地小陀螺；lateral=左右平移；lateral_spin=边走边转
+    std::string mode{"lateral"};
+
+    // 模式1：原地小陀螺（锯齿波）
+    ImuOnlyWaveConfig spin{1.25, 0.7};
+    // 模式2：左右平移（三角波）
+    ImuOnlyWaveConfig lateral{17.0, 8.0};
+    // 模式3：边走边转（三角波 + 锯齿波叠加）
+    ImuOnlyLateralSpinConfig lateral_spin{};
+
+    // 俯仰：三种模式共用，可选正弦
+    double pitch_amplitude_deg{0.0}; // 俯仰摆动幅度（度），0=不动
+    double pitch_frequency_hz{0.25}; // 俯仰摆动频率（Hz）
+    double distance{0.0};            // 下发给MCU的距离字段（米），仅调试显示用
 };
 
 /**
@@ -83,6 +120,8 @@ struct LaunchConfig {
     CapturerConfig capturer;
     // Talos 任务调度器配置
     talos::scheduler::SchedulerConfig scheduler;
+    // ImuOnly 调试模式的正弦指令参数
+    hardware::ImuOnlyDemoConfig imu_only_demo;
 };
 
 /**
@@ -97,6 +136,7 @@ struct RuntimeConfig {
     VisionConfig vision;                      // 解析后最终视觉方案配置
     runtime::CapturerLaunchContext launch;    // 采集器运行上下文（运行时状态、句柄等）
     talos::scheduler::SchedulerConfig scheduler; // 调度器最终配置
+    hardware::ImuOnlyDemoConfig imu_only_demo; // ImuOnly 模式正弦指令参数
 };
 
 /**

@@ -746,7 +746,12 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
                         imu_ready = true;
                     }
                 }
-                // ========== 海康相机初始化（Direct模式共用相机，不管MCU是否启用） ==========
+                // ========== 海康相机初始化（Direct模式共用相机，ImuOnly模式跳过） ==========
+                if (cfg.imu_only) {
+                    // ImuOnly：只保留 MCU 的 IMU 和云台输出，不打开相机
+                    SPDLOG_INFO("imu-only backend: skip hikrobot camera");
+                    return {};
+                }
                 SPDLOG_INFO("initializing hikrobot camera...");
                 auto input_result = fcs::L1::CameraInterface::create_hik(cfg.hardware.camera);
                 if (!input_result) { // 海康相机打开失败
@@ -766,7 +771,18 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     }
 
     // 读取相机内参矩阵,畸变系数,画面尺寸,相机硬件参数 存入ECS全局资源，给L2识别、PnP解算使用
-    const auto& cam_info = camera->camera_info();
+    // ImuOnly 没有相机：直接用机器人硬件配置里的标定值，保证下游资源齐全
+    CameraConfig cam_info{};
+    bool imu_only = false;
+    if (const auto* direct = std::get_if<hardware::DirectConfig>(&cfg)) {
+        imu_only = direct->imu_only;
+        if (imu_only) {
+            cam_info = direct->hardware.camera.get();
+        }
+    }
+    if (camera) {
+        cam_info = camera->camera_info();
+    }
     world.insert_resource(cam_info);
 
     // ===================== IMU就绪：注册 1000Hz IMU读取系统 =====================
@@ -799,9 +815,10 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
         SPDLOG_WARN("pretending mcu is connected, no mcu data will be available");
     }
 
-    // ===================== 注册 250Hz 相机读取系统 =====================
+    // ===================== 注册 250Hz 相机读取系统（ImuOnly 无相机则跳过） =====================
     // 原子变量记录帧序号，用来检测丢帧，shared_ptr是因为lambda捕获move后多轮循环持续持有
     auto last_seq = std::make_shared<std::atomic<uint64_t>>(0);
+    if (camera) {
     scheduler.add_system<talos::fixed_rate<250, 1>>(
         "camera_reader",
         // 转移camera所有权、last_seq原子计数器到lambda
@@ -830,6 +847,15 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
             auto img = frame->image;
             cam_out.write(fcs::ImageFrame{std::move(img), frame->timestamp_ns, seq});
     });
+    } else {
+        // ImuOnly：没有相机，但下游L2系统仍然注册着。
+        // 这里注册一个"空图像源"，只声明图像通道写入端、从不产图，
+        // 保证调度器拓扑检查通过，同时L2不会真正跑推理。
+        scheduler.add_system<talos::fixed_rate<250, 1>>(
+            "camera_reader",
+            [](talos::spmc_mut<ImageFrame, ImageChannelTopic>) {});
+        SPDLOG_INFO("imu-only backend: camera_reader registered as no-op image source");
+    }
 
 
     // 把武器输出接口存入Scheduler内的ECS资源，给weapon_output系统读取
@@ -867,8 +893,8 @@ std::expected<L1L2SetupResult, std::string> setup_l1(
     }
 
 
-    // 全部初始化成功，返回结果结构体（携带相机标定信息）
-    return L1L2SetupResult{.camera_config = cam_info};
+    // 全部初始化成功，返回结果结构体（携带相机标定信息和 ImuOnly 标记）
+    return L1L2SetupResult{.camera_config = cam_info, .imu_only = imu_only};
 }
 
 } // namespace fcs::runtime

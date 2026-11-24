@@ -41,6 +41,7 @@
 #include "runtime/capturer.hpp"
 // TOML配置文件加载、语法校验、类型转换工具
 #include "runtime/config_loader.hpp"
+#include "runtime/imu_only_demo.hpp"
 // L1相机+MCU统一初始化工具，创建图像SPMC输入通道
 #include "runtime/l1_l2_setup.hpp"
 // JPEG/PNG/视频流通用图像编码工具封装
@@ -380,7 +381,14 @@ void init_coordinate_system(fast_tf::CoordinateSystem& system, const RobotExtrin
     /*L5
     =
     最终武器决策*/
-    L5::register_enhanced_weapon_system(scheduler, std::move(config.vision.l5.get()));
+    // ImuOnly 调试模式：跳过 L5，直接用正弦指令源驱动云台（fire=false）
+    const auto* direct_backend = std::get_if<hardware::DirectConfig>(&config.backend);
+    const bool imu_only        = direct_backend != nullptr && direct_backend->imu_only;
+    if (imu_only) {
+        runtime::register_imu_only_demo_system(scheduler, config.imu_only_demo);
+    } else {
+        L5::register_enhanced_weapon_system(scheduler, std::move(config.vision.l5.get()));
+    }
 
     // ===================== 步骤9：手性功能条件注册 =====================
     // chiral标记为true代表左右手分体机器人，注册共享内存采集任务

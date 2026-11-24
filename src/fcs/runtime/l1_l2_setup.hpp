@@ -41,6 +41,7 @@ namespace fcs::runtime {
  */
 struct L1L2SetupResult {
     CameraConfig camera_config; ///< 相机配置（内参、分辨率等）
+    bool imu_only{false};       ///< 是否为 ImuOnly 模式（无相机，只有 MCU/云台输出）
 };
 
 /**

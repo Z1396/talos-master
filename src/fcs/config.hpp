@@ -49,7 +49,8 @@ enum HardwareBackend {
     Direct,     // 直连模式：硬件与程序本地直连
     Daedalus,   // Daedalus 专用设备模式（发射/执行机构）
     Chiral,     // 数据转发/分流模式
-    CameraOnly  // 仅启用相机，关闭其余硬件设备
+    CameraOnly, // 仅启用相机，关闭其余硬件设备
+    ImuOnly     // 仅启用MCU(IMU+云台输出)，无相机；直接下发正弦云台指令调试伺服响应
 };
 
 /**

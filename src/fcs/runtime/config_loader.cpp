@@ -263,6 +263,7 @@ auto load_robot_extrinsic_config(std::string_view robot)
     // 直连/相机专用/Chiral 链路：加载机器人硬件配置
     case Chiral:
     case CameraOnly:
+    case ImuOnly:
     case Direct: {
         // 是否仅使用相机模式
         bool camera_only = preset.backend == CameraOnly;
@@ -274,6 +275,8 @@ auto load_robot_extrinsic_config(std::string_view robot)
         // 构造直连类硬件配置
         cfg = hardware::DirectConfig{
             .camera_only = camera_only,
+            // ImuOnly：只要 MCU(IMU+云台输出)，不打开相机
+            .imu_only  = preset.backend == ImuOnly,
             // 区分传输链路类型
             .transport = preset.backend != Chiral ? hardware::Transport::Direct
                                                   : hardware::Transport::Chiral,
@@ -313,7 +316,8 @@ auto load_robot_extrinsic_config(std::string_view robot)
                                            .robot   = preset.robot.get(),
                                            .vision  = preset.vision.get(),
                                            },
-        .scheduler = launch.scheduler  // 调度器配置
+        .scheduler = launch.scheduler, // 调度器配置
+        .imu_only_demo = launch.imu_only_demo // ImuOnly 正弦调试参数
     };
 }
 

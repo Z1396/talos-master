@@ -1,7 +1,8 @@
 # ===================== 全局默认配置（主机名无匹配时生效） =====================
 # 硬件/数据传输后端类型
-# 可选值对应程序枚举：Daedalus / Direct / CameraOnly / Chiral
-backend = "CameraOnly"
+# 可选值对应程序枚举：Daedalus / Direct / CameraOnly / Chiral / ImuOnly
+# ImuOnly：只用MCU的IMU和云台输出，不开相机，直接下发正弦云台指令调试伺服响应
+backend = "Daedalus"
 
 # 机器人型号，对应 config/robot/[名称].toml 配置文件
 # 可选：infantry(步兵)、hero(英雄)、sentry(哨兵)、drone(无人机) 等
@@ -51,6 +52,36 @@ vision = "daedalus_vision"
 
 # 设备主机名 "byq" → 步兵4号 + Daedalus 后端
 "byq" = { backend = "Daedalus", robot = "infantry_4", vision = "daedalus_vision" }
+
+# ==============================================================================
+# ImuOnly 调试模式：正弦云台指令参数（仅 backend = "ImuOnly" 时生效）
+# 不经过相机/识别/跟踪/预瞄，直接把这些角度下发到 MCU，fire 恒为 false
+# ==============================================================================
+[imu_only_demo]
+# 波形模式：spin=原地小陀螺 | lateral=左右平移 | lateral_spin=边走边转
+mode = "lateral"
+
+# 三种模式共用的俯仰正弦和距离字段
+pitch_amplitude_deg = 0.0     # 俯仰摆动幅度（度），0=俯仰不动
+pitch_frequency_hz = 0.25     # 俯仰摆动频率（Hz）
+distance = 0.0                # 下发给 MCU 的距离字段（米），仅调试显示
+
+# 模式1：原地小陀螺（锯齿波，缓变+回跳）
+[imu_only_demo.spin]
+amplitude_deg = 1.25          # 锯齿半幅（度），峰峰值=2倍
+period_s = 0.7                # 锯齿周期（秒）
+
+# 模式2：左右平移（三角波）
+[imu_only_demo.lateral]
+amplitude_deg = 17.0          # 单边摆动幅度（度）
+period_s = 8.0                # 完整来回周期（秒）
+
+# 模式3：边走边转（三角波 + 锯齿波叠加），分量参数独立
+[imu_only_demo.lateral_spin]
+lateral_amplitude_deg = 17.0  # 平移分量单边幅度（度）
+lateral_period_s = 8.0        # 平移分量周期（秒）
+spin_amplitude_deg = 1.25     # 陀螺分量半幅（度）
+spin_period_s = 0.7           # 陀螺分量周期（秒）
 
 # ==============================================================================
 # Foxglove 可视化/数据回放服务配置
